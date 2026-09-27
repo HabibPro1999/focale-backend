@@ -33,6 +33,25 @@ import { paginate, getSkip, type PaginatedResult } from "@app/shared";
 import { invalidateUserCache } from "../../core/auth/user-cache";
 import { logger } from "../../core/logger.service";
 
+const ROLE_CLIENT_POLICY = new Map<number, { name: string; requiresClient: boolean }>([
+  [UserRole.SUPER_ADMIN, { name: "SUPER_ADMIN", requiresClient: false }],
+  [UserRole.CLIENT_ADMIN, { name: "CLIENT_ADMIN", requiresClient: true }],
+  [UserRole.SCIENTIFIC_COMMITTEE, { name: "SCIENTIFIC_COMMITTEE", requiresClient: false }],
+]);
+
+function throwUserMutationFailure(reason: "not_found" | "last_super_admin"): never {
+  if (reason === "not_found") {
+    throw new NotFoundException({
+      code: ErrorCodes.NOT_FOUND,
+      message: "User not found",
+    });
+  }
+  throw new BadRequestException({
+    code: ErrorCodes.BAD_REQUEST,
+    message: "Cannot remove or deactivate the last super admin",
+  });
+}
+
 @Injectable()
 export class UsersService {
   // --------------------------------------------------------------------------
@@ -58,36 +77,15 @@ export class UsersService {
     role: number,
     clientId: string | null | undefined,
   ): void {
-    switch (role) {
-      case UserRole.SUPER_ADMIN:
-        if (clientId) {
-          throw new BadRequestException({
-            code: ErrorCodes.VALIDATION_ERROR,
-            message: "SUPER_ADMIN users cannot be assigned to a client",
-          });
-        }
-        return;
-      case UserRole.CLIENT_ADMIN:
-        if (!clientId) {
-          throw new BadRequestException({
-            code: ErrorCodes.VALIDATION_ERROR,
-            message: "CLIENT_ADMIN users must be assigned to a client",
-          });
-        }
-        return;
-      case UserRole.SCIENTIFIC_COMMITTEE:
-        if (clientId) {
-          throw new BadRequestException({
-            code: ErrorCodes.VALIDATION_ERROR,
-            message: "SCIENTIFIC_COMMITTEE users cannot be assigned to a client",
-          });
-        }
-        return;
-      default:
-        throw new BadRequestException({
-          code: ErrorCodes.VALIDATION_ERROR,
-          message: "Invalid user role",
-        });
+    const policy = ROLE_CLIENT_POLICY.get(role);
+    if (!policy) {
+      throw new BadRequestException({ code: ErrorCodes.VALIDATION_ERROR, message: "Invalid user role" });
+    }
+    if (Boolean(clientId) !== policy.requiresClient) {
+      throw new BadRequestException({
+        code: ErrorCodes.VALIDATION_ERROR,
+        message: `${policy.name} users ${policy.requiresClient ? "must be" : "cannot be"} assigned to a client`,
+      });
     }
   }
 
@@ -108,16 +106,7 @@ export class UsersService {
   ): Promise<UserWithClient> {
     const result = await dbUpdateUser(id, input);
     if (result.ok) return result.user;
-    if (result.reason === "not_found") {
-      throw new NotFoundException({
-        code: ErrorCodes.NOT_FOUND,
-        message: "User not found",
-      });
-    }
-    throw new BadRequestException({
-      code: ErrorCodes.BAD_REQUEST,
-      message: "Cannot remove or deactivate the last super admin",
-    });
+    throwUserMutationFailure(result.reason);
   }
 
   // --------------------------------------------------------------------------
@@ -267,18 +256,7 @@ export class UsersService {
     }
 
     const result = await dbDeleteUser(id);
-    if (!result.ok) {
-      if (result.reason === "not_found") {
-        throw new NotFoundException({
-          code: ErrorCodes.NOT_FOUND,
-          message: "User not found",
-        });
-      }
-      throw new BadRequestException({
-        code: ErrorCodes.BAD_REQUEST,
-        message: "Cannot remove or deactivate the last super admin",
-      });
-    }
+    if (!result.ok) throwUserMutationFailure(result.reason);
 
     invalidateUserCache(id);
 

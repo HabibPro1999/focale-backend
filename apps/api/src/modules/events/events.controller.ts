@@ -18,7 +18,8 @@ import { ErrorCodes, UserRole } from "@app/contracts";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
-import { EventsService, assertEventWritable } from "./events.service";
+import { EventsService } from "./events.service";
+import { assertEventWritable } from "./index";
 import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
 import {
   CreateEventDto,

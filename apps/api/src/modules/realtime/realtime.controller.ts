@@ -46,10 +46,7 @@ export class RealtimeController {
       return;
     }
 
-    const { eventId, clientId: clientIdQuery } = query as {
-      eventId?: string;
-      clientId?: string;
-    };
+    const { eventId, clientId: clientIdQuery } = query;
 
     // Scope: client admin forced to own clientId; super admin must pass ?clientId.
     let scopedClientId: string;
@@ -91,9 +88,6 @@ export class RealtimeController {
 
     let closed = false;
     let untrack: () => void = () => undefined;
-    let close: () => void = () => {
-      closed = true;
-    };
 
     const sendFrame = (id: string, ev: AppEvent): void => {
       if (closed || !sse.isConnected) return;
@@ -107,7 +101,7 @@ export class RealtimeController {
       sendFrame(id, ev);
     };
 
-    close = () => {
+    const close = () => {
       if (closed) return;
       closed = true;
       eventBus.off(handler);

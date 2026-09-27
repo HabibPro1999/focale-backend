@@ -7,6 +7,7 @@ import {
 import { makeWorkerId, startPoller, type Poller } from "@app/shared";
 import {
   processOutboxEvents,
+  hasOutboxActivity,
   REALTIME_EMIT_TYPE,
   type OutboxHandlerRegistry,
   type RealtimeOutboxPayload,
@@ -54,12 +55,7 @@ export class RealtimePumpService
           scope: "realtime",
           handlers: this.handlers,
         });
-        if (
-          result.processed > 0 ||
-          result.skipped > 0 ||
-          result.failed > 0 ||
-          result.leaseLost > 0
-        ) {
+        if (hasOutboxActivity(result)) {
           logger.info({ result }, "Realtime outbox events processed");
         }
       },

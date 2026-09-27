@@ -1,3 +1,4 @@
+import { expectHttpError as expectAppError, expectHttpErrorSync as expectAppErrorSync } from "../../testing/expect-error";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpException } from "@nestjs/common";
 import { ErrorCodes } from "@app/contracts";
@@ -46,7 +47,7 @@ import {
   assertEventOpen,
   assertEventAcceptsPublicActions,
   assertEventWritable,
-} from "./events.service";
+} from "./index";
 
 const service = new EventsService();
 const clientId = "client-123";
@@ -106,35 +107,8 @@ function useTransaction() {
 }
 
 /** Assert a rejected promise is an HttpException with the given status/code/message. */
-async function expectAppError(
-  promise: Promise<unknown>,
-  status: number,
-  code: string,
-  message?: string,
-) {
-  await promise.then(
-    () => expect.fail("expected the call to throw"),
-    (err: unknown) => {
-      expect(err).toBeInstanceOf(HttpException);
-      const ex = err as HttpException;
-      expect(ex.getStatus()).toBe(status);
-      const body = ex.getResponse() as { code: string; message: string };
-      expect(body.code).toBe(code);
-      if (message !== undefined) expect(body.message).toBe(message);
-    },
-  );
-}
-function expectAppErrorSync(fn: () => unknown, status: number, code: string) {
-  try {
-    fn();
-    expect.fail("expected the call to throw");
-  } catch (err) {
-    expect(err).toBeInstanceOf(HttpException);
-    const ex = err as HttpException;
-    expect(ex.getStatus()).toBe(status);
-    expect((ex.getResponse() as { code: string }).code).toBe(code);
-  }
-}
+
+
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -231,7 +205,7 @@ describe("EventsService", () => {
     });
   });
 
-  describe("getEventById / getEventBySlug", () => {
+  describe("getEventById", () => {
     it("returns event+pricing when found", async () => {
       const event = { ...createMockEvent(), pricing: createMockEventPricing() };
       vi.mocked(db.getEventWithPricing).mockResolvedValue(event as never);
@@ -243,13 +217,7 @@ describe("EventsService", () => {
       vi.mocked(db.getEventWithPricing).mockResolvedValue(null);
       expect(await service.getEventById("nope")).toBeNull();
     });
-    it("getEventBySlug returns event+pricing", async () => {
-      const event = { ...createMockEvent(), pricing: createMockEventPricing() };
-      vi.mocked(db.getEventWithPricingBySlug).mockResolvedValue(event as never);
-      const result = await service.getEventBySlug("event");
-      expect(result?.slug).toBe("event");
-      expect(db.getEventWithPricingBySlug).toHaveBeenCalledWith("event");
-    });
+
   });
 
   describe("assertEventOpen", () => {
@@ -664,15 +632,5 @@ describe("EventsService", () => {
     });
   });
 
-  describe("eventExists", () => {
-    it("true when it exists", async () => {
-      vi.mocked(db.eventExists).mockResolvedValue(true);
-      expect(await service.eventExists(eventId)).toBe(true);
-      expect(db.eventExists).toHaveBeenCalledWith(eventId);
-    });
-    it("false when it does not", async () => {
-      vi.mocked(db.eventExists).mockResolvedValue(false);
-      expect(await service.eventExists("nope")).toBe(false);
-    });
-  });
+
 });

@@ -17,7 +17,7 @@ import { assertEventAccess } from "../../core/auth/assert-event-access";
 import { type AuthUser } from "../../core/auth/user-cache";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { assertClientModuleEnabled } from "../clients/module-gates";
-import { assertEventWritable } from "../events/events.service";
+import { assertEventWritable } from "../events";
 import { AccessService } from "./access.service";
 import {
   AccessEventIdParamDto,

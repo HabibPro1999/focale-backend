@@ -19,7 +19,7 @@ import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { assertEventAccess } from "../../core/auth/assert-event-access";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { assertClientModuleEnabled } from "../clients/module-gates";
-import { assertEventWritable } from "../events/events.service";
+import { assertEventWritable } from "../events";
 import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
 import { CertificatesService } from "./certificates.service";
 import {

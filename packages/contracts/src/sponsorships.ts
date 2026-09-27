@@ -1,11 +1,10 @@
+import { hasUpdateField, PositivePaginationQueryShape } from "./zod-helpers";
 import { z } from "zod";
 
 // Ported verbatim from legacy src/modules/sponsorships/sponsorships.schema.ts.
 // Every object is z.strictObject (unknown keys -> 400) exactly as the legacy
 // Fastify schema validation behaved.
 
-const hasUpdateField = (data: Record<string, unknown>) =>
-  Object.values(data).some((value) => value !== undefined);
 
 // ============================================================================
 // Enums
@@ -142,8 +141,7 @@ export type UpdateSponsorshipInput = z.infer<typeof UpdateSponsorshipSchema>;
 // ============================================================================
 
 export const ListSponsorshipsQuerySchema = z.strictObject({
-  page: z.coerce.number().int().positive().default(1),
-  limit: z.coerce.number().int().positive().max(100).default(20),
+  ...PositivePaginationQueryShape,
   status: SponsorshipStatusSchema.optional(),
   search: z.string().max(100).optional(),
   sortBy: z

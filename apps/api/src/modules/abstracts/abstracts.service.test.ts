@@ -1,3 +1,4 @@
+import { expectAppError } from "../../testing/expect-error";
 import { mock } from "../../testing/abstracts";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { ErrorCodes, type SubmitAbstractInput } from "@app/contracts";
@@ -110,21 +111,7 @@ function makeSubmitBody(overrides: Record<string, unknown> = {}): SubmitAbstract
   } as SubmitAbstractInput;
 }
 
-async function expectAppError(
-  p: Promise<unknown>,
-  status: number,
-  code: string,
-): Promise<void> {
-  const err = await p.then(
-    () => {
-      throw new Error("expected promise to reject");
-    },
-    (e: unknown) => e,
-  );
-  expect(err).toBeInstanceOf(AppException);
-  expect((err as AppException).getStatus()).toBe(status);
-  expect((err as AppException).getResponse()).toMatchObject({ code });
-}
+
 
 const config = {
   publicLinkAllowedOrigins: ["https://events.example.com"],

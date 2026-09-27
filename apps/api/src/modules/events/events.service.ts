@@ -1,3 +1,4 @@
+import { assertEventWritable, VALID_STATUS_TRANSITIONS } from "./event-status";
 import crypto from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { ErrorCodes } from "@app/contracts";
@@ -17,13 +18,11 @@ import {
   countRegistrationsTx,
   deleteEmailTemplatesByEventTx,
   deleteEventTx,
-  eventExists as eventExistsQuery,
   getAbstractBookStorageKeysTx,
   getAbstractFinalFileKeysTx,
   getCertificateTemplateUrlsTx,
   getEventIdBySlugTx,
   getEventWithPricing,
-  getEventWithPricingBySlug,
   getEventWithPricingAndClient,
   getEventWithRegistrationCountTx,
   getNetworkingConfig,
@@ -45,8 +44,6 @@ import { AppException } from "../../core/app-exception";
 import { logger } from "../../core/logger.service";
 import { isModuleEnabledForClient } from "../clients/module-gates";
 
-// --- Pure event-status policy (consumed by other modules) -------------------
-
 function normalizeBasePrice(basePrice: number | null | undefined): number {
   return basePrice ?? 0;
 }
@@ -54,61 +51,6 @@ function normalizeBasePrice(basePrice: number | null | undefined): number {
 function normalizeCurrency(currency: string | null | undefined): string {
   return currency?.trim().toUpperCase() ?? "TND";
 }
-
-function effectivePublicEndDate(endDate: Date): Date {
-  if (
-    endDate.getUTCHours() !== 0 ||
-    endDate.getUTCMinutes() !== 0 ||
-    endDate.getUTCSeconds() !== 0 ||
-    endDate.getUTCMilliseconds() !== 0
-  ) {
-    return endDate;
-  }
-  const inclusiveEnd = new Date(endDate);
-  inclusiveEnd.setUTCHours(23, 59, 59, 999);
-  return inclusiveEnd;
-}
-
-export function assertEventWritable(event: { status: string }): void {
-  if (event.status === "ARCHIVED") {
-    throw new AppException(
-      ErrorCodes.INVALID_STATUS_TRANSITION,
-      "Archived events cannot be modified",
-      400,
-    );
-  }
-}
-
-export function assertEventOpen(event: { status: string }): void {
-  if (event.status !== "OPEN") {
-    throw new AppException(
-      ErrorCodes.EVENT_NOT_OPEN,
-      "Event is not accepting public actions",
-      400,
-    );
-  }
-}
-
-export function assertEventAcceptsPublicActions(
-  event: { status: string; endDate: Date },
-  now = new Date(),
-): void {
-  assertEventOpen(event);
-  if (effectivePublicEndDate(event.endDate) < now) {
-    throw new AppException(
-      ErrorCodes.EVENT_NOT_OPEN,
-      "Event is not accepting public actions",
-      400,
-    );
-  }
-}
-
-// Valid event status transitions: CLOSED -> OPEN -> ARCHIVED (terminal).
-const VALID_STATUS_TRANSITIONS: Record<string, string[]> = {
-  CLOSED: ["OPEN"],
-  OPEN: ["CLOSED", "ARCHIVED"],
-  ARCHIVED: [],
-};
 
 // --- Storage cleanup helpers (best-effort; failures only logged) ------------
 
@@ -188,14 +130,6 @@ export class EventsService {
     return getEventWithPricing(id);
   }
 
-  getEventBySlug(slug: string): Promise<EventWithPricing | null> {
-    return getEventWithPricingBySlug(slug);
-  }
-
-  eventExists(id: string): Promise<boolean> {
-    return eventExistsQuery(id);
-  }
-
   /** Update event (+pricing). Serializable + retry — currency guard runs inside the txn. */
   async updateEvent(id: string, input: UpdateEventInput): Promise<EventWithPricing> {
     if (Object.values(input).every((value) => value === undefined)) {
@@ -210,93 +144,85 @@ export class EventsService {
     const hasEventData = Object.values(eventData).some((v) => v !== undefined);
 
     return withSerializableTxn(
-          async (tx) => {
-            const event = await getEventWithPricing(id, tx);
-            if (!event) {
-              throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
-            }
+      async (tx) => {
+        const event = await getEventWithPricing(id, tx);
+        if (!event) {
+          throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+        }
 
-            if (input.status && input.status !== event.status) {
-              const allowed = VALID_STATUS_TRANSITIONS[event.status] ?? [];
-              if (!allowed.includes(input.status)) {
-                throw new AppException(
-                  ErrorCodes.INVALID_STATUS_TRANSITION,
-                  `Cannot transition event from ${event.status} to ${input.status}`,
-                  400,
-                );
-              }
-            }
-            assertEventWritable(event);
+        if (input.status && input.status !== event.status) {
+          const allowed = VALID_STATUS_TRANSITIONS[event.status] ?? [];
+          if (!allowed.includes(input.status)) {
+            throw new AppException(
+              ErrorCodes.INVALID_STATUS_TRANSITION,
+              `Cannot transition event from ${event.status} to ${input.status}`,
+              400,
+            );
+          }
+        }
+        assertEventWritable(event);
 
-            const resultingStart = input.startDate ?? event.startDate;
-            const resultingEnd = input.endDate ?? event.endDate;
-            if (resultingEnd < resultingStart) {
+        const resultingStart = input.startDate ?? event.startDate;
+        const resultingEnd = input.endDate ?? event.endDate;
+        if (resultingEnd < resultingStart) {
+          throw new AppException(
+            ErrorCodes.VALIDATION_ERROR,
+            "End date must be greater than or equal to start date",
+            400,
+          );
+        }
+
+        if (
+          input.maxCapacity !== undefined &&
+          input.maxCapacity !== null &&
+          input.maxCapacity < event.registeredCount
+        ) {
+          throw new AppException(
+            ErrorCodes.VALIDATION_ERROR,
+            "Max capacity cannot be below current registered count",
+            400,
+          );
+        }
+
+        if (input.slug && input.slug !== event.slug) {
+          const existingId = await getEventIdBySlugTx(tx, input.slug);
+          if (existingId) {
+            throw new AppException(
+              ErrorCodes.CONFLICT,
+              "Event with this slug already exists",
+              409,
+            );
+          }
+        }
+
+        const normalizedCurrency =
+          currency !== undefined ? normalizeCurrency(currency) : undefined;
+        if (normalizedCurrency !== undefined) {
+          const currentCurrency = event.pricing?.currency ?? "TND";
+          if (normalizedCurrency !== currentCurrency) {
+            const registrationCount = await countRegistrationsTx(tx, id);
+            if (registrationCount > 0) {
               throw new AppException(
                 ErrorCodes.VALIDATION_ERROR,
-                "End date must be greater than or equal to start date",
+                "Cannot change currency after registrations exist",
                 400,
               );
             }
+          }
+        }
 
-            if (
-              input.maxCapacity !== undefined &&
-              input.maxCapacity !== null &&
-              input.maxCapacity < event.registeredCount
-            ) {
-              throw new AppException(
-                ErrorCodes.VALIDATION_ERROR,
-                "Max capacity cannot be below current registered count",
-                400,
-              );
-            }
+        if (hasEventData) {
+          await updateEventTx(tx, id, eventData);
+        }
 
-            if (input.slug && input.slug !== event.slug) {
-              const existingId = await getEventIdBySlugTx(tx, input.slug);
-              if (existingId) {
-                throw new AppException(
-                  ErrorCodes.CONFLICT,
-                  "Event with this slug already exists",
-                  409,
-                );
-              }
-            }
-
-            const normalizedCurrency =
-              currency !== undefined ? normalizeCurrency(currency) : undefined;
-            if (normalizedCurrency !== undefined) {
-              const currentCurrency = event.pricing?.currency ?? "TND";
-              if (normalizedCurrency !== currentCurrency) {
-                const registrationCount = await countRegistrationsTx(tx, id);
-                if (registrationCount > 0) {
-                  throw new AppException(
-                    ErrorCodes.VALIDATION_ERROR,
-                    "Cannot change currency after registrations exist",
-                    400,
-                  );
-                }
-              }
-            }
-
-            if (hasEventData) {
-              await updateEventTx(tx, id, eventData);
-            }
-
-            if (basePrice === undefined && normalizedCurrency === undefined) {
-              return (await getEventWithPricing(id, tx)) as EventWithPricing;
-            }
-
-            const pricingData: { basePrice?: number; currency?: string } = {};
-            if (basePrice !== undefined) {
-              pricingData.basePrice = normalizeBasePrice(basePrice);
-            }
-            if (normalizedCurrency !== undefined) {
-              pricingData.currency = normalizedCurrency;
-            }
-
-            await upsertEventPricingTx(tx, id, pricingData);
-
-            return (await getEventWithPricing(id, tx)) as EventWithPricing;
-          },
+        if (basePrice !== undefined || normalizedCurrency !== undefined) {
+          const pricingData: { basePrice?: number; currency?: string } = {};
+          if (basePrice !== undefined) pricingData.basePrice = normalizeBasePrice(basePrice);
+          if (normalizedCurrency !== undefined) pricingData.currency = normalizedCurrency;
+          await upsertEventPricingTx(tx, id, pricingData);
+        }
+        return (await getEventWithPricing(id, tx)) as EventWithPricing;
+      },
     );
   }
 
@@ -443,7 +369,7 @@ export class EventsService {
     const pricingEnabled = isModuleEnabledForClient(event.client, "pricing");
     const paymentMethods: string[] = [];
     const exposePaymentConfig =
-      event.status === "OPEN" && registrationsEnabled && pricingEnabled;
+      registrationsEnabled && pricingEnabled;
     if (exposePaymentConfig) {
       paymentMethods.push("BANK_TRANSFER");
       if (pricing?.onlinePaymentEnabled && pricing.onlinePaymentUrl) {
