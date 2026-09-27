@@ -76,6 +76,20 @@ export class EmailController {
     await assertClientModuleEnabled(event.clientId, "emails");
   }
 
+  private async readableEvent(eventId: string, user: AuthUser) {
+    const event = await this.resolveEvent(eventId);
+    this.assertAccess(user, event.clientId);
+    await assertClientModuleEnabled(event.clientId, "emails");
+    return event;
+  }
+
+  private async writableEvent(eventId: string, user: AuthUser) {
+    const event = await this.resolveEvent(eventId);
+    this.assertAccess(user, event.clientId);
+    await this.assertEmailFeatureWritable(event);
+    return event;
+  }
+
   /** Load a template + its event, mirroring legacy getTemplateWriteContext. */
   private async getTemplateWriteContext(templateId: string) {
     const template = await this.templates.getById(templateId);
@@ -107,9 +121,7 @@ export class EmailController {
     @Query() query: ListEmailTemplatesQueryDto,
     @CurrentUser() user: AuthUser,
   ): Promise<PaginatedResult<unknown>> {
-    const event = await this.resolveEvent(params.eventId);
-    this.assertAccess(user, event.clientId);
-    await assertClientModuleEnabled(event.clientId, "emails");
+    const event = await this.readableEvent(params.eventId, user);
     return this.templates.list(params.eventId, query);
   }
 
@@ -118,9 +130,7 @@ export class EmailController {
     @Param() params: EmailEventIdParamDto,
     @CurrentUser() user: AuthUser,
   ): Promise<VariableDefinition[]> {
-    const event = await this.resolveEvent(params.eventId);
-    this.assertAccess(user, event.clientId);
-    await assertClientModuleEnabled(event.clientId, "emails");
+    const event = await this.readableEvent(params.eventId, user);
     return getAvailableVariables(params.eventId);
   }
 
@@ -131,9 +141,7 @@ export class EmailController {
     @Body() body: CreateEmailTemplateBodyDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const event = await this.resolveEvent(params.eventId);
-    this.assertAccess(user, event.clientId);
-    await this.assertEmailFeatureWritable(event);
+    const event = await this.writableEvent(params.eventId, user);
     return this.templates.create({
       clientId: event.clientId,
       eventId: params.eventId,
@@ -226,9 +234,7 @@ export class EmailController {
     @Query() query: ListEventEmailLogsQueryDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const event = await this.resolveEvent(params.eventId);
-    this.assertAccess(user, event.clientId);
-    await assertClientModuleEnabled(event.clientId, "emails");
+    const event = await this.readableEvent(params.eventId, user);
     return this.templates.listLogs(params.eventId, query);
   }
 
@@ -244,9 +250,7 @@ export class EmailController {
     @Body() body: BulkSendEmailDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const event = await this.resolveEvent(params.eventId);
-    this.assertAccess(user, event.clientId);
-    await this.assertEmailFeatureWritable(event);
+    const event = await this.writableEvent(params.eventId, user);
 
     const template = await this.templates.getById(params.templateId);
     if (!template) {
@@ -275,9 +279,7 @@ export class EmailController {
     @Body() body: SendCustomEmailDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const event = await this.resolveEvent(params.eventId);
-    this.assertAccess(user, event.clientId);
-    await this.assertEmailFeatureWritable(event);
+    const event = await this.writableEvent(params.eventId, user);
     return this.send.sendCustom(
       event,
       params.registrationId,

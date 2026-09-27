@@ -112,7 +112,7 @@ export interface EmailProvider {
 // -----------------------------------------------------------------------------
 
 /**
- * Resolve the shared sender identity from config, which keeps the legacy
+ * Read the shared sender identity already resolved by app-config using the legacy
  * fallback chain (EMAIL_FROM_* ?? SENDGRID_FROM_* ?? default). Note: the
  * SENDGRID_FROM_* fallback applies even under Resend — a legacy naming leak
  * kept on purpose.

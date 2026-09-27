@@ -1,3 +1,5 @@
+import { PaymentStatusSchema, RegistrationRoleSchema } from "./registration-enums";
+export { PaymentStatusSchema, RegistrationRoleSchema } from "./registration-enums";
 import { z } from "zod";
 import { AccessSelectionSchema } from "./access";
 import { EmailStatusSchema } from "./email";
@@ -6,29 +8,11 @@ import { EmailStatusSchema } from "./email";
 // Enums
 // ============================================================================
 
-export const PaymentStatusSchema = z.enum([
-  "PENDING",
-  "VERIFYING",
-  "PARTIAL",
-  "PAID",
-  "SPONSORED",
-  "WAIVED",
-  "REFUNDED",
-]);
-
 export const PaymentMethodSchema = z.enum([
   "BANK_TRANSFER",
   "ONLINE",
   "CASH",
   "LAB_SPONSORSHIP",
-]);
-
-export const RegistrationRoleSchema = z.enum([
-  "PARTICIPANT",
-  "SPEAKER",
-  "MODERATOR",
-  "ORGANIZER",
-  "INVITED",
 ]);
 
 // ============================================================================

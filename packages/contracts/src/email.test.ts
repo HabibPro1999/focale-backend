@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   BulkSendEmailSchema,
-  CreateEmailTemplateSchema,
   CreateEmailTemplateBodySchema,
   TiptapDocumentSchema,
   UpdateEmailTemplateSchema,
@@ -10,15 +9,14 @@ import {
 const eventId = "123e4567-e89b-12d3-a456-426614174000";
 const content = { type: "doc" as const, content: [] };
 const base = {
-  eventId,
   name: "Welcome",
   subject: "Hello",
   content,
 };
 
-describe("CreateEmailTemplateSchema trigger XOR refine", () => {
+describe("CreateEmailTemplateBodySchema trigger XOR refine", () => {
   it("accepts an automatic template with an abstractTrigger (and no trigger)", () => {
-    const parsed = CreateEmailTemplateSchema.safeParse({
+    const parsed = CreateEmailTemplateBodySchema.safeParse({
       ...base,
       category: "AUTOMATIC",
       abstractTrigger: "ABSTRACT_SUBMISSION_ACK",
@@ -27,7 +25,7 @@ describe("CreateEmailTemplateSchema trigger XOR refine", () => {
   });
 
   it("accepts an automatic template with a (registration) trigger", () => {
-    const parsed = CreateEmailTemplateSchema.safeParse({
+    const parsed = CreateEmailTemplateBodySchema.safeParse({
       ...base,
       category: "AUTOMATIC",
       trigger: "REGISTRATION_CREATED",
@@ -36,7 +34,7 @@ describe("CreateEmailTemplateSchema trigger XOR refine", () => {
   });
 
   it("rejects an automatic template with neither trigger set", () => {
-    const parsed = CreateEmailTemplateSchema.safeParse({
+    const parsed = CreateEmailTemplateBodySchema.safeParse({
       ...base,
       category: "AUTOMATIC",
     });
@@ -44,7 +42,7 @@ describe("CreateEmailTemplateSchema trigger XOR refine", () => {
   });
 
   it("rejects an automatic template with BOTH triggers set", () => {
-    const parsed = CreateEmailTemplateSchema.safeParse({
+    const parsed = CreateEmailTemplateBodySchema.safeParse({
       ...base,
       category: "AUTOMATIC",
       trigger: "REGISTRATION_CREATED",
@@ -54,7 +52,7 @@ describe("CreateEmailTemplateSchema trigger XOR refine", () => {
   });
 
   it("rejects a MANUAL template that includes an abstractTrigger", () => {
-    const parsed = CreateEmailTemplateSchema.safeParse({
+    const parsed = CreateEmailTemplateBodySchema.safeParse({
       ...base,
       category: "MANUAL",
       abstractTrigger: "ABSTRACT_SUBMISSION_ACK",
@@ -63,7 +61,7 @@ describe("CreateEmailTemplateSchema trigger XOR refine", () => {
   });
 
   it("accepts a MANUAL template with no triggers", () => {
-    const parsed = CreateEmailTemplateSchema.safeParse({
+    const parsed = CreateEmailTemplateBodySchema.safeParse({
       ...base,
       category: "MANUAL",
     });

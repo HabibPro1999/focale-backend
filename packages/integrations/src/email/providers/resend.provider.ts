@@ -95,74 +95,29 @@ export function normalizeResendEvents(payload: WebhookEventPayload): {
   const events: NormalizedWebhookEvent[] = [];
   const logOnly: LogOnlyWebhookEvent[] = [];
 
+  let event: Omit<NormalizedWebhookEvent, "emailLogId"> | undefined;
   switch (payload.type) {
-    case "email.delivered": {
-      const emailLogId = payload.data.tags?.email_log_id;
-      if (emailLogId) events.push({ emailLogId, type: "delivered" });
+    case "email.delivered":
+      event = { type: "delivered" };
       break;
-    }
-    case "email.opened": {
-      const emailLogId = payload.data.tags?.email_log_id;
-      if (emailLogId) events.push({ emailLogId, type: "open" });
+    case "email.opened":
+      event = { type: "open" };
       break;
-    }
-    case "email.clicked": {
-      const emailLogId = payload.data.tags?.email_log_id;
-      if (emailLogId) {
-        events.push({
-          emailLogId,
-          type: "click",
-          metadata: { url: payload.data.click?.link },
-        });
-      }
+    case "email.clicked":
+      event = { type: "click", metadata: { url: payload.data.click?.link } };
       break;
-    }
-    case "email.bounced": {
-      const emailLogId = payload.data.tags?.email_log_id;
-      if (emailLogId) {
-        events.push({
-          emailLogId,
-          type: "bounce",
-          metadata: { reason: payload.data.bounce?.message },
-        });
-      }
+    case "email.bounced":
+      event = { type: "bounce", metadata: { reason: payload.data.bounce?.message } };
       break;
-    }
-    case "email.complained": {
-      const emailLogId = payload.data.tags?.email_log_id;
-      if (emailLogId) {
-        events.push({
-          emailLogId,
-          type: "spam_report",
-          metadata: { reason: "Recipient reported email as spam" },
-        });
-      }
+    case "email.complained":
+      event = { type: "spam_report", metadata: { reason: "Recipient reported email as spam" } };
       break;
-    }
-    case "email.failed": {
-      const emailLogId = payload.data.tags?.email_log_id;
-      if (emailLogId) {
-        events.push({
-          emailLogId,
-          type: "dropped",
-          metadata: { reason: payload.data.failed?.reason },
-        });
-      }
+    case "email.failed":
+      event = { type: "dropped", metadata: { reason: payload.data.failed?.reason } };
       break;
-    }
-    case "email.suppressed": {
-      const emailLogId = payload.data.tags?.email_log_id;
-      if (emailLogId) {
-        events.push({
-          emailLogId,
-          type: "dropped",
-          metadata: {
-            reason: payload.data.suppressed?.message ?? "Recipient suppressed",
-          },
-        });
-      }
+    case "email.suppressed":
+      event = { type: "dropped", metadata: { reason: payload.data.suppressed?.message ?? "Recipient suppressed" } };
       break;
-    }
     case "email.sent":
     case "email.scheduled":
     case "email.delivery_delayed": {
@@ -175,6 +130,11 @@ export function normalizeResendEvents(payload: WebhookEventPayload): {
     default:
       // contact.*, domain.*, email.received — not email-status events.
       break;
+  }
+
+  if (event && "tags" in payload.data) {
+    const emailLogId = payload.data.tags?.email_log_id;
+    if (emailLogId) events.push({ emailLogId, ...event });
   }
 
   return { events, logOnly };
