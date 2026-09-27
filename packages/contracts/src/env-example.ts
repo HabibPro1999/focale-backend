@@ -1,4 +1,4 @@
-import { APP_ENV_SHAPE } from "./app-config";
+import { APP_ENV_SHAPE } from "./app-env-schema";
 import { ENV_SECTIONS, envKeyMeta, type EnvSection } from "./env-meta";
 
 const HEADER = [
