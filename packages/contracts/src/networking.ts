@@ -2,6 +2,22 @@ import { z } from "zod";
 import { PaymentStatusSchema } from "./registrations";
 import { LanguageCodeSchema, type LanguageCode } from "./i18n.schema";
 
+/** Meeting reminder titles: the reminder queue binds them in SQL and the renderer shows them. */
+export const NETWORKING_REMINDER_TITLES = {
+  fr: {
+    MEETING_REMINDER_DAY: "Votre rendez-vous a lieu demain",
+    MEETING_REMINDER_HOUR: "Votre rendez-vous commence dans une heure",
+  },
+  ar: {
+    MEETING_REMINDER_DAY: "موعدك غداً",
+    MEETING_REMINDER_HOUR: "يبدأ موعدك خلال ساعة",
+  },
+  en: {
+    MEETING_REMINDER_DAY: "Your meeting is tomorrow",
+    MEETING_REMINDER_HOUR: "Your meeting starts within an hour",
+  },
+} as const;
+
 export const NETWORKING_PROFILE_STATUSES = [
   "PENDING",
   "ACTIVE",

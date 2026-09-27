@@ -16,3 +16,4 @@ export * from "./networking/notification-rendering";
 export { networkingDeliverySkipReason } from "./networking/delivery-policy";
 
 export * from "./networking-report-pdf";
+export { escapeIcs, dateIcs, foldIcs } from "./networking/ics";

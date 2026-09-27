@@ -25,9 +25,26 @@ export * from "./networking-store";
 export * from "./networking-notices";
 export * from "./networking-meetings";
 export * from "./networking-embeddings";
+export {
+  clearNetworkingVectorIndexCache,
+  findNetworkingVectorCandidates,
+  getNetworkingVectorIndexHealth,
+  NETWORKING_VECTOR_INDEX,
+  networkingVectorIndexPresent,
+  networkingVectorIndexStatus,
+  rankNetworkingVectorCandidates,
+  type NetworkingVectorCandidate,
+  type NetworkingVectorIndexHealth,
+  type NetworkingVectorIndexStatus,
+} from "./networking-vector-search";
 export * from "./networking-delivery";
+export * from "./networking-maintenance";
+export * from "./networking-contact-export";
+export * from "./networking-email-tracking";
+export * from "./networking-report-data";
 
-export * from "./networking-read";
+export * from "./networking-discovery";
+export * from "./networking-participant-read";
 export * from "./networking-metrics";
 export * from "./networking-admin-read";
 export * from "./networking-access-snapshot";

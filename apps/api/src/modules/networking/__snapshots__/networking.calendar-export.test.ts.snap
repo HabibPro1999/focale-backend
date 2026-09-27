@@ -1,0 +1,45 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`participant calendar bytes > preserves CANCELLED calendar content, escaping and UTF-8 folding 1`] = `
+"BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Focale//B2B Networking//EN
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+BEGIN:VEVENT
+UID:meeting@networking.focale
+DTSTAMP:20310405T080000Z
+DTSTART:20310405T090000Z
+DTEND:20310405T093000Z
+SEQUENCE:7
+STATUS:CANCELLED
+SUMMARY:Meeting with éééééééééééééééééééééééééé
+ éééééééééééééé😀\\,\\; Peer
+LOCATION:A\\\\B Room\\;1\\,2\\nNorth
+DESCRIPTION:Line1\\nLine2\\,\\;\\\\end
+END:VEVENT
+END:VCALENDAR
+"
+`;
+
+exports[`participant calendar bytes > preserves CONFIRMED calendar content, escaping and UTF-8 folding 1`] = `
+"BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Focale//B2B Networking//EN
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+BEGIN:VEVENT
+UID:meeting@networking.focale
+DTSTAMP:20310405T080000Z
+DTSTART:20310405T090000Z
+DTEND:20310405T093000Z
+SEQUENCE:7
+STATUS:CONFIRMED
+SUMMARY:Meeting with éééééééééééééééééééééééééé
+ éééééééééééééé😀\\,\\; Peer
+LOCATION:A\\\\B Room\\;1\\,2\\nNorth
+DESCRIPTION:Line1\\nLine2\\,\\;\\\\end
+END:VEVENT
+END:VCALENDAR
+"
+`;

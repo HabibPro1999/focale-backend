@@ -5,7 +5,7 @@ import { withSerializableTxn } from "../txn";
 import { networkingAudit, networkingDeliveries } from "../schema/networking";
 import type { NetworkingDeliveryRow } from "./networking-delivery";
 import { networkingDailyMetrics, networkingEventTotals, networkingSectorMetrics } from "./networking-metrics";
-import { networkingEmailMetrics } from "./networking-read";
+import { emailLogs } from "../schema/email";
 
 /**
  * Aggregate-only durable report data contains no participant names, messages
@@ -100,3 +100,23 @@ export async function latestNetworkingPostEventReport(eventId: string) {
     summary: row.data.summary as Record<string, number>,
   };
 }
+
+export async function networkingEmailMetrics(eventId: string) {
+  const [row] = await getDb()
+    .select({
+      emailSent: sql<number>`count(*) FILTER(WHERE ${emailLogs.sentAt} IS NOT NULL)::integer`.mapWith(Number),
+      emailDelivered: sql<number>`count(*) FILTER(WHERE ${emailLogs.deliveredAt} IS NOT NULL)::integer`.mapWith(Number),
+      emailOpened: sql<number>`count(*) FILTER(WHERE ${emailLogs.openedAt} IS NOT NULL)::integer`.mapWith(Number),
+      emailClicked: sql<number>`count(*) FILTER(WHERE ${emailLogs.clickedAt} IS NOT NULL)::integer`.mapWith(Number),
+      emailFailed: sql<number>`count(*) FILTER(WHERE ${emailLogs.status} IN ('FAILED','BOUNCED','DROPPED'))::integer`.mapWith(Number),
+    })
+    .from(emailLogs)
+    .where(
+      and(
+        sql`${emailLogs.contextSnapshot}->>'dispatchOwner'='networking'`,
+        sql`${emailLogs.contextSnapshot}->>'eventId'=${eventId}`,
+      ),
+    );
+  return row;
+}
+

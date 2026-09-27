@@ -1,0 +1,61 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`meeting attachment bytes > preserves CANCELLED attachment content, escaping, alarms and UTF-8 folding 1`] = `
+{
+  "content": "BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Focale//Networking//EN
+METHOD:CANCEL
+BEGIN:VEVENT
+UID:meeting@networking.focale
+SEQUENCE:7
+DTSTAMP:20310405T080000Z
+DTSTART:20310405T090000Z
+DTEND:20310405T093000Z
+SUMMARY:éééééééééééééééééééééééééééééééé
+ éééééééé😀\\,\\;\\n\\\\Event
+LOCATION:A\\\\B - Room\\;1\\,2\\nNorth
+STATUS:CANCELLED
+END:VEVENT
+END:VCALENDAR
+",
+  "disposition": "attachment",
+  "filename": "networking-meeting.ics",
+  "type": "text/calendar; method=CANCEL; charset=utf-8",
+}
+`;
+
+exports[`meeting attachment bytes > preserves CONFIRMED attachment content, escaping, alarms and UTF-8 folding 1`] = `
+{
+  "content": "BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Focale//Networking//EN
+METHOD:PUBLISH
+BEGIN:VEVENT
+UID:meeting@networking.focale
+SEQUENCE:7
+DTSTAMP:20310405T080000Z
+DTSTART:20310405T090000Z
+DTEND:20310405T093000Z
+SUMMARY:éééééééééééééééééééééééééééééééé
+ éééééééé😀\\,\\;\\n\\\\Event
+LOCATION:A\\\\B - Room\\;1\\,2\\nNorth
+STATUS:CONFIRMED
+BEGIN:VALARM
+TRIGGER:-P1D
+ACTION:DISPLAY
+DESCRIPTION:Your meeting is tomorrow
+END:VALARM
+BEGIN:VALARM
+TRIGGER:-PT1H
+ACTION:DISPLAY
+DESCRIPTION:Your meeting starts within an hour
+END:VALARM
+END:VEVENT
+END:VCALENDAR
+",
+  "disposition": "attachment",
+  "filename": "networking-meeting.ics",
+  "type": "text/calendar; method=PUBLISH; charset=utf-8",
+}
+`;

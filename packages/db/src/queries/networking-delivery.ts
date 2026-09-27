@@ -21,10 +21,6 @@ import { registrations } from "../schema/registrations";
 import { clients } from "../schema/users-clients";
 import { forms } from "../schema/forms";
 import { networkingConsentPending } from "./networking-projection";
-export * from "./networking-maintenance";
-export * from "./networking-contact-export";
-export * from "./networking-email-tracking";
-export * from "./networking-report-data";
 
 export type NetworkingDeliveryRow = typeof networkingDeliveries.$inferSelect;
 
