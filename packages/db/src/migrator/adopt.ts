@@ -1,3 +1,4 @@
+import { tableExists } from "./catalog-read";
 import { randomUUID } from "node:crypto";
 import type { Client } from "pg";
 import { catalogObjectKey, deriveCatalogProbes } from "./catalog";
@@ -27,7 +28,6 @@ import type {
   MigrationAdoptionOptions,
   MigrationAdoptionReport,
   MigrationAdoptionSupport,
-  MigrationAdoptionWorkflow,
   MigrationCatalogReport,
 } from "./types";
 
@@ -304,16 +304,6 @@ export function decideAdoption(input: AdoptionDecisionInput): AdoptionDecision {
   }
 }
 
-async function tableExists(client: Client, name: string): Promise<boolean> {
-  const result = await client.query<{ present: boolean }>(
-    `SELECT EXISTS (
-      SELECT 1 FROM information_schema.tables
-      WHERE table_schema = 'public' AND table_name = $1
-    ) AS present`,
-    [name],
-  );
-  return Boolean(result.rows[0]?.present);
-}
 
 export async function readLegacyEvidence(client: Client): Promise<LegacyEvidence> {
   const networkingRows = (await tableExists(client, "networking_migrations"))
@@ -496,40 +486,44 @@ async function writeAdoptionLedger(
   });
 }
 
-export const migrationAdoptionWorkflow: MigrationAdoptionWorkflow = {
-  async run(client, engine, migrations, options, support): Promise<MigrationAdoptionReport> {
-    await setUtcSession(client);
-    const first = await assessAdoption(client, migrations, support, engine);
-    const report = (assessed: typeof first, written = { migrations: 0, steps: 0 }): MigrationAdoptionReport => ({
-      engine,
-      ...assessed,
-      aborted: assessed.errors.length > 0,
-      written,
-    });
-    const planned = rowsToWrite(first.assessments);
-    if (!options.writeLedger || first.errors.length || planned.migrations + planned.steps === 0) {
-      return report(first);
-    }
+export async function adoptMigrations(
+  client: Client,
+  engine: DatabaseEngine,
+  migrations: MigrationDefinition[],
+  options: MigrationAdoptionOptions,
+  support: MigrationAdoptionSupport,
+): Promise<MigrationAdoptionReport> {
+  await setUtcSession(client);
+  const first = await assessAdoption(client, migrations, support, engine);
+  const report = (assessed: typeof first, written = { migrations: 0, steps: 0 }): MigrationAdoptionReport => ({
+    engine,
+    ...assessed,
+    aborted: assessed.errors.length > 0,
+    written,
+  });
+  const planned = rowsToWrite(first.assessments);
+  if (!options.writeLedger || first.errors.length || planned.migrations + planned.steps === 0) {
+    return report(first);
+  }
 
-    await support.ledger.ensureSchema(client);
-    const owner = `adopt:${process.pid}:${randomUUID()}`;
-    await acquireMigrationLease(client, owner);
-    let heartbeat: LeaseHeartbeat | undefined;
-    try {
-      if (options.leaseConnectionString) {
-        heartbeat = await startLeaseHeartbeat(options.leaseConnectionString, owner);
-      }
-      // Evidence may have changed before the lease was held; decide again.
-      const confirmed = await assessAdoption(client, migrations, support, engine);
-      if (confirmed.errors.length) return report(confirmed);
-      await writeAdoptionLedger(client, confirmed.assessments, options, support, owner, heartbeat);
-      return report(confirmed, rowsToWrite(confirmed.assessments));
-    } finally {
-      await heartbeat?.close().catch(() => undefined);
-      await releaseMigrationLease(client, owner).catch(() => undefined);
+  await support.ledger.ensureSchema(client);
+  const owner = `adopt:${process.pid}:${randomUUID()}`;
+  await acquireMigrationLease(client, owner);
+  let heartbeat: LeaseHeartbeat | undefined;
+  try {
+    if (options.leaseConnectionString) {
+      heartbeat = await startLeaseHeartbeat(options.leaseConnectionString, owner);
     }
-  },
-};
+    // Evidence may have changed before the lease was held; decide again.
+    const confirmed = await assessAdoption(client, migrations, support, engine);
+    if (confirmed.errors.length) return report(confirmed);
+    await writeAdoptionLedger(client, confirmed.assessments, options, support, owner, heartbeat);
+    return report(confirmed, rowsToWrite(confirmed.assessments));
+  } finally {
+    await heartbeat?.close().catch(() => undefined);
+    await releaseMigrationLease(client, owner).catch(() => undefined);
+  }
+}
 
 /** Human-readable adoption report; every line is credential-redacted. */
 export function formatAdoptionReport(report: MigrationAdoptionReport, writeLedger: boolean): string[] {
