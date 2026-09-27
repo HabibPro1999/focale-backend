@@ -15,12 +15,7 @@ import {
   deriveReviewStatus,
   lockedAbstractChanged,
 } from "./review-aggregate";
-import {
-  enqueueAbstractEmailOutboxEvent,
-  loadThemeRefs,
-  type AbstractRow,
-  type ThemeRef,
-} from "./shared";
+import { enqueueAbstractEmailOutboxEvent, type AbstractRow } from "./shared";
 
 // ============================================================================
 // Committee — review read
@@ -37,7 +32,6 @@ export interface AbstractForReview {
     divergenceThreshold: number;
     commentsEnabled: boolean;
   } | null;
-  themes: ThemeRef[];
   reviews: { reviewerId: string; active: boolean }[];
 }
 
@@ -68,28 +62,20 @@ export async function findAbstractForReview(
     .where(eq(abstractConfig.eventId, row.eventId))
     .limit(1);
 
-  const [themeMap, reviews] = await Promise.all([
-    loadThemeRefs([abstractId]),
-    getDb()
-      .select({
-        reviewerId: abstractReviews.reviewerId,
-        active: abstractReviews.active,
-      })
-      .from(abstractReviews)
-      .where(
-        and(
-          eq(abstractReviews.abstractId, abstractId),
-          eq(abstractReviews.active, true),
-        ),
+  const reviews = await getDb()
+    .select({
+      reviewerId: abstractReviews.reviewerId,
+      active: abstractReviews.active,
+    })
+    .from(abstractReviews)
+    .where(
+      and(
+        eq(abstractReviews.abstractId, abstractId),
+        eq(abstractReviews.active, true),
       ),
-  ]);
+    );
 
-  return {
-    ...row,
-    config: cfg ?? null,
-    themes: themeMap.get(abstractId) ?? [],
-    reviews,
-  };
+  return { ...row, config: cfg ?? null, reviews };
 }
 
 // ============================================================================

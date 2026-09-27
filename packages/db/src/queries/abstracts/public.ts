@@ -276,7 +276,7 @@ export async function findAbstractForFinalFile(
 }
 
 // ============================================================================
-// Public writes (transactional — READ COMMITTED, no retry: matches legacy)
+// Public writes (transactional; READ COMMITTED without retry, except edit)
 // ============================================================================
 
 export interface SubmitAbstractTxnParams {

@@ -31,7 +31,7 @@ export interface ListAdminAbstractsFilters {
   offset: number;
 }
 
-export function buildAdminAbstractsWhere(
+function buildAdminAbstractsWhere(
   eventId: string,
   filters: Omit<ListAdminAbstractsFilters, "limit" | "offset">,
 ) {

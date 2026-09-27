@@ -67,7 +67,6 @@ export {
 } from "./abstracts/public";
 
 export {
-  buildAdminAbstractsWhere,
   getAbstractsExportPlan,
   getAdminAbstractDetail,
   iterateAbstractsForExport,
@@ -77,7 +76,6 @@ export {
 } from "./abstracts/admin-reads";
 
 export {
-  countAccessibleAbstracts,
   deactivateCommitteeMembershipTxn,
   findAbstractMembership,
   findCommitteeInviteTarget,
@@ -100,7 +98,6 @@ export {
   findAbstractBasic,
   findActiveMembershipUserIds,
   findScoredReviewScores,
-  getCommitteeConfig,
   getReviewerAssignmentConfig,
   type AssignReviewersResult,
 } from "./abstracts/assignment";

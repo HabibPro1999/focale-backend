@@ -60,7 +60,7 @@ export interface ReviewerAbstractRow extends AbstractRow {
 }
 
 // ============================================================================
-// Audit + outbox helpers
+// Outbox helper
 // ============================================================================
 
 export interface AbstractEmailOutboxPayload {
@@ -90,7 +90,7 @@ export async function enqueueAbstractEmailOutboxEvent(
 }
 
 // ============================================================================
-// resolveEvent helper
+// Event lookups
 // ============================================================================
 
 /** Slim event projection for the admin resolveEvent gate. */
