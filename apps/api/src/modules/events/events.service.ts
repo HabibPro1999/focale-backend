@@ -12,6 +12,7 @@ import { paginate, toOffsetPagination, type PaginatedResult } from "@app/shared"
 import {
   getDb,
   withSerializableTxn,
+  withTxn,
   type EventRow,
   type EventWithPricing,
   clientExistsById,
@@ -102,7 +103,7 @@ export class EventsService {
       throw conflict("Event with this slug already exists");
     }
 
-    return getDb().transaction(
+    return withTxn(
       async (tx) => {
         const event = await insertEventTx(tx, {
           clientId,
@@ -122,7 +123,6 @@ export class EventsService {
         });
         return { ...event, pricing };
       },
-      { isolationLevel: "read committed" },
     );
   }
 
@@ -221,7 +221,7 @@ export class EventsService {
     };
 
     try {
-      filesToDelete = await getDb().transaction(
+      filesToDelete = await withTxn(
         async (tx) => {
           const found = await getEventWithRegistrationCountTx(tx, id);
           if (!found) {
@@ -251,7 +251,6 @@ export class EventsService {
             networkingLogoKey,
           };
         },
-        { isolationLevel: "read committed" },
       );
     } catch (err) {
       if (isForeignKeyViolation(err)) {

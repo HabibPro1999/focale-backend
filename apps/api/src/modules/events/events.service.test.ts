@@ -7,6 +7,7 @@ import { ErrorCodes } from "@app/contracts";
 vi.mock("@app/db", () => ({
   getDb: vi.fn(),
   withSerializableTxn: vi.fn(),
+  withTxn: vi.fn(),
   clientExistsById: vi.fn(),
   countRegistrationsTx: vi.fn(),
   deleteEmailTemplatesByEventTx: vi.fn(),
@@ -98,6 +99,9 @@ function createManyMockEvents(n: number) {
 const transactionMock = vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn({}));
 function useTransaction() {
   vi.mocked(db.getDb).mockReturnValue({ transaction: transactionMock } as never);
+  vi.mocked(db.withTxn).mockImplementation((fn) =>
+    db.getDb().transaction(fn as never, { isolationLevel: "read committed" } as never),
+  );
   // withSerializableTxn is now a db-package helper; mirror its real behaviour
   // (getDb().transaction(fn, { isolationLevel: "serializable" })) so the
   // serializable-isolation assertion on transactionMock still holds.
