@@ -12,7 +12,8 @@ import { getStorageProvider, ownedStorageKey } from "@app/integrations";
 import { logger } from "../../core/logger.service";
 import { AppException } from "../../core/app-exception";
 import { verifyAbstractToken } from "./abstracts.token";
-import { AbstractsService, assertAbstractModuleEnabled } from "./abstracts.service";
+import { AbstractsService } from "./abstracts.service";
+import { assertAbstractModuleEnabled } from "./abstracts.gates";
 
 type AbstractFileKind = "PDF" | "PPT" | "PPTX";
 

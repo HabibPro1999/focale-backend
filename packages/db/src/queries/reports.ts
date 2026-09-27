@@ -106,8 +106,6 @@ export interface FinancialSummaryAggregates {
   refundedByCurrency: Array<{ currency: string; totalAmount: number }>;
   revenueByCurrency: Array<{ currency: string; paidAmount: number }>;
   overall: {
-    totalAmount: number;
-    paidAmount: number;
     baseAmount: number;
     accessAmount: number;
     discountAmount: number;
@@ -182,8 +180,6 @@ export async function getFinancialSummaryAggregates(
         .groupBy(registrations.currency),
       db
         .select({
-          totalAmount: sum(registrations.totalAmount),
-          paidAmount: sum(registrations.paidAmount),
           baseAmount: sum(registrations.baseAmount),
           accessAmount: sum(registrations.accessAmount),
           discountAmount: sum(registrations.discountAmount),
@@ -225,8 +221,6 @@ export async function getFinancialSummaryAggregates(
       paidAmount: num(r.paidAmount),
     })),
     overall: {
-      totalAmount: num(overall?.totalAmount),
-      paidAmount: num(overall?.paidAmount),
       baseAmount: num(overall?.baseAmount),
       accessAmount: num(overall?.accessAmount),
       discountAmount: num(overall?.discountAmount),
@@ -820,7 +814,6 @@ export interface ModularTransactionRow {
   amount: number;
   method: string | null;
   reference: string | null;
-  note: string | null;
   performedBy: string | null;
   createdAt: Date;
 }
@@ -911,7 +904,6 @@ async function loadModularRelations(
         amount: paymentTransaction.amount,
         method: paymentTransaction.method,
         reference: paymentTransaction.reference,
-        note: paymentTransaction.note,
         performedBy: paymentTransaction.performedBy,
         createdAt: paymentTransaction.createdAt,
       })
@@ -926,7 +918,6 @@ async function loadModularRelations(
         amount: t.amount,
         method: t.method,
         reference: t.reference,
-        note: t.note,
         performedBy: t.performedBy,
         createdAt: t.createdAt,
       });
@@ -1066,7 +1057,6 @@ export interface AccessRegistrantReportRow {
   phone: string | null;
   paymentStatus: string;
   totalAmount: number;
-  currency: string;
   submittedAt: Date;
 }
 
@@ -1087,7 +1077,6 @@ export function iterateAccessRegistrantsForReport(
         phone: registrations.phone,
         paymentStatus: registrations.paymentStatus,
         totalAmount: registrations.totalAmount,
-        currency: registrations.currency,
         submittedAt: registrations.submittedAt,
       })
       .from(registrations)

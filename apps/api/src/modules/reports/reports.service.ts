@@ -3,7 +3,6 @@
 // ============================================================================
 
 import { Injectable } from "@nestjs/common";
-import type ExcelJS from "exceljs";
 import type { Writable } from "node:stream";
 import {
   getFinancialSummaryAggregates,
@@ -39,6 +38,9 @@ import {
   RowPacer,
   createXlsxWriter,
 } from "../../core/exports/xlsx-stream";
+
+import { HEADER_FILL, HEADER_FONT, THIN_BORDER } from "./excel-style";
+import { asFormRecord } from "./export-values";
 
 function buildDateFilter(query: ReportQuery): DateRange {
   return {
@@ -302,48 +304,36 @@ function buildFinancialSummary(agg: FinancialSummaryAggregates): FinancialSummar
 // CSV / JSON / XLSX registrations export (streamed page by page)
 // ============================================================================
 
-const STANDARD_EXPORT_HEADERS = [
-  "ID",
-  "Email",
-  "First Name",
-  "Last Name",
-  "Phone",
-  "Payment Status",
-  "Payment Method",
-  "Total Amount",
-  "Paid Amount",
-  "Base Amount",
-  "Access Amount",
-  "Discount Amount",
-  "Sponsorship Code",
-  "Sponsorship Amount",
-  "Submitted At",
-  "Paid At",
+interface LegacyColumn {
+  header: string;
+  value: (registration: ExportRegistrationRow) => string | number;
+  money?: boolean;
+}
+const LEGACY_COLUMNS: readonly LegacyColumn[] = [
+  { header: "ID", value: (r) => r.id },
+  { header: "Email", value: (r) => r.email },
+  { header: "First Name", value: (r) => r.firstName ?? "" },
+  { header: "Last Name", value: (r) => r.lastName ?? "" },
+  { header: "Phone", value: (r) => r.phone ?? "" },
+  { header: "Payment Status", value: (r) => r.paymentStatus },
+  { header: "Payment Method", value: (r) => r.paymentMethod ?? "" },
+  { header: "Total Amount", value: (r) => r.totalAmount, money: true },
+  { header: "Paid Amount", value: (r) => r.paidAmount, money: true },
+  { header: "Base Amount", value: (r) => r.baseAmount, money: true },
+  { header: "Access Amount", value: (r) => r.accessAmount, money: true },
+  { header: "Discount Amount", value: (r) => r.discountAmount, money: true },
+  { header: "Sponsorship Code", value: (r) => r.sponsorshipCode ?? "" },
+  { header: "Sponsorship Amount", value: (r) => r.sponsorshipAmount, money: true },
+  { header: "Submitted At", value: (r) => r.submittedAt.toISOString() },
+  { header: "Paid At", value: (r) => r.paidAt?.toISOString() ?? "" },
 ];
+const STANDARD_EXPORT_HEADERS = LEGACY_COLUMNS.map((column) => column.header);
 
 /** Standard values, then one cell per form_data key (objects as JSON). */
 function exportRowValues(r: ExportRegistrationRow, formDataKeys: string[]): (string | number)[] {
-  const fd =
-    r.formData && typeof r.formData === "object" && !Array.isArray(r.formData)
-      ? (r.formData as Record<string, unknown>)
-      : {};
+  const fd = asFormRecord(r.formData);
   return [
-    r.id,
-    r.email,
-    r.firstName ?? "",
-    r.lastName ?? "",
-    r.phone ?? "",
-    r.paymentStatus,
-    r.paymentMethod ?? "",
-    r.totalAmount,
-    r.paidAmount,
-    r.baseAmount,
-    r.accessAmount,
-    r.discountAmount,
-    r.sponsorshipCode ?? "",
-    r.sponsorshipAmount,
-    r.submittedAt.toISOString(),
-    r.paidAt?.toISOString() ?? "",
+    ...LEGACY_COLUMNS.map((column) => column.value(r)),
     ...formDataKeys.map((key) => {
       const value = fd[key];
       if (value == null) return "";
@@ -404,26 +394,9 @@ async function writeRegistrationsXlsx(
   });
   const headers = [...STANDARD_EXPORT_HEADERS, ...formDataKeys];
 
-  const headerFill: ExcelJS.Fill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FF1F4E79" },
-  };
-  const headerFont: Partial<ExcelJS.Font> = {
-    bold: true,
-    color: { argb: "FFFFFFFF" },
-    size: 11,
-  };
-  const border: Partial<ExcelJS.Borders> = {
-    top: { style: "thin" },
-    left: { style: "thin" },
-    bottom: { style: "thin" },
-    right: { style: "thin" },
-  };
-
   // Column widths and money formats go first: a streamed sheet writes its
   // column definitions with the first row, and new cells inherit the format.
-  const moneyColumns = [8, 9, 10, 11, 12, 14];
+  const moneyColumns = LEGACY_COLUMNS.flatMap((column, index) => column.money ? [index + 1] : []);
   moneyColumns.forEach((columnNumber) => {
     sheet.getColumn(columnNumber).numFmt = "#,##0";
   });
@@ -437,8 +410,7 @@ async function writeRegistrationsXlsx(
     else if (lowerHeader.includes("amount")) width = 14;
     else if (lowerHeader.includes("submitted") || lowerHeader.includes("paid at")) {
       width = 24;
-    } else if (lowerHeader.includes("status") || lowerHeader.includes("method")) {
-      width = 18;
+
     } else if (header === "ID") {
       width = 38;
     }
@@ -448,9 +420,9 @@ async function writeRegistrationsXlsx(
 
   const headerRow = sheet.addRow(headers);
   headerRow.eachCell((cell) => {
-    cell.fill = headerFill;
-    cell.font = headerFont;
-    cell.border = border;
+    cell.fill = HEADER_FILL;
+    cell.font = HEADER_FONT;
+    cell.border = THIN_BORDER;
   });
   headerRow.commit();
   sheet.autoFilter = {
@@ -460,7 +432,7 @@ async function writeRegistrationsXlsx(
 
   const cellStyles = new ColumnStyles((column) => ({
     ...(moneyColumns.includes(column) ? { numFmt: "#,##0" } : {}),
-    border,
+    border: THIN_BORDER,
     alignment: { vertical: "top", wrapText: true },
   }));
   const pacer = new RowPacer(out, signal, sheet);

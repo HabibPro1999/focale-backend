@@ -126,7 +126,6 @@ function registration(n: number): ModularRegistrationRow {
         amount: 450_000,
         method: "BANK_TRANSFER",
         reference: `VIR-${n}`,
-        note: null,
         performedBy: "admin@example.test",
         createdAt: at,
       },

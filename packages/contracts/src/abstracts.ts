@@ -95,13 +95,19 @@ export const AbstractBookJobParamSchema = z.strictObject({
 // Config Schemas
 // ============================================================================
 
-const SectionWordLimitsSchema = z.strictObject({
-  introduction: z.union([z.number().int().min(0), z.null()]).optional(),
-  objective: z.union([z.number().int().min(0), z.null()]).optional(),
-  methods: z.union([z.number().int().min(0), z.null()]).optional(),
-  results: z.union([z.number().int().min(0), z.null()]).optional(),
-  conclusion: z.union([z.number().int().min(0), z.null()]).optional(),
-});
+export const ABSTRACT_STRUCTURED_SECTIONS = [
+  "introduction", "objective", "methods", "results", "conclusion",
+] as const;
+
+function structuredSectionShape<T extends z.ZodType>(make: () => T) {
+  return Object.fromEntries(ABSTRACT_STRUCTURED_SECTIONS.map((key) => [key, make()])) as {
+    [K in typeof ABSTRACT_STRUCTURED_SECTIONS[number]]: T;
+  };
+}
+
+const SectionWordLimitsSchema = z.strictObject(
+  structuredSectionShape(() => z.union([z.number().int().min(0), z.null()]).optional()),
+);
 
 const NullableDateTime = z.union([z.string().datetime(), z.null()]).optional();
 
@@ -203,11 +209,7 @@ const FreeTextContentSchema = z.strictObject({
 const StructuredContentSchema = z.strictObject({
   mode: z.literal("STRUCTURED"),
   title: z.string().min(1).max(300),
-  introduction: z.string().min(1),
-  objective: z.string().min(1),
-  methods: z.string().min(1),
-  results: z.string().min(1),
-  conclusion: z.string().min(1),
+  ...structuredSectionShape(() => z.string().min(1)),
 });
 
 export const SubmitAbstractSchema = z.strictObject({

@@ -45,22 +45,7 @@ import {
 // workbook to a temp file, then streams a stored ZIP of them.
 // =============================================================================
 
-const HEADER_FILL: ExcelJS.Fill = {
-  type: "pattern",
-  pattern: "solid",
-  fgColor: { argb: "FF1F4E79" },
-};
-const HEADER_FONT: Partial<ExcelJS.Font> = {
-  bold: true,
-  color: { argb: "FFFFFFFF" },
-  size: 11,
-};
-const THIN_BORDER: Partial<ExcelJS.Borders> = {
-  top: { style: "thin" },
-  left: { style: "thin" },
-  bottom: { style: "thin" },
-  right: { style: "thin" },
-};
+import { HEADER_FILL, HEADER_FONT, THIN_BORDER } from "./excel-style";
 
 /** Styles a header row's cells and writes the row out. */
 function commitHeaderRow(row: ExcelJS.Row): void {

@@ -157,12 +157,7 @@ export const EMAIL_PROVIDER_TIMEOUT_MS = 15_000;
 // SHARED UTILITIES
 // -----------------------------------------------------------------------------
 
-/**
- * Resolve the shared sender identity from config, which keeps the legacy
- * fallback chain (EMAIL_FROM_* ?? SENDGRID_FROM_* ?? default). Note: the
- * SENDGRID_FROM_* fallback applies even under Resend — a legacy naming leak
- * kept on purpose.
- */
+/** Sender identity already resolved by the contracts configuration fallback rules. */
 export function resolveEmailSender(): { fromEmail: string; fromName: string } {
   const { fromEmail, fromName } = integrationsConfig().email;
   return { fromEmail, fromName };
