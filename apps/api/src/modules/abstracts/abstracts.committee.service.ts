@@ -1,3 +1,5 @@
+import { summarizeScores, DEFAULT_REVIEWERS_PER_ABSTRACT, DEFAULT_DIVERGENCE_THRESHOLD } from "@app/shared";
+import { canViewAbstract, hasActiveReview } from "./abstracts.review-access";
 import { CommitteeInviteService } from "./abstracts.committee-invite.service";
 import { CommitteeEmailsService } from "./abstracts.committee-emails";
 import { randomUUID } from "node:crypto";
@@ -105,15 +107,6 @@ function anonymizeAbstractDetail(
     lastEditedAt: abstract.lastEditedAt,
     ownReview: ownReviewOf(abstract.reviews, reviewerId),
   };
-}
-
-function hasReviewerThemeCoverage(
-  themes: { id: string }[],
-  reviewerThemeIds: string[],
-): boolean {
-  if (reviewerThemeIds.length === 0) return false;
-  const covered = new Set(reviewerThemeIds);
-  return themes.some((t) => covered.has(t.id));
 }
 
 function generateThrowawayPassword(): string {
@@ -358,7 +351,7 @@ export class AbstractsCommitteeService {
     }
     const reviewerIds = [...new Set(body.reviewerIds)];
     const config = await getReviewerAssignmentConfig(eventId);
-    const requiredReviewers = config?.reviewersPerAbstract ?? 2;
+    const requiredReviewers = config?.reviewersPerAbstract ?? DEFAULT_REVIEWERS_PER_ABSTRACT;
 
     if (reviewerIds.length > 0) {
       if (reviewerIds.length < requiredReviewers) {
@@ -366,10 +359,8 @@ export class AbstractsCommitteeService {
       }
       if (reviewerIds.length > requiredReviewers) {
         const scores = await findScoredReviewScores(abstractId);
-        const min = scores.length >= 2 ? Math.min(...scores) : null;
-        const max = scores.length >= 2 ? Math.max(...scores) : null;
-        const spread = min !== null && max !== null ? max - min : 0;
-        if (spread < (config?.divergenceThreshold ?? 6)) {
+        const spread = summarizeScores(scores).spread ?? 0;
+        if (spread < (config?.divergenceThreshold ?? DEFAULT_DIVERGENCE_THRESHOLD)) {
           throw badRequest("Extra reviewers can only be assigned after a score divergence alert");
         }
       }
@@ -447,13 +438,7 @@ export class AbstractsCommitteeService {
       abstract.eventId,
       reviewerId,
     );
-    const hasExplicit = abstract.reviews.some(
-      (r) => r.reviewerId === reviewerId && r.active,
-    );
-    if (
-      !hasExplicit &&
-      !hasReviewerThemeCoverage(abstract.themes, reviewerThemeIds)
-    ) {
+    if (!canViewAbstract(abstract, reviewerId, reviewerThemeIds)) {
       throw notFound("Abstract assignment not found");
     }
     return anonymizeAbstractDetail(abstract, reviewerId);
@@ -495,15 +480,12 @@ export class AbstractsCommitteeService {
     // when commentsEnabled is false, so the score still saves.
     //
     // H4: scoring requires an ACTIVE explicit review row, full stop. Theme
-    // coverage (hasReviewerThemeCoverage) only ever grants read/view access
+    // coverage (canViewAbstract) only ever grants read/view access
     // (see getAssignedAbstractDetail) — it must never grant scoring, or a
     // removed reviewer (active:false, membership/theme prefs left intact)
     // could self-reinstate via the upsert in reviewAbstractTxn and defeat the
     // exactly-N-reviewers / divergence-gated-extras rules.
-    const hasExplicit = abstract.reviews.some(
-      (r) => r.reviewerId === reviewerId && r.active,
-    );
-    if (!hasExplicit) {
+    if (!hasActiveReview(abstract.reviews, reviewerId)) {
       throw new AppException(
         ErrorCodes.FORBIDDEN,
         "You are not an active assigned reviewer for this abstract",
@@ -519,7 +501,7 @@ export class AbstractsCommitteeService {
       score: body.score,
       comment: body.comment,
       commentsEnabled: abstract.config?.commentsEnabled ?? true,
-      divergenceThreshold: abstract.config?.divergenceThreshold ?? 6,
+      divergenceThreshold: abstract.config?.divergenceThreshold ?? DEFAULT_DIVERGENCE_THRESHOLD,
     });
   }
 

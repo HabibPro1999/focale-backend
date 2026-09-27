@@ -1,7 +1,7 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { FastifyRequest } from "fastify";
 import { ErrorCodes } from "@app/contracts";
-import { AppException } from "../../core/app-exception";
+import { AppException, notFound } from "../../core/app-exception";
 
 const TOKEN_LENGTH = 32; // 64 hex characters
 
@@ -23,6 +23,16 @@ export function verifyAbstractToken(
   } catch {
     // Buffer length mismatch or other error
     return false;
+  }
+}
+
+export function assertAbstractToken<T extends { editToken: string }>(
+  abstract: T | null,
+  token: string,
+): asserts abstract is T {
+  if (!abstract) throw notFound("Abstract not found");
+  if (!verifyAbstractToken(abstract.editToken, token)) {
+    throw notFound("Invalid abstract token");
   }
 }
 
