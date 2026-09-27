@@ -32,7 +32,5 @@ import {
     RegistrationRepricer,
     RegistrationPaymentsService,
   ],
-  // Exported so certificates/reports/sponsorships can consume registration reads.
-  exports: [RegistrationsService],
 })
 export class RegistrationsModule {}
