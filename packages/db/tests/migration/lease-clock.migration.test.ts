@@ -7,7 +7,7 @@ import {
   releaseMigrationLease,
   runLeaseFencedTransaction,
 } from "../../src/migrator";
-import { dbTestsEnabled } from "../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 import { dbTestSetupTimeoutMs } from "../../vitest.shared";
 
 // Lease times must follow the wall clock inside a transaction. now() is the

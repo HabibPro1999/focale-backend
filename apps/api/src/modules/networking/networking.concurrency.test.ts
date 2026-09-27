@@ -6,7 +6,7 @@ import { dbTestsEnabled } from "@app/db/testing";
 import {
   createNetworkingWriteFixture,
   networkingDoubleBookings,
-} from "../../../../../packages/db/tests/helpers/networking-write-fixture";
+} from "@app/db/testing/fixtures";
 import { NetworkingService, type NetworkingContext } from "./networking.service";
 import { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";

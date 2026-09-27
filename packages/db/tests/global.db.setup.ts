@@ -1,6 +1,5 @@
-import { createScratchDatabase, janitorScratchDatabases, testDatabaseEngine } from "../src/testing";
+import { createScratchDatabase, janitorScratchDatabases, testDatabaseEngine, dbTestsEnabled } from "@app/db/testing";
 import type { TestProject } from "vitest/node";
-import { dbTestsEnabled } from "./helpers/test-env";
 
 export default async function globalDbSetup({
   provide,

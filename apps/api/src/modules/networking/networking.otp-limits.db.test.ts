@@ -1,6 +1,6 @@
 import {
   createNetworkingEventFixture,
-} from "../../../../../packages/db/tests/helpers/networking-write-fixture";
+} from "@app/db/testing/fixtures";
 import { NetworkingAuthService } from "./networking.auth.service";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";

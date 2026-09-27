@@ -15,7 +15,7 @@ import {
   type ApplyMigrationsResult,
   type MigrationDefinition,
 } from "../../src/migrator";
-import { dbTestsEnabled } from "../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 import { dbTestSetupTimeoutMs } from "../../vitest.shared";
 
 // `apply` commits every unit of migration work through a lease fence: an

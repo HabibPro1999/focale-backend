@@ -2,7 +2,11 @@
 
 The test helper is exported as `@app/db/testing` only for the workspace's
 `@app/source` resolution condition. It is not an installed production entry
-point. Test suites read process variables only; they never load `.env` files.
+point. Fixtures are available separately as `@app/db/testing/fixtures` under
+that same source-only condition. Their entry point lives in `tests/helpers/`,
+so fixtures remain outside the production build's `src` root. Neither export
+adds a Vitest runtime dependency. Test suites read process variables only;
+they never load `.env` files.
 
 Set `ALLOW_DB_TESTS=1` and `TEST_DB_ADMIN_URL` to opt in. The admin URL itself
 must point at a database name with an exact `test` or `ci` token. Its hostname

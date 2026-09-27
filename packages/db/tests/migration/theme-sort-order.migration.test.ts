@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ScratchDatabase } from "@app/db/testing";
 import { createScratchDatabase } from "@app/db/testing";
-import { dbTestsEnabled } from "../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 import { dbTestSetupTimeoutMs } from "../../vitest.shared";
 
 // Covers 0006_abstract_themes_sort_order_active_unique.sql only: the seeded
