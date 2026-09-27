@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const exportTx = vi.hoisted(() => ({ exportTransaction: true }));
 vi.mock("@app/db", () => ({
   withExportStatementTimeout: vi.fn((run: (tx: unknown) => unknown) => run(exportTx)),
-  getEventSlug: vi.fn(), getRegistrationsForExport: vi.fn(),
+  getRegistrationsForExport: vi.fn(),
   getFinancialSummaryAggregates: vi.fn(), getPaymentStatusBreakdown: vi.fn(), getAccessBreakdown: vi.fn(),
   getDailyTrendRows: vi.fn(), getEventAnalyticsData: vi.fn(), getAccessRegistrantsData: vi.fn(),
   getEventSummaryData: vi.fn(), getAccessRegistrantsReportData: vi.fn(), getSponsorshipsReportData: vi.fn(), getCheckInReportData: vi.fn(),
@@ -21,7 +21,7 @@ const headers = [
   "Total Amount", "Paid Amount", "Base Amount", "Access Amount", "Discount Amount", "Sponsorship Code",
   "Sponsorship Amount", "Submitted At", "Paid At",
 ];
-beforeEach(() => vi.mocked(db.getEventSlug).mockResolvedValue({ slug: event.slug }));
+beforeEach(() => vi.mocked(db.getEventSlugAndName).mockResolvedValue({ slug: event.slug, name: event.name }));
 
 describe("legacy GET registrations export", () => {
   it("keeps exact CSV order, ISO dates, JSON values, quoting and formula-prefix escaping", async () => {

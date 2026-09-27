@@ -4,7 +4,7 @@ import { ROLE_KEY } from "../../core/auth/auth.decorator";
 import { AuthGuard } from "../../core/auth/auth.guard";
 import type { AuthUser } from "../../core/auth/user-cache";
 import { RegistrationEditLinkController, RegistrationsController } from "./registrations.controller";
-import type { RegistrationsService } from "./registrations.service";
+import type { RegistrationsReadService } from "./registrations.read.service";
 
 const clientAdmin = { id: "admin-1", role: 1, clientId: "c1" } as AuthUser;
 const otherTenantAdmin = { id: "admin-2", role: 1, clientId: "c2" } as AuthUser;
@@ -16,7 +16,7 @@ function makeController(clientId: string | null) {
     issueSelfEditLink: vi.fn(async () => ({ url: "https://forms.example/ev/registration/r1/tok" })),
   };
   const controller = new RegistrationEditLinkController(
-    service as unknown as RegistrationsService,
+    service as unknown as RegistrationsReadService,
   );
   return { controller, service };
 }

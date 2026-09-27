@@ -1,6 +1,8 @@
+import { RegistrationsCreateService } from "./registrations.create.service";
+import { RegistrationsAdminService } from "./registrations.admin.service";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RegistrationsController } from "./registrations.controller";
-import type { RegistrationsService } from "./registrations.service";
+import type { RegistrationsReadService } from "./registrations.read.service";
 import type { AuthUser } from "../../core/auth/user-cache";
 import { getStorageProvider, extractStorageKeyFromUrl } from "@app/integrations";
 
@@ -28,8 +30,8 @@ function makeReply() {
 function makeController(registration: unknown) {
   const service = {
     getRegistrationById: vi.fn(async () => registration),
-  } as unknown as RegistrationsService;
-  return new RegistrationsController(service);
+  } as unknown as RegistrationsReadService;
+  return new RegistrationsController(service, {} as RegistrationsCreateService, {} as RegistrationsAdminService);
 }
 
 describe("paymentProof — proxies bytes instead of redirecting (CORS)", () => {

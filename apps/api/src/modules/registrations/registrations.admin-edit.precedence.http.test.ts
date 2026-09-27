@@ -26,7 +26,9 @@ import { CONFIG } from "../../core/config";
 import { AccessService } from "../access/access.service";
 import { PricingService } from "../pricing/pricing.service";
 import { RegistrationsController } from "./registrations.controller";
-import { RegistrationsService } from "./registrations.service";
+import { RegistrationsReadService } from "./registrations.read.service";
+import { RegistrationsCreateService } from "./registrations.create.service";
+import { RegistrationsAdminService } from "./registrations.admin.service";
 
 const eventId = "11111111-1111-4111-8111-111111111111";
 const registrationId = "22222222-2222-4222-8222-222222222222";
@@ -58,7 +60,9 @@ describe("registration admin-edit HTTP precedence through the real service", () 
     app = await createTestApp({
       controllers: [RegistrationsController],
       providers: [
-        RegistrationsService,
+        RegistrationsReadService,
+        RegistrationsCreateService,
+        RegistrationsAdminService,
         { provide: AccessService, useValue: {} },
         { provide: PricingService, useValue: {} },
         { provide: CONFIG, useValue: {} },

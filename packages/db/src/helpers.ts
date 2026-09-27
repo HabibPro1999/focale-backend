@@ -47,6 +47,22 @@ export function rowCountOf(res: unknown): number {
   return Array.isArray(r?.rows) ? r.rows.length : 0;
 }
 
+/** Group query rows in their existing order, projecting only the relation fields. */
+export function groupBy<T, K, V>(
+  rows: readonly T[],
+  key: (row: T) => K,
+  project: (row: T) => V,
+): Map<K, V[]> {
+  const groups = new Map<K, V[]>();
+  for (const row of rows) {
+    const groupKey = key(row);
+    const values = groups.get(groupKey) ?? [];
+    values.push(project(row));
+    groups.set(groupKey, values);
+  }
+  return groups;
+}
+
 /**
  * Shared queue retry backoff (email + abstract-book): 1min, 5min, then 15min,
  * keyed on the post-increment failed attempt count.

@@ -10,7 +10,8 @@ export * from "./registrations";
 export * from "./abstracts";
 export * from "./certificates";
 export * from "./checkin";
-export * from "./reports";
+export * from "./reports-analytics";
+export * from "./reports-exports";
 export * from "./committee-invites";
 
 export * from "./networking";
