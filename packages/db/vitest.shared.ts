@@ -1,3 +1,5 @@
+import type { UserConfig } from "vitest/config";
+
 // @app/source first (workspace source). require/node before import so CJS-only deps resolve to their CJS entry.
 const conditions = ["@app/source", "require", "node", "default"];
 
@@ -28,3 +30,57 @@ export const resolveConditions = {
   resolve: { conditions },
   ssr: { resolve: { conditions } },
 };
+
+/** Fresh options for caller-owned SWC plugins; this module never loads SWC. */
+export function swcDecoratorOptions() {
+  return {
+    module: { type: "es6" },
+    jsc: {
+      target: "es2022",
+      parser: { syntax: "typescript", decorators: true },
+      transform: { legacyDecorator: true, decoratorMetadata: true },
+    },
+  } as const;
+}
+
+type UnitConfigOptions = {
+  include: string[];
+  exclude?: string[];
+  setupFiles: string[];
+  plugins?: UserConfig["plugins"];
+};
+
+export function unitConfig({ plugins, ...test }: UnitConfigOptions): UserConfig {
+  return {
+    ...resolveConditions,
+    ...(plugins ? { plugins } : {}),
+    test: { environment: "node", ...test },
+  };
+}
+
+type DbTierConfigOptions = Omit<UnitConfigOptions, "exclude"> & {
+  globalSetup?: string[];
+  testTimeout: number;
+  maxWorkersDefault?: number;
+};
+
+export function dbTierConfig({
+  plugins,
+  maxWorkersDefault = 2,
+  ...test
+}: DbTierConfigOptions): UserConfig {
+  const maxWorkers = dbTestMaxWorkers(maxWorkersDefault);
+  return {
+    ...resolveConditions,
+    ...(plugins ? { plugins } : {}),
+    test: {
+      environment: "node",
+      ...test,
+      hookTimeout: dbTestSetupTimeoutMs(),
+      pool: "forks",
+      fileParallelism: maxWorkers > 1,
+      maxWorkers,
+      minWorkers: 1,
+    },
+  };
+}
