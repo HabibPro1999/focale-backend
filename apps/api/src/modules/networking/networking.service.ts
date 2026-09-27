@@ -1,3 +1,9 @@
+import { networkingDirectoryFacets, recordNetworkingProfileView } from "@app/db";
+import { issueNetworkingBadge } from "./networking.security";
+import {
+  networkingSessionExpired as expired,
+  networkingBearer as bearer,
+} from "./networking.session-policy";
 import {
   networkingValidation,
   networkingFeatureDisabled,
@@ -6,21 +12,21 @@ import {
 } from "./networking.errors";
 import { activeStand } from "./networking.stand";
 import { loadNetworkingConfig } from "./networking.config";
-import { revokeParticipantAccess } from "./networking.revocation";
 
-import { networkingWindow, requireDiscovery, networkingPair, networkingPublicProfile } from "./networking.policy";
-import { ForbiddenException, HttpException, HttpStatus, Injectable, NotFoundException, UnauthorizedException } from "@nestjs/common";
-import { randomBytes, randomInt } from "node:crypto";
+import {
+  networkingWindow,
+  requireDiscovery,
+  networkingPair,
+  networkingPublicProfile,
+} from "./networking.policy";
+import { ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import {
   findClientModuleState,
   listNetworkingDiscovery,
   networkingConsentPending,
   touchNetworkingProfileActivity,
   getActiveEventAccessId,
-  enqueueNetworkingDelivery,
   networkingStore,
-  networkingTransaction,
-  syncNetworkingRegistration,
   type DbExecutor,
   type NetworkingRow,
   type NetworkingStore,
@@ -28,10 +34,8 @@ import {
 import {
   ErrorCodes,
   networkingProfileComplete,
-  networkingProfileOverrides,
   type ModuleId,
   type NetworkingConfig,
-  type NetworkingPersonalAnalytics,
   type NetworkingRegistrationInfo,
 } from "@app/contracts";
 import { isModuleEnabledForClient } from "../clients/module-gates";
@@ -42,8 +46,7 @@ import {
   networkingIdentityCache,
   networkingVenueKey,
 } from "../../core/networking-identity-cache";
-import { deleteNetworkingPhoto } from "./networking.uploads.service";
-import { networkingHash, sealNetworkingCode, readNetworkingBadge } from "./networking.security";
+import { networkingHash, readNetworkingBadge } from "./networking.security";
 
 export type NetworkingContext = {
   event: NetworkingRow<"events">;
@@ -54,16 +57,9 @@ export type NetworkingContext = {
   consentPending?: boolean;
 };
 export type NetworkingAccess = "CONSENTED" | "CONSENT_PENDING";
-const expired = (message = "Participant session expired") =>
-  new UnauthorizedException({ code: ErrorCodes.NETWORKING_SESSION_EXPIRED, message });
 const unavailable = () => networkingFeatureDisabled("Networking is not available for this event");
 const consentRequired = () =>
   new ForbiddenException({ code: ErrorCodes.NETWORKING_CONSENT_REQUIRED, message: "Networking consent is required" });
-const bearer = (authorization?: string) => authorization?.match(/^Bearer ([A-Za-z0-9_-]{40,128})$/)?.[1];
-/** Failed OTP verifications per (event, normalized email), summed across challenges. */
-const OTP_FAILED_ATTEMPT_LIMITS = { recent: { windowMs: 15 * 60_000, max: 10 }, daily: { windowMs: 86_400_000, max: 30 } } as const;
-const otpRateLimited = () =>
-  new HttpException({ code: ErrorCodes.NETWORKING_RATE_LIMITED, message: "Too many verification attempts" }, HttpStatus.TOO_MANY_REQUESTS);
 export type NetworkingDiscoveryQuery = import("@app/db").NetworkingDiscoveryFilters;
 @Injectable()
 export class NetworkingService {
@@ -191,14 +187,14 @@ export class NetworkingService {
     config: NetworkingConfig,
     store = networkingStore(),
   ) {
-    return (await this.access(profile, config, store, false)) === "CONSENTED";
+    return (await this.access(profile, config, store, { allowPending: false })) === "CONSENTED";
   }
   /** Who may sign in: consented participants, or undecided registrants choosing in the PWA (K1b). */
   async access(
     profile: NetworkingRow<"profiles">,
     config: NetworkingConfig,
     store = networkingStore(),
-    allowPending = true,
+    { allowPending = true }: { allowPending?: boolean } = {},
   ): Promise<NetworkingAccess | null> {
     if (profile.status !== "ACTIVE" || profile.withdrawnAt || (!profile.consent && !allowPending))
       return null;
@@ -247,17 +243,7 @@ export class NetworkingService {
     const access = profile ? await this.access(profile, config, store) : null;
     if (!profile || !access)
       throw networkingNotEligible("Networking participation is not approved or eligible");
-    const factor = await store.one("secondFactors", { profileId: profile.id });
-    if (
-      (config.requireSecondFactor || factor?.enabledAt) &&
-      !session.secondFactorVerifiedAt &&
-      !options.allowPendingSecondFactor
-    ) {
-      throw new ForbiddenException({
-        code: ErrorCodes.NETWORKING_MFA_REQUIRED,
-        message: "Authenticator verification is required",
-      });
-    }
+    await this.assertSecondFactor(store, config, profile, session, options.allowPendingSecondFactor);
     if (access === "CONSENT_PENDING" && !options.allowConsentPending) throw consentRequired();
     if (
       !profile.lastActiveAt ||
@@ -274,21 +260,6 @@ export class NetworkingService {
       if (ip !== undefined) networkingBearerLockout.recordRejected(networkingVenueKey(ip, slug), raw);
     }
     return expired(message);
-  }
-  /** Token-only: logging out never depends on eligibility, consent, MFA or the event window. */
-  async logout(slug: string, authorization?: string) {
-    const token = bearer(authorization);
-    if (!token) throw expired("Participant session required");
-    networkingIdentityCache.forgetToken(token);
-    const store = networkingStore();
-    const event = await store.one("events", { slug });
-    if (event)
-      await store.update(
-        "sessions",
-        { eventId: event.id, tokenHash: networkingHash(token), revokedAt: null },
-        { revokedAt: new Date() },
-      );
-    return { loggedOut: true };
   }
   /**
    * Revalidate capabilities inside the networking transaction, after concurrent
@@ -323,173 +294,43 @@ export class NetworkingService {
       id: ctx.profile.id,
       eventId: event.id,
     });
-    const access = profile ? await this.access(profile, config, store, !!options.allowConsentPending) : null;
+    const access = profile ? await this.access(profile, config, store, { allowPending: !!options.allowConsentPending }) : null;
     if (!profile || !access)
       throw networkingNotEligible("Networking participation is no longer eligible");
-    const factor = await store.one("secondFactors", { profileId: profile.id });
-    if (
-      (config.requireSecondFactor || factor?.enabledAt) &&
-      !session.secondFactorVerifiedAt
-    )
-      throw new ForbiddenException({
-        code: ErrorCodes.NETWORKING_MFA_REQUIRED,
-        message: "Authenticator verification is required",
-      });
+    await this.assertSecondFactor(store, config, profile, session);
     return { event, config, profile, session, consentPending: access === "CONSENT_PENDING" };
-  }
-  async requestCode(slug: string, email: string) {
-    email = email.trim().toLowerCase();
-    const { event, config } = await this.publicContext(slug);
-    const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
-    const codeHash = networkingHash(`otp:${event.id}:${email}:${code}`);
-    // The event/config gate ran just above; the transaction only touches rows keyed by this email.
-    return networkingTransaction(event.id, async (store, db) => {
-      const recent = (
-        await store.all("challenges", { eventId: event.id, email })
-      ).filter((v) => Date.now() - v.createdAt.getTime() < 15 * 60_000);
-      // Same generic response for throttled, unapproved and unknown email addresses.
-      const challengeId = crypto.randomUUID();
-      if (recent.length >= 5) return { challengeId };
-      await store.update(
-        "challenges",
-        { eventId: event.id, email, consumedAt: null },
-        { consumedAt: new Date() },
-      );
-      const expiresAt = new Date(Date.now() + 10 * 60_000);
-      await store.insert("challenges", {
-        id: challengeId,
-        eventId: event.id,
-        email,
-        codeHash,
-        expiresAt,
-      });
-      const profiles = await store.all("profiles", {
-        eventId: event.id,
-        email,
-      });
-      profiles.sort(
-        (a, b) =>
-          a.createdAt.getTime() - b.createdAt.getTime() ||
-          a.id.localeCompare(b.id),
-      );
-      let profile: NetworkingRow<"profiles"> | undefined;
-      for (const candidate of profiles) {
-        if (await this.access(candidate, config, store)) {
-          profile = candidate;
-          break;
-        }
-      }
-      if (profile)
-        await enqueueNetworkingDelivery(
-          {
-            eventId: event.id,
-            profileId: profile.id,
-            email,
-            type: "OTP",
-            payload: {
-              encryptedCode: sealNetworkingCode(code),
-              challengeId,
-              expiresAt: expiresAt.toISOString(),
-              eventName: event.name,
-              slug,
-            },
-            dedupeKey: `otp:${challengeId}`,
-          },
-          db,
-        );
-      return { challengeId };
-    });
-  }
-  async verifyCode(slug: string, challengeId: string, code: string) {
-    const { event, config } = await this.publicContext(slug);
-    const result = await networkingTransaction(event.id, async (store) => {
-      const challenge = await store.one("challenges", {
-        id: challengeId,
-        eventId: event.id,
-      });
-      if (
-        !challenge ||
-        challenge.consumedAt ||
-        challenge.expiresAt.getTime() <= Date.now() ||
-        challenge.attempts >= 5
-      )
-        return null;
-      // Checked before the code is compared, so a limited address learns nothing about it.
-      // SERIALIZABLE makes concurrent attempts on this email's challenges commit one at a time.
-      const now = Date.now();
-      const failed = await store.failedOtpAttempts(
-        event.id,
-        challenge.email,
-        new Date(now - OTP_FAILED_ATTEMPT_LIMITS.recent.windowMs),
-        new Date(now - OTP_FAILED_ATTEMPT_LIMITS.daily.windowMs),
-      );
-      if (
-        failed.recent >= OTP_FAILED_ATTEMPT_LIMITS.recent.max ||
-        failed.daily >= OTP_FAILED_ATTEMPT_LIMITS.daily.max
-      )
-        return "rate-limited" as const;
-      const valid =
-        challenge.codeHash ===
-        networkingHash(`otp:${event.id}:${challenge.email}:${code}`);
-      await store.update(
-        "challenges",
-        { id: challenge.id, eventId: event.id },
-        {
-          attempts: challenge.attempts + 1,
-          ...(valid ? { consumedAt: new Date(), verifiedAt: new Date() } : {}),
-        },
-      );
-      if (!valid) return null;
-      const profiles = await store.all("profiles", {
-        eventId: event.id,
-        email: challenge.email,
-      });
-      profiles.sort(
-        (a, b) =>
-          a.createdAt.getTime() - b.createdAt.getTime() ||
-          a.id.localeCompare(b.id),
-      );
-      for (const profile of profiles) {
-        if (!(await this.access(profile, config, store))) continue;
-        const token = randomBytes(48).toString("base64url");
-        const expiresAt = new Date(Date.now() + 30 * 86_400_000);
-        const session = await store.insert("sessions", {
-          eventId: event.id,
-          profileId: profile.id,
-          tokenHash: networkingHash(token),
-          expiresAt,
-        });
-        const factor = await store.one("secondFactors", {
-          profileId: profile.id,
-        });
-        return {
-          session,
-          token,
-          expiresAt,
-          profile,
-          requiresSecondFactor:
-            config.requireSecondFactor || !!factor?.enabledAt,
-          mfaEnrollmentRequired:
-            config.requireSecondFactor && !factor?.enabledAt,
-        };
-      }
-      return null;
-    });
-    if (result === "rate-limited") throw otpRateLimited();
-    // Stays 401 (no session issued); NETWORKING_VALIDATION is reserved for HTTP 400.
-    if (!result)
-      throw new UnauthorizedException({ code: ErrorCodes.UNAUTHORIZED, message: "Invalid or expired verification code" });
-    const { session, ...issued } = result;
-    // Committed and verified: the new bearer is throttled as its session from the first request.
-    networkingIdentityCache.remember(issued.token, session);
-    return issued;
   }
   async target(
     ctx: NetworkingContext,
     id: string,
     store = networkingStore(),
-    visible = false,
+    options: { requireDiscoverable?: boolean } = {},
   ) {
+    const profile = await this.findCounterpart(ctx, id, store, options);
+    if (!profile) throw notFound("Participant not available");
+    return profile;
+  }
+  /** Nullable target policy, including both block directions. */
+  findCounterpart(
+    ctx: NetworkingContext,
+    id: string,
+    store = networkingStore(),
+    options: { requireDiscoverable?: boolean } = {},
+  ) {
+    return this.lookupCounterpart(ctx, id, store, options, true);
+  }
+  /** Only the blocked list may retain its actionable block edge. */
+  findBlockedCounterpart(ctx: NetworkingContext, id: string, store: NetworkingStore) {
+    return this.lookupCounterpart(ctx, id, store, {}, false);
+  }
+  private async lookupCounterpart(
+    ctx: NetworkingContext,
+    id: string,
+    store = networkingStore(),
+    options: { requireDiscoverable?: boolean },
+    checkBlocks: boolean,
+  ) {
+    const visible = options.requireDiscoverable ?? false;
     if (id === ctx.profile.id)
       throw networkingValidation("Choose another participant");
     const profile = await store.one("profiles", { id, eventId: ctx.event.id });
@@ -500,7 +341,7 @@ export class NetworkingService {
       !(await this.eligible(profile, ctx.config, store)) ||
       (visible && (!profile.visible || !networkingProfileComplete(profile)))
     )
-      throw notFound("Participant not available");
+      return null;
     const current = await store.one("profiles", {
       id: ctx.profile.id,
       eventId: ctx.event.id,
@@ -519,9 +360,9 @@ export class NetworkingService {
           profileBId,
         }))
       )
-        throw notFound("Participant not available");
+        return null;
     }
-    const blocked =
+    const blocked = checkBlocks && (
       (await store.one("blocks", {
         eventId: ctx.event.id,
         profileId: ctx.profile.id,
@@ -531,8 +372,8 @@ export class NetworkingService {
         eventId: ctx.event.id,
         profileId: id,
         targetId: ctx.profile.id,
-      }));
-    if (blocked) throw notFound("Participant not available");
+      })));
+    if (blocked) return null;
     return profile;
   }
   async discover(ctx: NetworkingContext, query: NetworkingDiscoveryQuery = {}) {
@@ -570,77 +411,38 @@ export class NetworkingService {
     return { items: result.items.map(networkingPublicProfile), total: result.total,
       exhibitor: { id: stand.id, name: stand.name, spaceName: space?.name ?? null } };
   }
-
-  async personalAnalytics(ctx: NetworkingContext): Promise<NetworkingPersonalAnalytics> {
-    const store = networkingStore();
-    ctx = await this.currentParticipant(ctx, store);
-    const email = ctx.profile.email.trim().toLowerCase();
-    const profiles = await store.personalAnalyticsProfiles(ctx.event.clientId, email);
-    const events = new Map(profiles.map(profile => [profile.eventId, profile]));
-    const result: NetworkingPersonalAnalytics["events"] = [];
-    for (const event of events.values()) {
-      const ownIds = profiles.filter(profile => profile.eventId === event.eventId).map(profile => profile.id);
-      result.push({
-        eventId: event.eventId, eventName: event.name,
-        startsAt: event.startDate.toISOString(), endsAt: event.endDate.toISOString(),
-        ...(await store.personalAnalyticsCounts(event.eventId, ownIds)),
+  private async assertSecondFactor(
+    store: NetworkingStore,
+    config: NetworkingConfig,
+    profile: NetworkingRow<"profiles">,
+    session: NetworkingRow<"sessions">,
+    allowPending = false,
+  ) {
+    const factor = await store.one("secondFactors", { profileId: profile.id });
+    if ((config.requireSecondFactor || factor?.enabledAt) && !session.secondFactorVerifiedAt && !allowPending)
+      throw new ForbiddenException({
+        code: ErrorCodes.NETWORKING_MFA_REQUIRED,
+        message: "Authenticator verification is required",
       });
-    }
-    result.sort((a,b) => b.startsAt.localeCompare(a.startsAt) || a.eventId.localeCompare(b.eventId));
-    return { currentEventId: ctx.event.id, events: result };
   }
-  async updateMe(ctx: NetworkingContext, input: Record<string, unknown>) {
-    const { row, previousPhotoUrl, revoked } = await networkingTransaction(ctx.event.id, async (store, db) => {
-      ctx = await this.currentParticipant(ctx, store, { allowConsentPending: ctx.consentPending });
-      const previousPhotoUrl = ctx.profile.photoUrl;
-      // A consent-pending session may only record its consent choice (K1b).
-      if (ctx.consentPending) input = input.consent === undefined ? {} : { consent: input.consent };
-      const { consent, resetFields, ...fields } = input;
-      const overrides = networkingProfileOverrides(ctx.profile.overrides);
-      for (const key of (resetFields as string[] | undefined) ?? []) delete overrides[key];
-      for (const field of ["company", "jobTitle", "sector"]) {
-        if (field in fields) {
-          if (typeof fields[field] !== "string" || !fields[field].trim())
-            throw networkingValidation(`${field} is required`);
-          fields[field] = fields[field].trim();
-        }
-      }
-      for (const [key, value] of Object.entries(networkingProfileOverrides(fields))) {
-        if (JSON.stringify(value) !== JSON.stringify(ctx.profile[key as keyof typeof ctx.profile]))
-          overrides[key] = value;
-      }
-      // An explicit PWA choice outranks the mapped form answer (K1).
-      if (typeof consent === "boolean") overrides.consent = consent;
-      if (
-        typeof fields.language === "string" &&
-        !ctx.config.languages.includes(fields.language as import("@app/contracts").LanguageCode)
-      )
-        throw networkingValidation("This language is not enabled for the event");
-      const [row] = await store.update(
-        "profiles",
-        { id: ctx.profile.id, eventId: ctx.event.id },
-        {
-          ...fields,
-          ...(consent !== undefined
-            ? { consent: !!consent, consentAt: consent ? new Date() : null }
-            : {}),
-          overrides,
-          ...(consent === false ? { visible: false } : consent === true && !ctx.profile.consent ? { visible: true } : {}),
-        },
-      );
-      if (consent === false) await revokeParticipantAccess(ctx.profile.id, ctx.event.id, db);
-      const revoked = consent === false || (Array.isArray(resetFields) && resetFields.length > 0);
-      if (Array.isArray(resetFields) && resetFields.length) {
-        await syncNetworkingRegistration(ctx.profile.registrationId, db);
-        return { row: (await store.one("profiles", { id: row.id, eventId: ctx.event.id }))!, previousPhotoUrl, revoked };
-      }
-      return { row, previousPhotoUrl, revoked };
-    });
-    // Declining consent revoked the sessions; a registration re-sync may have revoked them too.
-    if (revoked)
-      networkingIdentityCache.forgetProfile(ctx.profile.id);
-    // Replaced, removed or reset photos are deleted after commit, and only from the participant's own prefix.
-    if (row.photoUrl !== previousPhotoUrl) await deleteNetworkingPhoto(previousPhotoUrl, ctx.event.id, ctx.profile.id);
-    return row;
+  async facets(ctx: NetworkingContext) {
+    if (!ctx.config.searchEnabled)
+      throw networkingFeatureDisabled("Search is disabled");
+    return networkingDirectoryFacets(
+      ctx.event.id,
+      ctx.profile.id,
+      ctx.config.eligiblePaymentStatuses,
+    );
+  }
+  async badge(ctx: NetworkingContext) {
+    return {
+      ...issueNetworkingBadge(ctx.profile.id, ctx.event.id),
+      accessAllowed: await this.areaAccess(ctx),
+    };
+  }
+  async viewProfile(ctx: NetworkingContext, id: string, viewId?: string) {
+    const profile = await this.target(ctx, id);
+    await recordNetworkingProfileView(ctx.event.id, ctx.profile.id, id, viewId);
+    return networkingPublicProfile(profile);
   }
 }

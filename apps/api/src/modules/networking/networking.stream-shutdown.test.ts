@@ -1,3 +1,4 @@
+import { makeNetworkingPublicController } from "../../testing/networking";
 import "reflect-metadata";
 import { EventEmitter } from "node:events";
 import { HttpException } from "@nestjs/common";
@@ -12,24 +13,14 @@ vi.mock("@app/db", async (importOriginal) => ({
 }));
 
 import { ShutdownCoordinator } from "../../core/shutdown";
-import { NetworkingPublicController } from "./networking.public.controller";
-import type { NetworkingUploadsService } from "./networking.uploads.service";
 import type { NetworkingService } from "./networking.service";
-import type { NetworkingSocialService } from "./networking.social.service";
-import type { NetworkingMeetingsService } from "./networking.meetings.service";
-import type { NetworkingExportsService } from "./networking.exports.service";
 
 function setup() {
   const lifecycle = new ShutdownCoordinator();
   const participant = vi.fn(async () => ({ event: { id: "event" }, profile: { id: "profile" } }));
-  const controller = new NetworkingPublicController(
-    {} as NetworkingUploadsService,
-    { participant } as unknown as NetworkingService,
-    {} as NetworkingSocialService,
-    {} as NetworkingMeetingsService,
-    {} as NetworkingExportsService,
-    lifecycle,
-  );
+  const controller = makeNetworkingPublicController({
+    service: { participant } as unknown as NetworkingService, lifecycle,
+  });
   const raw = Object.assign(new EventEmitter(), {
     setHeader: vi.fn(),
     writeHead: vi.fn(),

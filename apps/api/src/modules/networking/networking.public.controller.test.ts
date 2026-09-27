@@ -1,4 +1,9 @@
+import { makeNetworkingPublicController } from "../../testing/networking";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { NetworkingService } from "./networking.service";
+import type { NetworkingSocialService } from "./networking.social.service";
+import type { NetworkingMeetingsService } from "./networking.meetings.service";
+import type { FastifyReply, FastifyRequest } from "fastify";
 const mocks = vi.hoisted(() => ({
   one: vi.fn(), update: vi.fn(), remove: vi.fn(), all: vi.fn(),
   notifications: vi.fn(), since: vi.fn(), transaction: vi.fn(), revoke: vi.fn(), delete: vi.fn(),
@@ -17,19 +22,9 @@ vi.mock("@app/integrations", async (original) => ({
   ...(await original<typeof import("@app/integrations")>()),
   getStorageProvider: () => ({ delete: mocks.delete }),
 }));
-import { NetworkingPublicController } from "./networking.public.controller";
-import { NetworkingUploadsService } from "./networking.uploads.service";
-import type { NetworkingService } from "./networking.service";
-import type { NetworkingSocialService } from "./networking.social.service";
-import type { NetworkingMeetingsService } from "./networking.meetings.service";
-import type { NetworkingExportsService } from "./networking.exports.service";
-import type { FastifyReply, FastifyRequest } from "fastify";
 const own = "https://storage.test/networking/e/profiles/p/current.webp";
 function controller(service: Partial<NetworkingService>, meetings: Partial<NetworkingMeetingsService> = {}) {
-  return new NetworkingPublicController(
-    new NetworkingUploadsService(), service as NetworkingService,
-    {} as NetworkingSocialService, meetings as NetworkingMeetingsService, {} as NetworkingExportsService,
-  );
+  return makeNetworkingPublicController({ service, meetings });
 }
 beforeEach(() => {
   vi.resetAllMocks();
@@ -323,7 +318,7 @@ describe("withdrawal", () => {
 it("logs out by token only, without resolving a participant context", async () => {
   const logout = vi.fn().mockResolvedValue({ loggedOut: true });
   const participant = vi.fn();
-  expect(await controller({ logout, participant }).logout("slug", { headers: { authorization: "Bearer token" } } as FastifyRequest)).toEqual({ loggedOut: true });
+  expect(await makeNetworkingPublicController({ service: { participant }, auth: { logout } }).logout("slug", { headers: { authorization: "Bearer token" } } as FastifyRequest)).toEqual({ loggedOut: true });
   expect(logout).toHaveBeenCalledWith("slug", "Bearer token");
   expect(participant).not.toHaveBeenCalled();
 });
@@ -333,7 +328,7 @@ it.each(["me", "updateMe"] as const)("%s is on the consent-pending allow-list", 
   const updateMe = vi.fn().mockResolvedValue({ consent: true });
   const req = { headers: { authorization: "Bearer token" } } as FastifyRequest;
   if (method === "me") expect(await controller({ participant }).me("slug", req)).toEqual({ id: "p", consent: false });
-  else await controller({ participant, updateMe }).updateMe("slug", req, { consent: true });
+  else await makeNetworkingPublicController({ service: { participant }, profiles: { updateMe } }).updateMe("slug", req, { consent: true });
   expect(participant).toHaveBeenCalledWith("slug", "Bearer token", { allowConsentPending: true });
 });
 
@@ -349,11 +344,11 @@ it.each(["connections", "listMeetings"] as const)("%s authenticates the particip
   const ctx = { event: { id: "event" }, profile: { id: "self" } };
   const participant = vi.fn().mockResolvedValue(ctx);
   const list = vi.fn().mockResolvedValue({ items: [], total: 0, nextCursor: null });
-  const instance = new NetworkingPublicController(
-    {} as NetworkingUploadsService, { participant } as unknown as NetworkingService,
-    { connections: list } as unknown as NetworkingSocialService,
-    { list } as unknown as NetworkingMeetingsService, {} as NetworkingExportsService,
-  );
+  const instance = makeNetworkingPublicController({
+    service: { participant } as unknown as NetworkingService,
+    social: { connections: list } as unknown as NetworkingSocialService,
+    meetings: { list } as unknown as NetworkingMeetingsService,
+  });
   const query = { limit: 50, cursor: "opaque" };
   expect(await instance[method]("slug", { headers: { authorization: "Bearer token" } } as FastifyRequest, query)).toEqual({ items: [], total: 0, nextCursor: null });
   expect(participant).toHaveBeenCalledWith("slug", "Bearer token", {});

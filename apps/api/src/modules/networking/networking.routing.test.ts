@@ -1,3 +1,6 @@
+import { NetworkingAuthService } from "./networking.auth.service";
+import { NetworkingProfileService } from "./networking.profile.service";
+import { NetworkingNotificationsService } from "./networking.notifications.service";
 import "reflect-metadata";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { Module } from "@nestjs/common";
@@ -24,6 +27,9 @@ const meetings = {
 @Module({
   controllers: [NetworkingPublicController],
   providers: [
+    { provide: NetworkingAuthService, useValue: {} },
+    { provide: NetworkingProfileService, useValue: {} },
+    { provide: NetworkingNotificationsService, useValue: {} },
     { provide: NetworkingUploadsService, useValue: {} },
     { provide: NetworkingService, useValue: { participant: async () => ctx, registrationInfo: async () => ({ enabled: false }) } },
     { provide: NetworkingSocialService, useValue: social },

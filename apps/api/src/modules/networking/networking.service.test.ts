@@ -1,5 +1,14 @@
+import { NetworkingProfileService } from "./networking.profile.service";
+import { NetworkingAuthService } from "./networking.auth.service";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NetworkingConfigSchema } from "@app/contracts";
+import { NetworkingService } from "./networking.service";
+import { networkingHash } from "./networking.security";
+import {
+  networkingBearerLockout,
+  networkingIdentityCache,
+  networkingVenueKey,
+} from "../../core/networking-identity-cache";
 const db = vi.hoisted(() => ({
   rows: {} as Record<string, Array<Record<string, unknown>>>,
   update: vi.fn(), insert: vi.fn(), enqueue: vi.fn(), modules: vi.fn(), sync: vi.fn(), delete: vi.fn(),
@@ -44,9 +53,6 @@ vi.mock("@app/integrations", async (original) => ({
   ...(await original<typeof import("@app/integrations")>()),
   getStorageProvider: () => ({ delete: db.delete }),
 }));
-import { NetworkingService } from "./networking.service";
-import { networkingHash } from "./networking.security";
-import { networkingBearerLockout, networkingIdentityCache, networkingVenueKey } from "../../core/networking-identity-cache";
 
 const token = "t".repeat(48);
 const consentForm = {
@@ -118,16 +124,16 @@ describe("K1b consent-pending sessions", () => {
     expect((await service.participant("demo", bearer)).consentPending).toBe(false);
   });
   it("sends an OTP to an undecided registrant but not to one whose mapped answer is no", async () => {
-    await service.requestCode("demo", "Ann@Example.test");
+    await new NetworkingAuthService(service).requestCode("demo", "Ann@Example.test");
     expect(db.enqueue).toHaveBeenCalledWith(expect.objectContaining({ type: "OTP", profileId: "p", email: "ann@example.test" }), db.tx);
     db.enqueue.mockClear();
     seed({ registration: { formData: { consent: "o-no" } } });
-    expect(await service.requestCode("demo", "ann@example.test")).toHaveProperty("challengeId");
+    expect(await new NetworkingAuthService(service).requestCode("demo", "ann@example.test")).toHaveProperty("challengeId");
     expect(db.enqueue).not.toHaveBeenCalled();
   });
   it("PATCH me {consent:true} records the explicit choice and makes the profile visible, ignoring other fields", async () => {
     const ctx = await service.participant("demo", bearer, { allowConsentPending: true });
-    const row = await service.updateMe(ctx, { consent: true, company: "Ignored Co", visible: false });
+    const row = await new NetworkingProfileService(service).updateMe(ctx, { consent: true, company: "Ignored Co", visible: false });
     expect(db.update).toHaveBeenCalledWith("profiles", { id: "p", eventId: "event" }, {
       consent: true, consentAt: expect.any(Date), visible: true, overrides: { consent: true },
     });
@@ -151,15 +157,15 @@ describe("participant session and event errors", () => {
     await expect(service.participant("demo", bearer)).rejects.toMatchObject({ status: 403, response: { code: "NETWORKING_FEATURE_DISABLED" } });
   });
   it("keeps a wrong OTP at 401 without the 400-only validation code", async () => {
-    const error = await service.verifyCode("demo", "00000000-0000-4000-8000-000000000001", "000000").catch((e) => e);
+    const error = await new NetworkingAuthService(service).verifyCode("demo", "00000000-0000-4000-8000-000000000001", "000000").catch((e) => e);
     expect(error.status).toBe(401);
     expect(error.response.code).not.toBe("NETWORKING_VALIDATION");
   });
   it("logs out by token alone, even for an ineligible participant after networking closed", async () => {
     seed({ profile: { status: "SUSPENDED" }, config: { enabled: false } });
-    expect(await service.logout("demo", bearer)).toEqual({ loggedOut: true });
+    expect(await new NetworkingAuthService(service).logout("demo", bearer)).toEqual({ loggedOut: true });
     expect(db.update).toHaveBeenCalledWith("sessions", { eventId: "event", tokenHash: networkingHash(token), revokedAt: null }, { revokedAt: expect.any(Date) });
-    await expect(service.logout("demo", undefined)).rejects.toMatchObject({ status: 401, response: { code: "NETWORKING_SESSION_EXPIRED" } });
+    await expect(new NetworkingAuthService(service).logout("demo", undefined)).rejects.toMatchObject({ status: 401, response: { code: "NETWORKING_SESSION_EXPIRED" } });
   });
 });
 
@@ -204,7 +210,7 @@ describe("participant photo changes", () => {
   ])("removing photo %s deletes only an owned upload, after commit", async (photoUrl, key) => {
     seed({ profile: { consent: true, photoUrl } });
     const ctx = await service.participant("demo", bearer);
-    const row = await service.updateMe(ctx, { photoUrl: null });
+    const row = await new NetworkingProfileService(service).updateMe(ctx, { photoUrl: null });
     expect(row).toMatchObject({ photoUrl: null, overrides: { photoUrl: null } });
     if (key) expect(db.delete).toHaveBeenCalledWith(key);
     else expect(db.delete).not.toHaveBeenCalled();
@@ -212,7 +218,7 @@ describe("participant photo changes", () => {
   it("a new upload replaces and deletes the previous owned photo", async () => {
     seed({ profile: { consent: true, photoUrl: own } });
     const ctx = await service.participant("demo", bearer);
-    await service.updateMe(ctx, { photoUrl: "https://storage.example/networking/event/profiles/p/new.webp" });
+    await new NetworkingProfileService(service).updateMe(ctx, { photoUrl: "https://storage.example/networking/event/profiles/p/new.webp" });
     expect(db.delete).toHaveBeenCalledWith("networking/event/profiles/p/old.webp");
     expect(db.delete).toHaveBeenCalledOnce();
   });
@@ -220,7 +226,7 @@ describe("participant photo changes", () => {
     seed({ profile: { consent: true, photoUrl: own, overrides: { photoUrl: own } } });
     db.sync.mockImplementation(async () => { Object.assign(db.rows.profiles![0]!, { photoUrl: "https://storage.example/forms/uploads/registrant.webp" }); });
     const ctx = await service.participant("demo", bearer);
-    const row = await service.updateMe(ctx, { resetFields: ["photoUrl"] });
+    const row = await new NetworkingProfileService(service).updateMe(ctx, { resetFields: ["photoUrl"] });
     expect(db.update).toHaveBeenCalledWith("profiles", { id: "p", eventId: "event" }, expect.objectContaining({ overrides: {} }));
     expect(row.photoUrl).toBe("https://storage.example/forms/uploads/registrant.webp");
     expect(db.delete).toHaveBeenCalledWith("networking/event/profiles/p/old.webp");
@@ -273,7 +279,7 @@ describe("verified bearer identities (0.9)", () => {
   });
   it("forgets the token on logout", async () => {
     networkingIdentityCache.remember(token, { id: "session", profileId: "p", expiresAt: new Date(Date.now() + 60_000) });
-    await service.logout("demo", bearer);
+    await new NetworkingAuthService(service).logout("demo", bearer);
     expect(networkingIdentityCache.sessionFor(token)).toBeUndefined();
   });
 });
@@ -292,7 +298,7 @@ describe("OTP failed-attempt limits (0.9)", () => {
   ])("returns 429 before comparing the code after %s", async (_label, failed) => {
     seedChallenge();
     db.failedOtpAttempts.mockResolvedValue(failed);
-    const error = await service.verifyCode("demo", "c1", code).catch((e) => e);
+    const error = await new NetworkingAuthService(service).verifyCode("demo", "c1", code).catch((e) => e);
     expect(error.status).toBe(429);
     expect(error.response).toEqual({ code: "NETWORKING_RATE_LIMITED", message: "Too many verification attempts" });
     expect(db.update).not.toHaveBeenCalled();
@@ -305,14 +311,14 @@ describe("OTP failed-attempt limits (0.9)", () => {
   it("still compares the code just below both limits", async () => {
     seedChallenge();
     db.failedOtpAttempts.mockResolvedValue({ recent: 9, daily: 29 });
-    const error = await service.verifyCode("demo", "c1", "000000").catch((e) => e);
+    const error = await new NetworkingAuthService(service).verifyCode("demo", "c1", "000000").catch((e) => e);
     expect(error.status).toBe(401);
     expect(db.update).toHaveBeenCalledWith("challenges", { id: "c1", eventId: "event" }, { attempts: 1 });
   });
   it("marks the successful attempt verified and throttles the new bearer as its session", async () => {
     seedChallenge({ attempts: 2 });
     const remember = vi.spyOn(networkingIdentityCache, "remember");
-    const result = await service.verifyCode("demo", "c1", code);
+    const result = await new NetworkingAuthService(service).verifyCode("demo", "c1", code);
     expect(db.update).toHaveBeenCalledWith("challenges", { id: "c1", eventId: "event" }, {
       attempts: 3, consumedAt: expect.any(Date), verifiedAt: expect.any(Date),
     });
@@ -334,13 +340,13 @@ describe("networking transactions ride one connection", () => {
   });
   it("gates OTP requests and verification once, before the transaction", async () => {
     seed({ profile: { consent: true } });
-    await service.requestCode("demo", "ann@example.test");
+    await new NetworkingAuthService(service).requestCode("demo", "ann@example.test");
     expect(db.transactions).toBe(1);
     expect(db.modules).toHaveBeenCalledExactlyOnceWith("client", undefined);
     expect(db.reads.filter((kind) => kind === "events")).toHaveLength(1);
     db.modules.mockClear();
     db.reads = [];
-    await service.verifyCode("demo", "missing", "123456").catch(() => undefined);
+    await new NetworkingAuthService(service).verifyCode("demo", "missing", "123456").catch(() => undefined);
     expect(db.modules).toHaveBeenCalledExactlyOnceWith("client", undefined);
     expect(db.reads.filter((kind) => kind === "events")).toHaveLength(1);
   });

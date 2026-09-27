@@ -1,4 +1,9 @@
-import { networkingNotFound, networkingFeatureDisabled, networkingLocked, networkingSlotConflict } from "./networking.errors";
+import {
+  networkingNotFound,
+  networkingFeatureDisabled,
+  networkingLocked,
+  networkingSlotConflict,
+} from "./networking.errors";
 import { activeStand } from "./networking.stand";
 import {
   futureNetworkingSlots,
@@ -17,13 +22,7 @@ import {
 } from "@app/contracts";
 
 import { participantPagination, toParticipantPage } from "./networking.pagination";
-import {
-  BadRequestException,
-  ConflictException,
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-} from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException, Injectable } from "@nestjs/common";
 import {
   createNetworkingNotification,
   expireNetworkingProposals,
@@ -41,10 +40,7 @@ import {
   type DbExecutor,
 } from "@app/db";
 
-import {
-  NetworkingService,
-  type NetworkingContext,
-} from "./networking.service";
+import { NetworkingService, type NetworkingContext } from "./networking.service";
 
 import { networkingInventoryResource } from "./networking.inventory-policy";
 /** Re-plans after the meeting moved between the lock plan's read and the lock. */
@@ -192,11 +188,7 @@ export class NetworkingMeetingsService {
       if (!profile || "admin" in audience) return profile;
       const viewer = audience.viewer;
       if (profile.id !== viewer.profile.id) {
-        try { await this.networking.target(viewer, profile.id, store); }
-        catch (error) {
-          if (error instanceof NotFoundException) return null;
-          throw error;
-        }
+        if (!(await this.networking.findCounterpart(viewer, profile.id, store))) return null;
       }
       return networkingPublicProfile(profile);
     };
@@ -700,5 +692,12 @@ export class NetworkingMeetingsService {
       );
       return this.hydrateForViewer(saved, ctx, store);
     });
+  }
+  async profileAvailability(ctx: NetworkingContext, id: string) {
+    this.requireEnabled(ctx);
+    return {
+      slots: await this.participantSlots(ctx, id),
+      availableSlots: futureNetworkingSlots(ctx.config, ctx.event),
+    };
   }
 }

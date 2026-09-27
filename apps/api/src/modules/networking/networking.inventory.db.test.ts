@@ -1,3 +1,6 @@
+import {
+  createNetworkingEventFixture,
+} from "../../../../../packages/db/tests/helpers/networking-write-fixture";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
 import {
@@ -10,10 +13,7 @@ import {
   type NetworkingRow,
 } from "@app/db";
 import { NetworkingConfigSchema } from "@app/contracts";
-import {
-  NetworkingService,
-  type NetworkingContext,
-} from "./networking.service";
+import { NetworkingService, type NetworkingContext } from "./networking.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingInventoryService } from "./networking.inventory.service";
@@ -84,15 +84,14 @@ describe.runIf(enabled)(
           name: "Spaces fixture",
           enabledModules: ["networking", "registrations", "emails"],
         });
-      event = await store.insert("events", {
+      event = await createNetworkingEventFixture({
         clientId,
         name: "Spaces",
         slug: randomUUID(),
         status: "OPEN",
         startDate: new Date("2031-04-05"),
         endDate: new Date("2031-04-06"),
-      });
-      await store.insert("configs", { eventId: event.id, config });
+      }, config);
       const formId = randomUUID();
       formIds.set(event.id, formId);
       await getDb()

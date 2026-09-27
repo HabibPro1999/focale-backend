@@ -1,17 +1,19 @@
+import { NetworkingProfileService } from "./networking.profile.service";
+import { NetworkingAuthService } from "./networking.auth.service";
+import { makeNetworkingPublicController } from "../../testing/networking";
 import { NetworkingInventoryService } from "./networking.inventory.service";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyRequest } from "fastify";
 import { getDbSettings, networkingStore } from "@app/db";
 import { dbTestsEnabled } from "@app/db/testing";
-import { createNetworkingWriteFixture } from "../../../../../packages/db/tests/helpers/networking-write-fixture";
+import {
+  createNetworkingWriteFixture,
+} from "../../../../../packages/db/tests/helpers/networking-write-fixture";
 import { NetworkingService, type NetworkingContext } from "./networking.service";
 import { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import { NetworkingAdminService } from "./networking.admin.service";
-import { NetworkingExportsService } from "./networking.exports.service";
 import { NetworkingMfaService } from "./networking.mfa.service";
-import { NetworkingUploadsService } from "./networking.uploads.service";
-import { NetworkingPublicController } from "./networking.public.controller";
 import { networkingHash, networkingTotp, openNetworkingSecret } from "./networking.security";
 
 // Plan 4.1: one pool connection per networking transaction. With a pool of
@@ -31,9 +33,7 @@ const meetings = new NetworkingMeetingsService(service);
 const inventory = new NetworkingInventoryService();
 const admin = new NetworkingAdminService(service, meetings, inventory);
 const mfa = new NetworkingMfaService();
-const controller = new NetworkingPublicController(
-  new NetworkingUploadsService(), service, social, meetings, new NetworkingExportsService(social, meetings),
-);
+const controller = makeNetworkingPublicController({ service, social, meetings });
 const slots = ["09:00", "09:30", "10:00", "10:30"].map((time) => new Date(`2031-06-10T${time}:00.000Z`));
 let fixture: Awaited<ReturnType<typeof createNetworkingWriteFixture>>;
 let people: NetworkingContext[];
@@ -51,10 +51,10 @@ describe.runIf(dbTestsEnabled())("networking writes on a pool of one connection"
   }, 240_000);
 
   it("signs in with a code", async () => {
-    const { challengeId } = await service.requestCode(fixture.event.slug, people[0].profile.email);
+    const { challengeId } = await new NetworkingAuthService(service).requestCode(fixture.event.slug, people[0].profile.email);
     const delivery = await networkingStore().one("deliveries", { dedupeKey: `otp:${challengeId}` });
     const code = openNetworkingSecret(String(delivery!.payload.encryptedCode));
-    expect((await service.verifyCode(fixture.event.slug, challengeId, code)).token).toHaveLength(64);
+    expect((await new NetworkingAuthService(service).verifyCode(fixture.event.slug, challengeId, code)).token).toHaveLength(64);
   });
 
   it("swipes, matches, messages and edits a profile", async () => {
@@ -63,8 +63,8 @@ describe.runIf(dbTestsEnabled())("networking writes on a pool of one connection"
     expect(match).toMatchObject({ matched: true });
     const message = await social.sendMessage(people[0], match.connectionId!, "Hello", "pool-message");
     expect((await social.sendMessage(people[0], match.connectionId!, "Hello", "pool-message")).id).toBe(message.id);
-    await service.updateMe(people[0], { bio: "Pool of one" });
-    await service.updateMe(people[0], { resetFields: ["company"] });
+    await new NetworkingProfileService(service).updateMe(people[0], { bio: "Pool of one" });
+    await new NetworkingProfileService(service).updateMe(people[0], { resetFields: ["company"] });
     await meetings.saveAvailability(people[0], slots.map((slot) => slot.toISOString()));
   });
 
