@@ -9,7 +9,6 @@ import {
   isNull,
   lt,
   ne,
-  notExists,
   or,
   sql,
   type SQL,
@@ -19,9 +18,6 @@ import type { NetworkingConfig } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
 import {
   networkingProfiles as profiles,
-  networkingBlocks as blocks,
-  networkingInterests as interests,
-  networkingConnections as connections,
   networkingMessages as messages,
   networkingNotifications as notifications,
 } from "../schema/networking";
@@ -32,7 +28,6 @@ export * from "./networking-participant-read";
 import {
   normalizeNetworkingSearch,
   networkingSearchScore,
-  networkingSearchMatches,
 } from "./networking-search";
 export interface NetworkingDiscoveryFilters {
   standTableId?: string;
@@ -202,27 +197,6 @@ export async function listNetworkingDiscovery(
       .where(filtered),
   ]);
   return { items: rows, total: counts[0]?.total ?? 0 };
-}
-export async function networkingPairBlocked(
-  eventId: string,
-  a: string,
-  b: string,
-  db: DbExecutor = getDb(),
-) {
-  const [row] = await db
-    .select({ id: blocks.id })
-    .from(blocks)
-    .where(
-      and(
-        eq(blocks.eventId, eventId),
-        or(
-          and(eq(blocks.profileId, a), eq(blocks.targetId, b)),
-          and(eq(blocks.profileId, b), eq(blocks.targetId, a)),
-        ),
-      ),
-    )
-    .limit(1);
-  return !!row;
 }
 export async function listNetworkingMessages(
   eventId: string,

@@ -16,13 +16,6 @@ export const PaymentStatusSchema = z.enum([
   "REFUNDED",
 ]);
 
-export const TransactionTypeSchema = z.enum([
-  "PAYMENT",
-  "REFUND",
-  "WAIVER",
-  "ADJUSTMENT",
-]);
-
 export const PaymentMethodSchema = z.enum([
   "BANK_TRANSFER",
   "ONLINE",

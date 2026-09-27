@@ -11,11 +11,8 @@ import { paginate, type PaginatedResult } from "@app/shared";
 import {
   getDb,
   withSerializableTxn,
-  type DbExecutor,
   type EventRow,
   type EventWithPricing,
-  casDecrementRegisteredTx,
-  casIncrementRegisteredTx,
   clientExistsById,
   countRegistrationsTx,
   deleteEmailTemplatesByEventTx,
@@ -24,7 +21,6 @@ import {
   getAbstractBookStorageKeysTx,
   getAbstractFinalFileKeysTx,
   getCertificateTemplateUrlsTx,
-  getEventCounterInfoTx,
   getEventIdBySlugTx,
   getEventWithPricing,
   getEventWithPricingBySlug,
@@ -430,42 +426,6 @@ export class EventsService {
     await deleteStoredObjectBestEffort(event.bannerUrl, { eventId: id });
 
     return { bannerUrl };
-  }
-
-  /**
-   * Atomic capacity-safe increment (consumed by registrations, inside its txn).
-   * Fast path: guarded CAS. Miss → diagnose NOT_FOUND / EVENT_NOT_OPEN / EVENT_FULL.
-   */
-  async incrementRegisteredCountTx(exec: DbExecutor, id: string): Promise<void> {
-    if (await casIncrementRegisteredTx(exec, id)) return;
-
-    const info = await getEventCounterInfoTx(exec, id);
-    if (!info) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
-    }
-    if (info.status !== "OPEN") {
-      throw new AppException(
-        ErrorCodes.EVENT_NOT_OPEN,
-        "Event is not accepting public actions",
-        400,
-      );
-    }
-    throw new AppException(ErrorCodes.EVENT_FULL, "Event is at capacity", 409);
-  }
-
-  /** Atomic decrement (consumed by registrations). */
-  async decrementRegisteredCountTx(exec: DbExecutor, id: string): Promise<void> {
-    if (await casDecrementRegisteredTx(exec, id)) return;
-
-    const info = await getEventCounterInfoTx(exec, id);
-    if (!info) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
-    }
-    throw new AppException(
-      ErrorCodes.VALIDATION_ERROR,
-      "Event registered count is already zero",
-      400,
-    );
   }
 
   /** Public payment-config projection. 404 hides closed / inactive-client events. */

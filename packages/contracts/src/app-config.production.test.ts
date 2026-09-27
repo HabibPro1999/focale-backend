@@ -41,7 +41,7 @@ describe("production rules", () => {
       allowAnyOrigin: false,
       origins: ["https://admin.example.com", "https://forms.example.com"],
     });
-    expect(config.publicFormsUrl).toBe("https://forms.example.com");
+    expect(config.integrations.publicFormsUrl).toBe("https://forms.example.com");
     expect(config.integrations.networking.tokenSecret).toBe("s".repeat(32));
   });
 
@@ -61,7 +61,7 @@ describe("production rules", () => {
   it("requires PUBLIC_FORMS_URL (no example.com fallback) and defaults it locally", () => {
     expect(failingKeys(productionEnv({ PUBLIC_FORMS_URL: undefined }))).toEqual(["PUBLIC_FORMS_URL"]);
     const local = parseAppConfig(productionEnv({ NODE_ENV: "development", PUBLIC_FORMS_URL: undefined }));
-    expect(local.publicFormsUrl).toBe("http://localhost:8080");
+    expect(local.integrations.publicFormsUrl).toBe("http://localhost:8080");
   });
 
   it("requires the networking token secret unless networking is disabled", () => {
