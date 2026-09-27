@@ -1,3 +1,4 @@
+import { validateAbstractContent } from "./abstracts.content-validation";
 import { assertAbstractModuleEnabled } from "./abstracts.gates";
 export { assertAbstractModuleEnabled } from "./abstracts.gates";
 import { Inject, Injectable } from "@nestjs/common";
@@ -19,7 +20,6 @@ import {
   findRegistrationEventId,
   submitAbstractTxn,
   editAbstractTxn,
-  type AbstractConfigRow,
 } from "@app/db";
 import {
   newId,
@@ -31,26 +31,12 @@ import { assertClientModuleEnabled } from "../clients/module-gates";
 import { AppException, notFound } from "../../core/app-exception";
 import { CONFIG, type Config } from "../../core/config";
 import { assertPublicLinkBaseUrlAllowed } from "../../core/public-link-origin";
-import { generateAbstractToken, verifyAbstractToken } from "./abstracts.token";
-import {
-  abstractContentFields,
-  abstractHtmlToText,
-  sanitizeAbstractContent,
-  STRUCTURED_SECTIONS,
-  type AbstractContent,
-} from "./abstracts.html";
+import { generateAbstractToken, assertAbstractToken } from "./abstracts.token";
+import { STRUCTURED_SECTIONS, type AbstractContent } from "./abstracts.html";
 
 // ============================================================================
-// Word count helper (pure)
+// Author input helpers
 // ============================================================================
-
-export function countWords(s: string): number {
-  if (!s) return 0;
-  return s
-    .replace(/[\u00A0\u2000-\u200B\u3000]/g, " ")
-    .split(/\s+/)
-    .filter((w) => w.length > 0).length;
-}
 
 function normalizeAuthorEmail(email: string): string {
   return email.trim().toLocaleLowerCase();
@@ -91,6 +77,17 @@ function duplicateAuthorEmailError(): AppException {
   );
 }
 
+async function assertAuthorEmailFree(
+  eventId: string,
+  normalized: string,
+  excludeId?: string,
+): Promise<void> {
+  const duplicate = excludeId === undefined
+    ? await findDuplicateAuthorEmail(eventId, normalized)
+    : await findDuplicateAuthorEmail(eventId, normalized, excludeId);
+  if (duplicate) throw duplicateAuthorEmailError();
+}
+
 function buildRevisionSnapshot(
   body: SubmitAbstractInput | EditAbstractInput,
   content: AbstractContent,
@@ -116,76 +113,6 @@ function buildRevisionSnapshot(
 // ============================================================================
 // Validation helpers
 // ============================================================================
-
-function validateMode(contentMode: string, configMode: string): void {
-  if (contentMode !== configMode) {
-    throw new AppException(
-      ErrorCodes.ABSTRACT_MODE_MISMATCH,
-      `Submission mode mismatch: expected ${configMode}, got ${contentMode}`,
-      409,
-    );
-  }
-}
-
-function validateContentPresence(content: AbstractContent): void {
-  const emptyFields = abstractContentFields(content)
-    .filter((field) => abstractHtmlToText(field.value).length === 0)
-    .map((field) => field.name);
-  if (emptyFields.length === 0) return;
-  throw new AppException(
-    ErrorCodes.VALIDATION_ERROR,
-    `Required abstract content is empty: ${emptyFields.join(", ")}`,
-    422,
-    { fields: emptyFields },
-  );
-}
-
-function validateWordLimits(
-  content: AbstractContent,
-  config: AbstractConfigRow,
-): void {
-  const errors: string[] = [];
-
-  if (content.mode === "FREE_TEXT") {
-    const bodyText = abstractHtmlToText(content.body);
-    if (
-      config.globalWordLimit != null &&
-      countWords(bodyText) > config.globalWordLimit
-    ) {
-      errors.push(
-        `body (${countWords(bodyText)} words, limit ${config.globalWordLimit})`,
-      );
-    }
-  } else {
-    const sectionLimits =
-      (config.sectionWordLimits as Record<string, number> | null) ?? {};
-    let total = 0;
-    for (const section of STRUCTURED_SECTIONS) {
-      const wordCount = countWords(
-        abstractHtmlToText(
-          (content as Record<string, string>)[section] ?? "",
-        ),
-      );
-      total += wordCount;
-      const limit = sectionLimits[section];
-      if (limit != null && wordCount > limit) {
-        errors.push(`${section} (${wordCount} words, limit ${limit})`);
-      }
-    }
-    if (config.globalWordLimit != null && total > config.globalWordLimit) {
-      errors.push(`total (${total} words, limit ${config.globalWordLimit})`);
-    }
-  }
-
-  if (errors.length > 0) {
-    throw new AppException(
-      ErrorCodes.ABSTRACT_WORD_LIMIT_EXCEEDED,
-      `Word limit exceeded: ${errors.join(", ")}`,
-      422,
-      { fields: errors },
-    );
-  }
-}
 
 async function validateThemes(
   themeIds: string[],
@@ -357,10 +284,7 @@ export class AbstractsService {
       );
     }
 
-    const content = sanitizeAbstractContent(body.content as AbstractContent);
-    validateMode(content.mode, config.submissionMode);
-    validateContentPresence(content);
-    validateWordLimits(content, config);
+    const content = validateAbstractContent(body.content as AbstractContent, config);
     await validateThemes(body.themeIds, config.id, config.maxThemesPerAbstract);
     assertPublicLinkBaseUrlAllowed(
       body.linkBaseUrl,
@@ -377,11 +301,7 @@ export class AbstractsService {
     const registrationId = body.registrationId ?? null;
     await validateRegistration(registrationId, found.event.id);
 
-    if (
-      await findDuplicateAuthorEmail(found.event.id, authorEmailNormalized)
-    ) {
-      throw duplicateAuthorEmailError();
-    }
+    await assertAuthorEmailFree(found.event.id, authorEmailNormalized);
 
     const result = await submitAbstractTxn({
       id: abstractId,
@@ -429,12 +349,7 @@ export class AbstractsService {
   // --------------------------------------------------------------------------
   async getAbstractByToken(id: string, token: string) {
     const abstract = await findAbstractForToken(id);
-    if (!abstract) {
-      throw notFound("Abstract not found");
-    }
-    if (!verifyAbstractToken(abstract.editToken, token)) {
-      throw notFound("Invalid abstract token");
-    }
+    assertAbstractToken(abstract, token);
     await assertAbstractModuleEnabled(abstract.eventId);
 
     const config = abstract.config;
@@ -490,12 +405,7 @@ export class AbstractsService {
     ip?: string,
   ) {
     const abstract = await findAbstractForEdit(id);
-    if (!abstract) {
-      throw notFound("Abstract not found");
-    }
-    if (!verifyAbstractToken(abstract.editToken, token)) {
-      throw notFound("Invalid abstract token");
-    }
+    assertAbstractToken(abstract, token);
     await assertAbstractModuleEnabled(abstract.eventId);
 
     const config = abstract.config;
@@ -531,10 +441,7 @@ export class AbstractsService {
       );
     }
 
-    const content = sanitizeAbstractContent(body.content as AbstractContent);
-    validateMode(content.mode, config.submissionMode);
-    validateContentPresence(content);
-    validateWordLimits(content, config);
+    const content = validateAbstractContent(body.content as AbstractContent, config);
     // M14: the abstract's own (possibly now-deactivated) themes stay valid on edit.
     const currentThemeIds = await findAbstractThemeIds(id);
     await validateThemes(
@@ -553,15 +460,7 @@ export class AbstractsService {
     await validateRegistration(nextRegistrationId, abstract.eventId);
     const authorEmailNormalized = normalizeAuthorEmail(body.authorEmail);
 
-    if (
-      await findDuplicateAuthorEmail(
-        abstract.eventId,
-        authorEmailNormalized,
-        id,
-      )
-    ) {
-      throw duplicateAuthorEmailError();
-    }
+    await assertAuthorEmailFree(abstract.eventId, authorEmailNormalized, id);
 
     const result = await editAbstractTxn({
       id,

@@ -36,7 +36,8 @@ import {
   submitAbstractTxn,
   editAbstractTxn,
 } from "@app/db";
-import { AbstractsService, countWords } from "./abstracts.service";
+import { AbstractsService } from "./abstracts.service";
+import { countWords } from "./abstracts.content-validation";
 import { AppException } from "../../core/app-exception";
 import type { Config } from "../../core/config";
 import { assertClientModuleEnabled } from "../clients/module-gates";
@@ -245,6 +246,33 @@ describe("getPublicConfig", () => {
   });
 });
 
+const contentPrecedenceCases = [
+  {
+    label: "mode before empty content",
+    config: { submissionMode: "STRUCTURED" as const, globalWordLimit: 0 },
+    content: { mode: "FREE_TEXT", title: "", body: "" },
+    code: ErrorCodes.ABSTRACT_MODE_MISMATCH,
+    message: "Submission mode mismatch: expected STRUCTURED, got FREE_TEXT",
+    status: 409,
+  },
+  {
+    label: "sanitized presence before word limits",
+    config: { globalWordLimit: 0 },
+    content: { mode: "FREE_TEXT", title: "<b> </b>", body: "<p> </p>" },
+    code: ErrorCodes.VALIDATION_ERROR,
+    message: "Required abstract content is empty: title, body",
+    status: 422,
+  },
+  {
+    label: "word limits before invalid themes and additional fields",
+    config: { globalWordLimit: 0 },
+    content: { mode: "FREE_TEXT", title: "Title", body: "<p>two words</p>" },
+    code: ErrorCodes.ABSTRACT_WORD_LIMIT_EXCEEDED,
+    message: "Word limit exceeded: body (2 words, limit 0)",
+    status: 422,
+  },
+];
+
 // ===========================================================================
 // submitAbstract
 // ===========================================================================
@@ -259,6 +287,25 @@ describe("submitAbstract", () => {
     mock(findRegistrationEventId).mockResolvedValue(eventId);
     mock(submitAbstractTxn).mockResolvedValue({ ok: true, createdAt: new Date() });
   }
+
+  it.each(contentPrecedenceCases)("keeps $label on submit", async ({ config, content, code, message, status }) => {
+    setup({ ...config, additionalFieldsSchema: [{ id: "required", type: "text", label: "Required", required: true }] });
+    mock(findActiveThemeIds).mockResolvedValue([]);
+    const error = await service.submitAbstract(slug, makeSubmitBody({ content, additionalFieldsData: {}, linkBaseUrl: "https://unapproved.example" })).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AppException);
+    expect((error as AppException).getStatus()).toBe(status);
+    expect((error as AppException).getResponse()).toMatchObject({ code, message });
+    expect(findActiveThemeIds).not.toHaveBeenCalled();
+    expect(findDuplicateAuthorEmail).not.toHaveBeenCalled();
+    expect(submitAbstractTxn).not.toHaveBeenCalled();
+  });
+
+  it("normalizes the submit email precheck after registration validation", async () => {
+    setup();
+    await service.submitAbstract(slug, makeSubmitBody({ authorEmail: " AHMED@Example.COM ", registrationId: eventId }));
+    expect(findDuplicateAuthorEmail).toHaveBeenCalledWith(eventId, "ahmed@example.com");
+    expect(mock(findRegistrationEventId).mock.invocationCallOrder[0]).toBeLessThan(mock(findDuplicateAuthorEmail).mock.invocationCallOrder[0]!);
+  });
 
   it("happy path: persists sanitized content, returns token + statusUrl", async () => {
     setup();
@@ -633,6 +680,25 @@ describe("editAbstract", () => {
     });
     return { editToken };
   }
+
+  it.each(contentPrecedenceCases)("keeps $label on edit", async ({ config, content, code, message, status }) => {
+    const { editToken } = setup({}, { ...config, additionalFieldsSchema: [{ id: "required", type: "text", label: "Required", required: true }] });
+    mock(findActiveThemeIds).mockResolvedValue([]);
+    const error = await service.editAbstract("abs-1", editToken, makeSubmitBody({ content, additionalFieldsData: {} })).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AppException);
+    expect((error as AppException).getStatus()).toBe(status);
+    expect((error as AppException).getResponse()).toMatchObject({ code, message });
+    expect(findAbstractThemeIds).not.toHaveBeenCalled();
+    expect(findDuplicateAuthorEmail).not.toHaveBeenCalled();
+    expect(editAbstractTxn).not.toHaveBeenCalled();
+  });
+
+  it("normalizes the edit email precheck and excludes this abstract after registration validation", async () => {
+    const { editToken } = setup();
+    await service.editAbstract("abs-1", editToken, makeSubmitBody({ authorEmail: " AHMED@Example.COM ", registrationId: eventId }));
+    expect(findDuplicateAuthorEmail).toHaveBeenCalledWith(eventId, "ahmed@example.com", "abs-1");
+    expect(mock(findRegistrationEventId).mock.invocationCallOrder[0]).toBeLessThan(mock(findDuplicateAuthorEmail).mock.invocationCallOrder[0]!);
+  });
 
   it("happy path: edits and delegates to the txn", async () => {
     const { editToken } = setup();

@@ -10,8 +10,8 @@ import {
 } from "@app/db";
 import { getStorageProvider, ownedStorageKey } from "@app/integrations";
 import { logger } from "../../core/logger.service";
-import { AppException, notFound } from "../../core/app-exception";
-import { verifyAbstractToken } from "./abstracts.token";
+import { AppException } from "../../core/app-exception";
+import { assertAbstractToken } from "./abstracts.token";
 import { AbstractsService } from "./abstracts.service";
 import { assertAbstractModuleEnabled } from "./abstracts.gates";
 
@@ -158,18 +158,6 @@ function assertKindAllowed(
   }
   // ORAL_COMMUNICATION, POSTER (already PDF-checked above), and CONFERENCE
   // all accept any detected kind (PDF/PPT/PPTX).
-}
-
-function assertAbstractToken(
-  abstract: AbstractForFinalFile | null,
-  token: string,
-): asserts abstract is AbstractForFinalFile {
-  if (!abstract) {
-    throw notFound("Abstract not found");
-  }
-  if (!verifyAbstractToken(abstract.editToken, token)) {
-    throw notFound("Invalid abstract token");
-  }
 }
 
 function assertUploadWindowOpen(abstract: AbstractForFinalFile): void {

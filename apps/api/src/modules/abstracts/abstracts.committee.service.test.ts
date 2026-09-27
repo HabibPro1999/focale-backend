@@ -1014,6 +1014,18 @@ describe("reviewer reads (anonymized)", () => {
     );
   });
 
+  it.each([true, false])("detail: active=%s explicit review retains membership and theme-read ordering", async (active) => {
+    grantActiveMembership();
+    mock(getAssignedAbstractRow).mockResolvedValue(reviewerAbstractRow({ reviews: [{ reviewerId, active, score: null, comment: null, scoredAt: null }] }));
+    mock(listActiveReviewerThemeIds).mockResolvedValue([]);
+    const promise = service.getAssignedAbstractDetail(abstractId, reviewerId);
+    if (active) await expect(promise).resolves.toMatchObject({ id: abstractId });
+    else await expectStatus(promise, 404);
+    expect(listActiveReviewerThemeIds).toHaveBeenCalledWith(eventId, reviewerId);
+    expect(mock(getAssignedAbstractRow).mock.invocationCallOrder[0]).toBeLessThan(mock(findAbstractMembership).mock.invocationCallOrder[0]!);
+    expect(mock(findAbstractMembership).mock.invocationCallOrder[0]).toBeLessThan(mock(listActiveReviewerThemeIds).mock.invocationCallOrder[0]!);
+  });
+
   it("detail: allows access via theme coverage even without an explicit review", async () => {
     grantActiveMembership();
     mock(getAssignedAbstractRow).mockResolvedValue(
