@@ -1,4 +1,6 @@
+import { PaymentStatusSchema, RegistrationRoleSchema } from "./registration-enums";
 import { z } from "zod";
+import { paginationQueryShape } from "./zod-helpers";
 
 // ============================================================================
 // Enums
@@ -215,8 +217,7 @@ export const UpdateEmailTemplateSchema = z
   });
 
 export const ListEmailTemplatesQuerySchema = z.strictObject({
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
+  ...paginationQueryShape(),
   category: EmailTemplateCategorySchema.optional(),
   trigger: AutomaticEmailTriggerSchema.optional(),
   abstractTrigger: AbstractEmailTriggerSchema.optional(),
@@ -228,8 +229,7 @@ export const ListEmailTemplatesQuerySchema = z.strictObject({
 // ============================================================================
 
 export const ListEventEmailLogsQuerySchema = z.strictObject({
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
+  ...paginationQueryShape(50),
   status: EmailStatusSchema.optional(),
   trigger: AutomaticEmailTriggerSchema.optional(),
 });
@@ -239,25 +239,9 @@ export const ListEventEmailLogsQuerySchema = z.strictObject({
 // ============================================================================
 
 export const BulkSendFilterSchema = z.strictObject({
-  paymentStatus: z
-    .array(
-      z.enum([
-        "PENDING",
-        "VERIFYING",
-        "PARTIAL",
-        "PAID",
-        "SPONSORED",
-        "WAIVED",
-        "REFUNDED",
-      ]),
-    )
-    .optional(),
+  paymentStatus: z.array(PaymentStatusSchema).optional(),
   accessTypeIds: z.array(z.string().uuid()).optional(),
-  role: z
-    .array(
-      z.enum(["PARTICIPANT", "SPEAKER", "MODERATOR", "ORGANIZER", "INVITED"]),
-    )
-    .optional(),
+  role: z.array(RegistrationRoleSchema).optional(),
 });
 
 export const BulkSendEmailSchema = z.strictObject({

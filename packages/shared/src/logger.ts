@@ -114,7 +114,7 @@ export function sanitizeErrorForLog(err: unknown): unknown {
 }
 
 /** pino's standard `err` serializer applied to the sanitized copy. */
-export function serializeErrorForLog(err: unknown): unknown {
+function serializeErrorForLog(err: unknown): unknown {
   const sanitized = sanitizeErrorForLog(err);
   return stdSerializers.err(sanitized as Error);
 }
