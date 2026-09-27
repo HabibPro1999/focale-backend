@@ -133,7 +133,7 @@ describe.runIf(dbTestsEnabled())("db tier: settlement invariants (2.4)", () => {
 
   it("reports the offending rows of each check", async () => {
     const f = await eventWithAccess({ registered: 0, gala: [0, 5], dinner: [0, 0] });
-    const noBreakdown = await registration(f, { items: [f.gala], status: "PENDING", paid: 0 }, { priceBreakdown: {} });
+    const noBreakdown = await registration(f, { items: [f.gala], status: "PENDING", paid: 0 }, { priceBreakdown: {} as never }); // Deliberate corruption: the invariant must report it.
     const mismatch = await registration(f, { items: [f.gala], status: "PENDING", paid: 0 }, { sponsorshipAmount: 0, priceBreakdown: breakdown(100, [f.gala], 50) });
     const paidBelow = await registration(f, { items: [f.gala], status: "PAID", paid: 0 });
     const pendingPaid = await registration(f, { items: [f.gala], status: "PENDING", paid: 100 });

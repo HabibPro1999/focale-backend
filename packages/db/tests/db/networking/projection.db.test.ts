@@ -87,7 +87,7 @@ describe.runIf(dbTestsEnabled())("persisted networking projection", () => {
         formId: ids.form,
         email: `${ids.registration}@example.invalid`,
         formData: answers,
-        priceBreakdown: {},
+        priceBreakdown: {} as never, // Minimal stored fixture; this query does not read pricing.
         paymentStatus: "PAID",
         totalAmount: 0,
       });

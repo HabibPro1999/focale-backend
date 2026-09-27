@@ -45,7 +45,7 @@ function createRegistration(eventId: string, formId: string): Promise<string> {
       formData: {},
       email: `registrant-${randomUUID()}@example.test`,
       totalAmount: 0,
-      priceBreakdown: {},
+      priceBreakdown: {} as never, // Minimal stored fixture; this query does not read pricing.
       referenceNumber,
     });
     return referenceNumber;

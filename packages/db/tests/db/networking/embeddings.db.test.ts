@@ -60,7 +60,7 @@ async function participant(
     firstName: name,
     paymentStatus: options.paymentStatus ?? "PAID",
     totalAmount: 0,
-    priceBreakdown: {},
+    priceBreakdown: {} as never, // Minimal stored fixture; this query does not read pricing.
     formData: {},
   });
   await db.insert(networkingProfiles).values({
