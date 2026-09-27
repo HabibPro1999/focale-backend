@@ -160,10 +160,6 @@ export async function failNetworkingEmbeddingJob(
   );
 }
 
-export {
-  findNetworkingVectorCandidates,
-  type NetworkingVectorCandidate,
-} from "./networking-vector-search";
 
 export async function getNetworkingEmbeddingHealth(eventId: string) {
   return rowsOf<{ status: string; count: number }>(
