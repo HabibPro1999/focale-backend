@@ -144,7 +144,7 @@ describe("registration grid/export column parity", () => {
       ] },
     ] }] });
     expect(result.formColumns.map(column => column.id)).toEqual(["many", "one", "detail"]);
-    expect(result.formColumns.every(column => column.mergeWith === undefined)).toBe(true);
+    for (const column of result.formColumns) expect(column).not.toHaveProperty("mergeWith");
   });
 
   it.each([{}, { steps: null }, { steps: [{}] }])("preserves rejection of malformed schema %j", async (schema) => {

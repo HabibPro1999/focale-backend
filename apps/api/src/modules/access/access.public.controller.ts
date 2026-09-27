@@ -2,7 +2,7 @@ import { Body, Controller, Get, NotFoundException, Param, Post } from "@nestjs/c
 import { Throttle } from "@nestjs/throttler";
 import {
   getEventWithPricing,
-  getRegistrationFormSchemaForEvent,
+  findRegistrationFormSchema,
   type EventAccessWithPrereqs,
 } from "@app/db";
 import { visibleFormAnswers } from "@app/shared";
@@ -49,7 +49,7 @@ async function visibleAnswers(
   eventId: string,
   formData: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const form = await getRegistrationFormSchemaForEvent(eventId);
+  const form = await findRegistrationFormSchema(eventId);
   return visibleFormAnswers(form?.schema, formData);
 }
 

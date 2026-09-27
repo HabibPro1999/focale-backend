@@ -874,19 +874,3 @@ export async function getRegistrationEditToken(
     .limit(1);
   return row ?? null;
 }
-
-// ============================================================================
-// Table columns — REGISTRATION form schema for the admin grid config
-// ============================================================================
-
-export async function getRegistrationFormSchemaForEvent(
-  eventId: string,
-  db: DbExecutor = getDb(),
-): Promise<{ schema: unknown } | null> {
-  const [row] = await db
-    .select({ schema: forms.schema })
-    .from(forms)
-    .where(and(eq(forms.eventId, eventId), eq(forms.type, "REGISTRATION")))
-    .limit(1);
-  return row ?? null;
-}

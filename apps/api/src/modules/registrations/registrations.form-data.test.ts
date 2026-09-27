@@ -18,7 +18,7 @@ const db = vi.hoisted(() => ({
   findActiveRegistrationFormById: vi.fn(),
   findFormById: vi.fn(),
   findRegistrationFormForEvent: vi.fn(),
-  getRegistrationFormSchemaForEvent: vi.fn(),
+  findRegistrationFormSchema: vi.fn(),
   registrationExistsByEmailForm: vi.fn(),
   getEventForRegistrationCreate: vi.fn(),
   getEventForRegistrationAdmin: vi.fn(),
@@ -150,7 +150,7 @@ beforeEach(() => {
   });
   db.findFormById.mockResolvedValue({ id: "form1", eventId: "ev1", schemaVersion: 1, schema: SCHEMA });
   db.findRegistrationFormForEvent.mockResolvedValue({ id: "form1", schemaVersion: 1 });
-  db.getRegistrationFormSchemaForEvent.mockResolvedValue({ schema: SCHEMA });
+  db.findRegistrationFormSchema.mockResolvedValue({ schema: SCHEMA });
   db.registrationExistsByEmailForm.mockResolvedValue(false);
   db.getEventForRegistrationCreate.mockResolvedValue({ ...openEvent, maxCapacity: null, registeredCount: 0 });
   db.getEventForRegistrationAdmin.mockResolvedValue({ ...openEvent, maxCapacity: null, registeredCount: 0 });
@@ -364,7 +364,7 @@ describe("admin create/edit validate without enforcing required answers", () => 
 
     await service.adminEditRegistration("ev1", "reg1", { accessSelections: [] } as never, "admin1");
 
-    expect(db.getRegistrationFormSchemaForEvent).not.toHaveBeenCalled();
+    expect(db.findRegistrationFormSchema).not.toHaveBeenCalled();
     const patch = db.updateRegistrationRow.mock.calls[0]?.[1] as {
       formData?: unknown;
       totalAmount: number;

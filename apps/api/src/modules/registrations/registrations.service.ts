@@ -63,7 +63,7 @@ import {
   getEventForRegistrationCreate,
   getEventForRegistrationAdmin,
   findRegistrationFormForEvent,
-  getRegistrationFormSchemaForEvent,
+  findRegistrationFormSchema,
   registrationExistsByEmailForm,
   findRegistrationForMutation,
   findRegistrationWithFormEvent,
@@ -888,7 +888,7 @@ export class RegistrationsService {
     // Admin answers: visible fields only, type-checked, required not enforced;
     // stored and priced as returned.
     const formData = prepareFormDataForPricing(
-      (await getRegistrationFormSchemaForEvent(eventId))?.schema,
+      (await findRegistrationFormSchema(eventId))?.schema,
       rawFormData,
       { enforceRequired: false },
     );
@@ -1244,7 +1244,7 @@ export class RegistrationsService {
       const editedFormData =
         input.formData !== undefined
           ? prepareFormDataForPricing(
-              (await getRegistrationFormSchemaForEvent(eventId, tx))?.schema,
+              (await findRegistrationFormSchema(eventId, tx))?.schema,
               input.formData,
               { enforceRequired: false },
             )
