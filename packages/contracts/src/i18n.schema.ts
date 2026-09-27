@@ -23,3 +23,18 @@ export const translationsMapOf = <T extends z.ZodType>(entry: T) =>
 
 export type LanguageCode = z.infer<typeof LanguageCodeSchema>;
 export type FormLanguages = z.infer<typeof FormLanguagesSchema>;
+
+// The language a form (or abstract config) is written in when it stores no
+// `languages` list.
+export const DEFAULT_LANGUAGE: LanguageCode = "fr";
+
+const isLanguageCode = (value: unknown): value is LanguageCode =>
+  LanguageCodeSchema.safeParse(value).success;
+
+// Primary language of a stored `languages` value: its first supported entry,
+// else DEFAULT_LANGUAGE. Same rule as the admin's getPrimaryLanguage
+// (admin/src/features/form-builder/translations.ts).
+export function getPrimaryLanguage(languages: unknown): LanguageCode {
+  if (!Array.isArray(languages)) return DEFAULT_LANGUAGE;
+  return languages.find(isLanguageCode) ?? DEFAULT_LANGUAGE;
+}

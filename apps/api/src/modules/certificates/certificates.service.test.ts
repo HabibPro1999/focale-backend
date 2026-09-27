@@ -1175,6 +1175,7 @@ describe("CertificatesService", () => {
         authorFirstName: "Ada",
         authorLastName: "Lovelace",
         authorEmail: "ada@example.com",
+        language: "fr",
         event: { name: "Event", startDate: new Date("2026-07-19"), location: "Tunis" },
         ...overrides,
       };
@@ -1381,6 +1382,31 @@ describe("CertificatesService", () => {
       expect(queuedInput().abstracts[0].contextSnapshot).toMatchObject({
         abstractFinalType: "Poster",
       });
+    });
+
+    it("formats eventDate/issuanceDate in the abstract config's language, not as ISO", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-09-24T12:00:00Z"));
+      try {
+        vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
+          abstractRow({
+            language: "fr",
+            event: {
+              name: "Event",
+              startDate: new Date("2026-10-02T12:00:00Z"),
+              location: "Tunis",
+            },
+          }) as never,
+        ]);
+        await service.sendCertificates(event, [], ["abs-1"]);
+
+        expect(queuedInput().abstracts[0].contextSnapshot).toMatchObject({
+          eventDate: "2 octobre 2026",
+          issuanceDate: "24 septembre 2026",
+        });
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     // H2: certificate template scope + allowedAbstractFinalTypes gating.

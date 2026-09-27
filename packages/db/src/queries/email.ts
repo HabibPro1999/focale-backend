@@ -19,7 +19,7 @@ import {
   type InferSelectModel,
   type SQL,
 } from "drizzle-orm";
-import type { StoredEmailContextSnapshot, StoredFormSchemaJson } from "@app/contracts";
+import { getPrimaryLanguage, type LanguageCode, type StoredEmailContextSnapshot, type StoredFormSchemaJson } from "@app/contracts";
 import { newId } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
 import { rowCountOf, rowsOf, STANDARD_RETRY_DELAYS_MS, standardRetryDelayMs } from "../helpers";
@@ -521,9 +521,22 @@ export async function updateEmailLogById(
 export interface RegistrationEmailContext extends InferSelectModel<
   typeof registrations
 > {
+  /** Primary language of the registration's form (fr when it sets none). */
+  language: LanguageCode;
   event: InferSelectModel<typeof events> & {
     client: Pick<InferSelectModel<typeof clients>, "name" | "email" | "phone">;
   };
+}
+
+/**
+ * A form's `settings.languages` (ordered, first entry = primary language), read
+ * in SQL so per-registration reads don't carry the whole schema jsonb. Feed the
+ * result to getPrimaryLanguage.
+ */
+export function formLanguagesSql() {
+  return sql<unknown>`${forms.schema} -> 'settings' -> 'languages'`.mapWith(
+    forms.schema,
+  );
 }
 
 /** Registration + event + event.client, for building a full send context. */
@@ -540,15 +553,18 @@ export async function getRegistrationForEmailContext(
         email: clients.email,
         phone: clients.phone,
       },
+      formLanguages: formLanguagesSql(),
     })
     .from(registrations)
     .innerJoin(events, eq(events.id, registrations.eventId))
     .innerJoin(clients, eq(clients.id, events.clientId))
+    .leftJoin(forms, eq(forms.id, registrations.formId))
     .where(eq(registrations.id, id))
     .limit(1);
   if (!rows[0]) return null;
   return {
     ...rows[0].registration,
+    language: getPrimaryLanguage(rows[0].formLanguages),
     event: { ...rows[0].event, client: rows[0].client },
   };
 }
@@ -842,6 +858,19 @@ export async function getRegistrationFormSchema(
   return row ? readFormSchema(row.schema, row.id) : null;
 }
 
+/** Primary language of the event's REGISTRATION form (fr when it sets none). */
+export async function getRegistrationFormLanguage(
+  eventId: string,
+  exec: DbExecutor = getDb(),
+): Promise<LanguageCode> {
+  const [row] = await exec
+    .select({ languages: formLanguagesSql() })
+    .from(forms)
+    .where(and(eq(forms.eventId, eventId), eq(forms.type, "REGISTRATION")))
+    .limit(1);
+  return getPrimaryLanguage(row?.languages);
+}
+
 // ============================================================================
 // EMAIL QUEUE — a lease queue (packages/db/src/lease-queue).
 //
@@ -1015,13 +1044,16 @@ export async function getRegistrationsForEmailContextByIds(
         email: clients.email,
         phone: clients.phone,
       },
+      formLanguages: formLanguagesSql(),
     })
     .from(registrations)
     .innerJoin(events, eq(events.id, registrations.eventId))
     .innerJoin(clients, eq(clients.id, events.clientId))
+    .leftJoin(forms, eq(forms.id, registrations.formId))
     .where(inArray(registrations.id, ids));
   return rows.map((r) => ({
     ...r.registration,
+    language: getPrimaryLanguage(r.formLanguages),
     event: { ...r.event, client: r.client },
   }));
 }

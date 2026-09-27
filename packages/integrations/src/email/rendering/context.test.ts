@@ -44,6 +44,8 @@ function reg(overrides: Record<string, unknown> = {}) {
     accessTypeIds: [],
     sponsorshipCode: null,
     eventId: "evt-1",
+    // en: the output these tests pinned before variables were localized.
+    language: "en",
     event: {
       slug: "conf",
       name: "Conf 2025",
@@ -94,6 +96,74 @@ describe("buildEmailContext (sync)", () => {
     );
     expect(ctx["form_attending"]).toBe("Yes");
     expect(ctx["form_tags"]).toBe("a, b");
+  });
+});
+
+describe("buildEmailContext — form's primary language", () => {
+  // Noon UTC: the same calendar day in any host timezone.
+  const dated = (language: string, overrides: Record<string, unknown> = {}) =>
+    reg({
+      language,
+      firstName: null,
+      lastName: null,
+      submittedAt: new Date("2026-09-10T12:00:00Z"),
+      formData: { attending: true, vegetarian: false },
+      event: {
+        ...(reg() as unknown as { event: object }).event,
+        startDate: new Date("2026-09-24T12:00:00Z"),
+        endDate: new Date("2026-09-26T12:00:00Z"),
+      },
+      ...overrides,
+    });
+
+  it("renders dates and labels in French for a fr form", () => {
+    const ctx = buildEmailContext(dated("fr"));
+    expect(ctx.registrationDate).toBe("10 septembre 2026");
+    expect(ctx.eventDate).toBe("24 septembre 2026");
+    expect(ctx.eventEndDate).toBe("26 septembre 2026");
+    expect(ctx.paymentStatus).toBe("Partiellement payé");
+    expect(ctx.fullName).toBe("Participant");
+    expect(ctx["form_attending"]).toBe("Oui");
+    expect(ctx["form_vegetarian"]).toBe("Non");
+  });
+
+  it("keeps the English output for an en form", () => {
+    const ctx = buildEmailContext(dated("en"));
+    expect(ctx.registrationDate).toBe("September 10, 2026");
+    expect(ctx.eventDate).toBe("September 24, 2026");
+    expect(ctx.paymentStatus).toBe("Partially paid");
+    expect(ctx.fullName).toBe("Registrant");
+    expect(ctx["form_attending"]).toBe("Yes");
+  });
+
+  it("renders ar-TN dates (Latin digits, Tunisian months) and Arabic labels for an ar form", () => {
+    const ctx = buildEmailContext(
+      dated("ar", { submittedAt: new Date("2026-08-03T12:00:00Z") }),
+    );
+    expect(ctx.registrationDate).toBe("3 أوت 2026");
+    expect(ctx.eventDate).toBe("24 سبتمبر 2026");
+    expect(ctx.paymentStatus).toBe("مدفوع جزئيًا");
+    expect(ctx.fullName).toBe("المشارك");
+    expect(ctx["form_attending"]).toBe("نعم");
+    expect(ctx["form_vegetarian"]).toBe("لا");
+  });
+
+  it("labels every payment status and passes an unknown one through", () => {
+    const fr = (paymentStatus: string) =>
+      buildEmailContext(dated("fr", { paymentStatus })).paymentStatus;
+    expect(fr("PENDING")).toBe("En attente");
+    expect(fr("VERIFYING")).toBe("En cours de vérification");
+    expect(fr("PAID")).toBe("Confirmé");
+    expect(fr("SPONSORED")).toBe("Sponsorisé");
+    expect(fr("WAIVED")).toBe("Exonéré");
+    expect(fr("REFUNDED")).toBe("Remboursé");
+    expect(fr("SOMETHING_NEW")).toBe("SOMETHING_NEW");
+  });
+
+  it("carries through the DB-enriched builder", async () => {
+    vi.mocked(getEventPricingForEmail).mockResolvedValue(null);
+    const ctx = await buildEmailContextWithAccess(dated("fr"));
+    expect(ctx.eventDate).toBe("24 septembre 2026");
   });
 });
 
@@ -390,7 +460,7 @@ describe("sanitizeForHtml", () => {
 
 describe("getSampleEmailContext", () => {
   it("returns a complete context with realistic values", () => {
-    const ctx = getSampleEmailContext();
+    const ctx = getSampleEmailContext("fr");
     expect(ctx.firstName).toBe("John");
     expect(ctx.eventName).toBe("Medical Conference 2025");
     expect(ctx.totalAmount).toBe("250 TND");
@@ -403,6 +473,27 @@ describe("getSampleEmailContext", () => {
     ]) {
       expect((ctx as unknown as Record<string, unknown>)[key]).toBeTruthy();
     }
+  });
+
+  it("renders the sample dates and payment status in the requested language", () => {
+    expect(getSampleEmailContext("fr")).toMatchObject({
+      registrationDate: "15 mars 2025",
+      eventDate: "20 avril 2025",
+      eventEndDate: "22 avril 2025",
+      paymentStatus: "Confirmé",
+    });
+    // Same strings the sample hard-coded before localization.
+    expect(getSampleEmailContext("en")).toMatchObject({
+      registrationDate: "March 15, 2025",
+      eventDate: "April 20, 2025",
+      eventEndDate: "April 22, 2025",
+      paymentStatus: "Confirmed",
+    });
+    expect(getSampleEmailContext("ar")).toMatchObject({
+      registrationDate: "15 مارس 2025",
+      eventDate: "20 أفريل 2025",
+      paymentStatus: "مؤكَّد",
+    });
   });
 });
 

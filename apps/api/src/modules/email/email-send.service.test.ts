@@ -4,6 +4,7 @@ const { tx } = vi.hoisted(() => ({ tx: { executor: "tx" } }));
 vi.mock("@app/db", () => ({
   withTxn: (fn: (exec: unknown) => unknown) => fn(tx),
   getRegistrationForEmailContext: vi.fn(),
+  getRegistrationFormLanguage: vi.fn(),
   getRegistrationsByIds: vi.fn(),
   getRegistrationsByFilters: vi.fn(),
   listSponsorshipBatchesForBulk: vi.fn(),
@@ -31,13 +32,14 @@ vi.mock("@app/integrations", () => ({
 
 import {
   getRegistrationForEmailContext,
+  getRegistrationFormLanguage,
   getRegistrationsByIds,
   getRegistrationsByFilters,
   listSponsorshipBatchesForBulk,
   getClientById,
   insertEmailLogsSkippingConflicts,
 } from "@app/db";
-import { resendUncertainEmail, resolveVariables, sendEmailNow } from "@app/integrations";
+import { getSampleEmailContext, resendUncertainEmail, resolveVariables, sendEmailNow } from "@app/integrations";
 import { EmailSendService } from "./email-send.service";
 
 const service = new EmailSendService();
@@ -96,6 +98,25 @@ describe("testSend", () => {
     await expect(
       service.testSend(template(), "to@x.com"),
     ).rejects.toMatchObject({ status: 502 });
+  });
+
+  it("renders the sample context in the event's registration-form language", async () => {
+    sendEmailMock.mockResolvedValue({ success: true, messageId: "m1" });
+    vi.mocked(getRegistrationFormLanguage).mockResolvedValue("en");
+
+    await service.testSend(template({ eventId: "event-1" }), "to@x.com");
+
+    expect(getRegistrationFormLanguage).toHaveBeenCalledWith("event-1");
+    expect(getSampleEmailContext).toHaveBeenCalledWith("en");
+  });
+
+  it("falls back to fr for a template without an event", async () => {
+    sendEmailMock.mockResolvedValue({ success: true, messageId: "m1" });
+
+    await service.testSend(template({ eventId: null }), "to@x.com");
+
+    expect(getRegistrationFormLanguage).not.toHaveBeenCalled();
+    expect(getSampleEmailContext).toHaveBeenCalledWith("fr");
   });
 });
 

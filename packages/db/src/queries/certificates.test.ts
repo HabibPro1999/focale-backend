@@ -8,8 +8,12 @@ import {
   type CertificateEmailCandidate,
   type PlannedCertificateEmail,
   createCertificateTemplate,
+  getAbstractForCertificateGeneration,
+  getAbstractsForCertificateSend,
   getActiveImageReadyCertificateTemplatesByIds,
   getCertificateTemplateWithEvent,
+  getRegistrationForCertificateGeneration,
+  getRegistrationsForCertificateSend,
   listActiveImageReadyCertificateTemplates,
   listCertificateTemplates,
 } from "./certificates";
@@ -234,5 +238,66 @@ describe("certificate send planning (2.12)", () => {
       registrations: [],
       abstracts: [],
     });
+  });
+});
+
+describe("certificate subject language", () => {
+  const FORM_JOIN = '"forms"."id" = "registrations"."form_id"';
+  const CONFIG_JOIN = '"abstract_config"."event_id" = "abstracts"."event_id"';
+
+  it("registration PDFs take the registration form's primary language", async () => {
+    const joins: string[] = [];
+    const row = {
+      id: "reg-1",
+      eventId: "event-1",
+      eventStartDate: new Date(),
+      formLanguages: ["en", "fr"],
+    };
+    const result = await getRegistrationForCertificateGeneration(
+      "reg-1",
+      fakeExec([row], joins),
+    );
+    expect(result?.language).toBe("en");
+    expect(joins).toEqual([FORM_JOIN]);
+
+    const unset = await getRegistrationForCertificateGeneration(
+      "reg-1",
+      fakeExec([{ ...row, formLanguages: null }]),
+    );
+    expect(unset?.language).toBe("fr");
+  });
+
+  it("the registration send read carries each registration's form language", async () => {
+    const joins: string[] = [];
+    const rows = [
+      { registration: { id: "reg-1" }, event: {}, client: {}, formLanguages: ["ar"] },
+      { registration: { id: "reg-2" }, event: {}, client: {}, formLanguages: null },
+    ];
+    const result = await getRegistrationsForCertificateSend(
+      "event-1",
+      undefined,
+      fakeExec(rows, joins),
+    );
+    expect(result.map((r) => r.language)).toEqual(["ar", "fr"]);
+    expect(joins).toEqual([FORM_JOIN]);
+  });
+
+  it("abstract PDFs and sends take the abstract config's primary language", async () => {
+    const row = { id: "abs-1", eventId: "event-1", configLanguages: ["en"] };
+
+    const joins: string[] = [];
+    const generated = await getAbstractForCertificateGeneration(
+      "abs-1",
+      fakeExec([row], joins),
+    );
+    expect(generated?.language).toBe("en");
+
+    const sent = await getAbstractsForCertificateSend(
+      "event-1",
+      ["abs-1", "abs-2"],
+      fakeExec([row, { ...row, id: "abs-2", configLanguages: null }], joins),
+    );
+    expect(sent.map((a) => a.language)).toEqual(["en", "fr"]);
+    expect(joins).toEqual([CONFIG_JOIN, CONFIG_JOIN]);
   });
 });

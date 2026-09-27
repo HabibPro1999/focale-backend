@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { CertificateZone } from "@app/contracts";
 
 // certificates-pdf downloads the template background through the storage
@@ -66,6 +66,7 @@ const registration: RegistrationForCertificate = {
   role: "PARTICIPANT",
   checkedInAt: new Date("2026-05-01T10:00:00.000Z"),
   accessCheckIns: [],
+  language: "fr",
   event: {
     name: "Focale OS",
     startDate: new Date("2026-05-01T00:00:00.000Z"),
@@ -104,6 +105,7 @@ const abstract = (
   requestedType: "ORAL_COMMUNICATION",
   code: "ABS-001",
   content: { title: "On Computing Engines" },
+  language: "fr",
   event: {
     name: "Focale OS",
     startDate: new Date("2026-05-01T00:00:00.000Z"),
@@ -197,6 +199,68 @@ describe("resolveCertificateVariable (H2 abstract variables)", () => {
     expect(resolveCertificateVariable("abstractTitle", {})).toBe("—");
     expect(resolveCertificateVariable("abstractCode", {})).toBe("—");
     expect(resolveCertificateVariable("abstractFinalType", {})).toBe("—");
+  });
+});
+
+describe("certificate dates follow the subject's primary language", () => {
+  const { registrationVariableData, abstractVariableData } =
+    __certificatePdfTestHooks;
+  // Noon UTC: the same calendar day in any host timezone.
+  const startDate = new Date("2026-10-02T12:00:00.000Z");
+  const registrationIn = (language: RegistrationForCertificate["language"]) =>
+    registrationVariableData({
+      ...registration,
+      language,
+      event: { ...registration.event, startDate },
+    });
+  const abstractIn = (language: AbstractForCertificate["language"]) =>
+    abstractVariableData(
+      abstract({ language, event: { ...abstract().event, startDate } }),
+    );
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-24T12:00:00.000Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("prints eventDate and issuanceDate in French for a fr form", () => {
+    const data = registrationIn("fr");
+    expect(data.eventDate).toBe("2 octobre 2026");
+    expect(data.issuanceDate).toBe("24 septembre 2026");
+    expect(resolveCertificateVariable("eventDate", data)).toBe("2 octobre 2026");
+    expect(resolveCertificateVariable("issuanceDate", data)).toBe(
+      "24 septembre 2026",
+    );
+  });
+
+  it("keeps English dates for an en form", () => {
+    expect(registrationIn("en")).toMatchObject({
+      eventDate: "October 2, 2026",
+      issuanceDate: "September 24, 2026",
+    });
+  });
+
+  it("prints French dates for an ar form (drawText has no bidi reordering)", () => {
+    expect(registrationIn("ar")).toMatchObject({
+      eventDate: "2 octobre 2026",
+      issuanceDate: "24 septembre 2026",
+    });
+  });
+
+  it("uses the abstract config's language on presenter certificates", () => {
+    expect(abstractIn("en")).toMatchObject({
+      eventDate: "October 2, 2026",
+      issuanceDate: "September 24, 2026",
+    });
+    expect(abstractIn("fr")).toMatchObject({ eventDate: "2 octobre 2026" });
+    expect(abstractIn("ar")).toMatchObject({ eventDate: "2 octobre 2026" });
+  });
+
+  it("resolves issuanceDate to an em dash when none was supplied", () => {
+    expect(resolveCertificateVariable("issuanceDate", {})).toBe("—");
   });
 });
 
@@ -428,6 +492,7 @@ describe("generateCertificateEmailAttachments (worker seam)", () => {
       role: "PARTICIPANT",
       checkedInAt: new Date(),
       accessCheckIns: [],
+      language: "fr",
       event: {
         id: "evt-1",
         name: "Focale OS",
@@ -456,6 +521,7 @@ describe("generateCertificateEmailAttachments (worker seam)", () => {
       role: "PARTICIPANT",
       checkedInAt: new Date(),
       accessCheckIns: [],
+      language: "fr",
       event: {
         id: "evt-1",
         name: "Focale OS",
@@ -510,6 +576,7 @@ describe("generateCertificateEmailAttachments (worker seam)", () => {
         requestedType: "ORAL_COMMUNICATION",
         code: "ABS-001",
         content: { title: "On Computing Engines" },
+        language: "fr",
         event: {
           id: "evt-1",
           name: "Focale OS",
@@ -555,6 +622,7 @@ describe("generateCertificateEmailAttachments (worker seam)", () => {
         requestedType: "ORAL_COMMUNICATION",
         code: "ABS-001",
         content: { title: "On Computing Engines" },
+        language: "fr",
         event: {
           id: "evt-1",
           name: "Focale OS",
