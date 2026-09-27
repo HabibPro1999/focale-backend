@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes, CreateEventAccessSchema } from "@app/contracts";
+import { txnPassthrough } from "../../testing/txn";
 
 // Mock the db query layer (the seam the service talks to). withTxn is a
 // passthrough invoking the callback with a dummy tx (all query fns are mocked).
@@ -88,7 +89,7 @@ function accessRow(o: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.resetAllMocks();
   m.getDb.mockReturnValue({});
-  m.withTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn({}));
+  m.withTxn.mockImplementation(txnPassthrough.withTxn);
 });
 
 // ===========================================================================
