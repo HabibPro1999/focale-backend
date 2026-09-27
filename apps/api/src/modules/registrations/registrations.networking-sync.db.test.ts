@@ -29,7 +29,11 @@ import {
   withTxn,
 } from "@app/db";
 import { dbTestsEnabled } from "@app/db/testing";
-import { seedEvent, seedForm, seedRegistration } from "../../../../../packages/db/tests/helpers/factories";
+import {
+  seedEvent,
+  seedForm,
+  seedRegistration,
+} from "@app/db/testing/fixtures";
 import { AccessService } from "../access/access.service";
 import { RegistrationPaymentsService } from "./registrations.payments.service";
 import { RegistrationSideEffects } from "./registrations.side-effects";

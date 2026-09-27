@@ -14,7 +14,7 @@ import {
   withdrawNetworkingProfile,
 } from "../../../src/queries/networking-erasure";
 import { createNetworkingWriteFixture } from "../../helpers/networking-write-fixture";
-import { dbTestsEnabled } from "../../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 
 // Plan 4.4b: withdrawal scrubs at once; after the window the rest is erased and
 // the profile row stays as a tombstone that registration sync never rewrites.

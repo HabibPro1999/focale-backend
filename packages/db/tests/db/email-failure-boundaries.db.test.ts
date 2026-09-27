@@ -9,7 +9,7 @@ import {
   rowsOf,
   writeResolvedSubjectIfLeaseHeld,
 } from "@app/db";
-import { dbTestsEnabled } from "../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 
 // Email-specific wrappers, supplementing lease-queue.db.test.ts. These tests
 // do not claim/recover generic queue rows or change the two retry counters.

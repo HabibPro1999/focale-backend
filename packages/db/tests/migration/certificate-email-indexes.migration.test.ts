@@ -2,10 +2,9 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ScratchDatabase } from "@app/db/testing";
-import { createScratchDatabase } from "@app/db/testing";
+import { createScratchDatabase, dbTestsEnabled } from "@app/db/testing";
 import { splitMigrationStatements } from "../../src/migrator/migration";
-import { dbTestsEnabled } from "../helpers/test-env";
-import { dbTestSetupTimeoutMs } from "../../vitest.shared";
+import { dbTestSetupTimeoutMs } from "../../../vitest.shared";
 
 // 0024 (2.12): the two per-trigger dedupe indexes from 0001 are rebuilt without
 // CERTIFICATE_SENT, keeping their names, so certificate emails dedupe per

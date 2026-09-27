@@ -30,7 +30,7 @@ import {
   seedEventAccess,
   seedForm,
   seedRegistration,
-} from "../../../../../packages/db/tests/helpers/factories";
+} from "@app/db/testing/fixtures";
 import { AccessService } from "../access/access.service";
 import { PricingService } from "../pricing/pricing.service";
 import { RegistrationSideEffects } from "./registrations.side-effects";

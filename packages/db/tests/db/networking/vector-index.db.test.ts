@@ -11,7 +11,7 @@ import {
   networkingVectorIndexPresent,
   networkingVectorIndexStatus,
 } from "../../../src/queries/networking-vector-search";
-import { dbTestsEnabled } from "../../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 
 // Plan 4.10 against a migrated database: index detection on both engines, and
 // the runbook's ledger-backed build of a deferred 0017 on CockroachDB.

@@ -12,7 +12,7 @@ import {
   withLockingTxn,
   withTxn,
 } from "@app/db";
-import { dbTestsEnabled } from "../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 import { cleanupDatabase } from "../helpers/cleanup";
 import {
   seedEvent,

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AdminCreateRegistrationSchema } from "@app/contracts";
 import { getAccessCapacityInfo, getAccessRegisteredCount, getDb } from "@app/db";
 import { dbTestsEnabled } from "@app/db/testing";
-import { seedEvent, seedEventAccess, seedForm } from "../../../../../packages/db/tests/helpers/factories";
+import { seedEvent, seedEventAccess, seedForm } from "@app/db/testing/fixtures";
 import type { Config } from "../../core/config";
 import { AccessService } from "../access/access.service";
 import { PricingService } from "../pricing/pricing.service";

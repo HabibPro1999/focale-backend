@@ -12,7 +12,7 @@ import {
   setReviewerThemesTxn,
   upsertCommitteeMembershipTxn,
 } from "@app/db";
-import { dbTestsEnabled } from "../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 import {
   seedAbstract,
   seedAbstractConfig,

@@ -1,7 +1,6 @@
 import { afterAll, beforeAll } from "vitest";
 import { inject } from "vitest";
-import { createTestDatabase } from "../src/testing";
-import { dbTestsEnabled } from "./helpers/test-env";
+import { createTestDatabase, dbTestsEnabled } from "@app/db/testing";
 
 // Point DATABASE_URL at the disposable test DB before any @app/db import touches
 // the lazy pool. When ungated we do nothing here — the test files themselves skip

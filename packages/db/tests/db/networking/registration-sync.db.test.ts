@@ -27,7 +27,7 @@ import {
 } from "../../../src";
 import { cleanupDatabase } from "../../helpers/cleanup";
 import { seedEvent, seedForm, seedRegistration } from "../../helpers/factories";
-import { dbTestsEnabled } from "../../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 
 // Plan 4.8: registration writes enqueue `networking.registration.sync` rows
 // instead of projecting in their transaction; the worker runs the sync with

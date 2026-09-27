@@ -4,6 +4,20 @@ The test helper is exported as `@app/db/testing` only for the workspace's
 `@app/source` resolution condition. It is not an installed production entry
 point. Test suites read process variables only; they never load `.env` files.
 
+The shared fixtures in `tests/helpers/` (seed factories, networking fixtures,
+the race barrier and row readers) are exported as `@app/db/testing/fixtures`,
+under the same `@app/source`-only condition. The build compiles `src/` only, so
+they never reach `dist`. App tests import them from there instead of reaching
+into `packages/db/tests` by relative path.
+
+Every Vitest config in `apps/` and `packages/` is built from
+`packages/vitest.shared.ts`: the resolve conditions, the SWC decorator options,
+and the unit and DB-tier builders with their `TEST_DB_MAX_WORKERS` and
+`TEST_DB_SETUP_TIMEOUT_MS` checks. Each config still lists its own globs and
+setup files (in order); the DB-tier and perf configs also set their own
+timeouts. The root `vitest.unit.setup.ts` is the
+workspace's unit setup, not part of the legacy app.
+
 Set `ALLOW_DB_TESTS=1` and `TEST_DB_ADMIN_URL` to opt in. The admin URL itself
 must point at a database name with an exact `test` or `ci` token. Its hostname
 must be loopback or an exact comma-separated entry in `TEST_DB_ALLOWED_HOSTS`.

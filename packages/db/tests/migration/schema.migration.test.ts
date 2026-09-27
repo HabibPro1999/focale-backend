@@ -3,10 +3,9 @@ import { generateDrizzleJson } from "drizzle-kit/api";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "../../src/schema";
 import type { ScratchDatabase } from "@app/db/testing";
-import { createScratchDatabase } from "@app/db/testing";
-import { dbTestsEnabled } from "../helpers/test-env";
+import { createScratchDatabase, dbTestsEnabled } from "@app/db/testing";
 import { normalizeSqlExpression } from "../helpers/sql-expression-normalizer";
-import { dbTestSetupTimeoutMs } from "../../vitest.shared";
+import { dbTestSetupTimeoutMs } from "../../../vitest.shared";
 
 const RAW_INDEX_NAMES = [
   "email_template_registration_uniq",

@@ -16,7 +16,7 @@ import {
   runLeased,
   type LeaseQueue,
 } from "@app/db";
-import { dbTestsEnabled } from "../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 import { seedClient, seedEvent } from "../helpers/factories";
 
 // 3.4: one contract for every lease queue, run against each queue's spec on a

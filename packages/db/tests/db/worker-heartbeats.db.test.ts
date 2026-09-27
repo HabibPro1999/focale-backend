@@ -7,7 +7,7 @@ import {
   recordWorkerHeartbeat,
   workerHeartbeats,
 } from "@app/db";
-import { dbTestsEnabled } from "../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 
 // 3.3: worker_heartbeats (migration 0023) against a migrated database (both engines in CI).
 const job = (overrides: Record<string, unknown> = {}) => ({

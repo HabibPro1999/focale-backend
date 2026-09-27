@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { enqueueOutboxEvent, getDb, outboxEvents, withTxn } from "@app/db";
-import { dbTestsEnabled } from "../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 
 // 3.5: enqueue dedupes with ON CONFLICT on the partial unique index
 // `outbox_events_dedupe_key_key` (predicate repeated) against a migrated

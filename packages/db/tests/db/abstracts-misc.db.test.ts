@@ -8,7 +8,7 @@ import {
   getDb,
   listAdminAbstracts,
 } from "@app/db";
-import { dbTestsEnabled } from "../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 import { cleanupDatabase } from "../helpers/cleanup";
 import { seedAbstract, seedAbstractConfig, seedEvent } from "../helpers/factories";
 

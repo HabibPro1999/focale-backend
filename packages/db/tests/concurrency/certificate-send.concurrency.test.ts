@@ -8,7 +8,7 @@ import {
   type CertificateEmailCandidate,
   type QueueCertificateEmailLogsInput,
 } from "@app/db";
-import { dbTestsEnabled } from "../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 import { cleanupDatabase } from "../helpers/cleanup";
 import { seedAbstract, seedEvent, seedForm, seedRegistration } from "../helpers/factories";
 

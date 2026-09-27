@@ -4,18 +4,16 @@ import { ErrorCodes } from "@app/contracts";
 import { findRegistrationForMutation, getDb, lockRegistrationForUpdate, outboxEvents, upsertEventPricing, withTxn } from "@app/db";
 import { dbTestsEnabled } from "@app/db/testing";
 import {
+  auditRowsOf,
+  readSponsorshipRow,
+  realtimeRowsOf,
   seedEvent,
   seedForm,
   seedRegistration,
   seedSponsorship,
   seedSponsorshipBatch,
-} from "../../../../../packages/db/tests/helpers/factories";
-import {
-  auditRowsOf,
-  readSponsorshipRow,
-  realtimeRowsOf,
   sponsorshipUsagesOf,
-} from "../../../../../packages/db/tests/helpers/sponsorship-inspect";
+} from "@app/db/testing/fixtures";
 import * as rowLocks from "../../../../../packages/db/src/locks";
 import { AccessService } from "../access/access.service";
 import { RegistrationPaymentsService } from "../registrations/registrations.payments.service";

@@ -1,14 +1,13 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { ScratchDatabase } from "@app/db/testing";
-import { createScratchDatabase } from "@app/db/testing";
+import { createScratchDatabase, dbTestsEnabled } from "@app/db/testing";
 import {
   acquireMigrationLease,
   assertLeaseAlive,
   releaseMigrationLease,
   runLeaseFencedTransaction,
 } from "../../src/migrator";
-import { dbTestsEnabled } from "../helpers/test-env";
-import { dbTestSetupTimeoutMs } from "../../vitest.shared";
+import { dbTestSetupTimeoutMs } from "../../../vitest.shared";
 
 // Lease times must follow the wall clock inside a transaction. now() is the
 // transaction's start time on both engines, so a fence based on it shortens
