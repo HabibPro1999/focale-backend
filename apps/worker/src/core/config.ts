@@ -6,7 +6,8 @@ let pinned: Config | undefined;
 
 /**
  * Boot: parse process.env once (throws ConfigError, fail fast) and pin the
- * result. main.ts hands the slices to configureDb / configureIntegrations.
+ * result. main.ts hands it to configureRuntime, which gives each package its
+ * slice.
  */
 export function loadConfig(): Config {
   pinned ??= parseAppConfig(process.env);

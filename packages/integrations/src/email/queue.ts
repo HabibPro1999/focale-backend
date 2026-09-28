@@ -76,8 +76,9 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 // through the outbox / EventBus in the api process, which this framework-free
 // package cannot reach. The worker/api bootstrap wires a listener here (N3):
 // see `emitEmailLogRealtimeEvent` below, installed via setEmailStatusChangeListener
-// at process startup in both apps/worker/src/main.ts and apps/api/src/main.ts —
-// emails can be queued/updated from either process.
+// by configureRuntime (runtime.ts), which both apps/worker/src/main.ts and
+// apps/api/src/main.ts call at process startup — emails can be queued/updated
+// from either process.
 // -----------------------------------------------------------------------------
 export type EmailStatusChangeListener = (
   emailLogId: string,

@@ -1,11 +1,6 @@
 import "reflect-metadata";
-import { assertSchemaCurrent, closeDb, configureDb, configureOutbox } from "@app/db";
-import {
-  coalesceEmailStatusChanges,
-  configureIntegrations,
-  emitEmailLogRealtimeEvents,
-  setEmailStatusChangeListener,
-} from "@app/integrations";
+import { assertSchemaCurrent, closeDb } from "@app/db";
+import { configureRuntime } from "@app/integrations";
 import { buildApp } from "./app.factory";
 import { loadConfig } from "./core/config";
 import { logger } from "./core/logger.service";
@@ -20,24 +15,7 @@ process.on("unhandledRejection", (reason) => {
 async function bootstrap() {
   // Parse the environment once (fail fast) and hand each package its slice.
   const config = loadConfig();
-  configureDb({
-    applicationName: "focale-api",
-    databaseUrl: config.DATABASE_URL,
-    settings: config.database,
-    jsonbValidation: config.JSONB_VALIDATION,
-  });
-  configureIntegrations(config.integrations);
-  // REALTIME_DISABLED: realtime.emit rows are not written (nothing drains them).
-  configureOutbox({ realtimeDisabled: config.realtime.disabled });
-
-  // N3: emails can be queued/updated from either process — wire the same
-  // listener here and in apps/worker/src/main.ts so no email-log status
-  // change is silently dropped depending on which process handled it.
-  // Coalesced per 250 ms (one event per event and status, listing the email
-  // logs); flushed before the pool closes. Not installed when realtime is
-  // disabled (nothing to emit).
-  const emailStatus = coalesceEmailStatusChanges(emitEmailLogRealtimeEvents);
-  if (!config.realtime.disabled) setEmailStatusChangeListener(emailStatus.listener);
+  const emailStatus = configureRuntime(config, "focale-api");
 
   // MIGRATIONS_CHECK: enforce refuses to start on a stale schema; warn logs
   // (and /health/ready reports it).
