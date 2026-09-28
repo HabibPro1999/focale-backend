@@ -43,7 +43,7 @@ export * from "./networking-contact-export";
 export * from "./networking-email-tracking";
 export * from "./networking-report-data";
 
-export * from "./networking-read";
+export * from "./networking-discovery";
 export * from "./networking-participant-read";
 export * from "./networking-metrics";
 export * from "./networking-admin-read";

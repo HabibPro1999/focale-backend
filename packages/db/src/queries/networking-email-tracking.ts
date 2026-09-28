@@ -5,7 +5,10 @@ import { getDb, type DbExecutor } from "../client";
 import { withTxnRetry } from "../txn";
 import { emailLogs } from "../schema/email";
 import { networkingDeliveries } from "../schema/networking";
-import type { NetworkingDeliveryRow } from "./networking-delivery";
+import { NETWORKING_DELIVERY_MAX_ATTEMPTS, type NetworkingDeliveryRow } from "./networking-delivery";
+
+/** Inlined as a literal, not a bind parameter. */
+const maxAttempts = sql.raw(String(NETWORKING_DELIVERY_MAX_ATTEMPTS));
 
 // Lock the delivery while checking ownership and writing its email log.
 async function ownsDelivery(db: DbExecutor, row: NetworkingDeliveryRow) {
@@ -203,7 +206,7 @@ export async function finishNetworkingEmailLog(
       // failed / deferred: nothing reached the provider, or Resend retries
       // under the same key, so the marker is cleared for the next attempt.
       const failed = outcome === "failed";
-      const exhausted = failed && row.attempts >= 5;
+      const exhausted = failed && row.attempts >= NETWORKING_DELIVERY_MAX_ATTEMPTS;
       await db
         .update(emailLogs)
         .set({
@@ -249,7 +252,7 @@ export async function settleOrphanedNetworkingEmailLogs(
       AND (l.context_snapshot ->> 'dispatchOwner') = 'networking'
       ${eventId ? sql`AND (l.context_snapshot ->> 'eventId') = ${eventId}` : sql``}
       AND NOT EXISTS (SELECT 1 FROM networking_deliveries d WHERE d.id = l.id
-        AND (d.status IN ('PENDING', 'PROCESSING') OR (d.status = 'FAILED' AND d.attempts < 5)))
+        AND (d.status IN ('PENDING', 'PROCESSING') OR (d.status = 'FAILED' AND d.attempts < ${maxAttempts})))
     RETURNING l.id`));
   return result.length;
 }

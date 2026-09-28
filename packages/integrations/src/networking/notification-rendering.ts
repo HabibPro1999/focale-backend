@@ -1,7 +1,9 @@
+import { NETWORKING_REMINDER_TITLES } from "@app/contracts";
 import { networkingCounterpartVisible, type networkingDeliveryContext } from "@app/db";
 import type { EmailAttachment } from "../email/providers";
 import { escapeHtml, networkingKeyring } from "@app/shared";
 import { networkingConfig } from "../config";
+import { dateIcs as icsTime, escapeIcs as icsEscape, foldIcs } from "./ics";
 export type NetworkingNotificationContext = Awaited<
   ReturnType<typeof networkingDeliveryContext>
 >;
@@ -27,8 +29,8 @@ const copy = {
     MEETING_CANCEL: "Your meeting was cancelled",
     MEETING_RESCHEDULE: "A new meeting time was proposed",
     MEETING_RESCHEDULE_DECLINED: "The proposed new time was declined; the original meeting is maintained",
-    MEETING_REMINDER_DAY: "Your meeting is tomorrow",
-    MEETING_REMINDER_HOUR: "Your meeting starts within an hour",
+    MEETING_REMINDER_DAY: NETWORKING_REMINDER_TITLES.en.MEETING_REMINDER_DAY,
+    MEETING_REMINDER_HOUR: NETWORKING_REMINDER_TITLES.en.MEETING_REMINDER_HOUR,
     MEETING_COMPLETED: "Your meeting attendance is confirmed",
     MEETING_NO_SHOW: "Meeting attendance was not confirmed",
     open: "Open networking",
@@ -74,8 +76,8 @@ const copy = {
     MEETING_CANCEL: "Votre rendez-vous a été annulé",
     MEETING_RESCHEDULE: "Un nouveau créneau a été proposé",
     MEETING_RESCHEDULE_DECLINED: "Le nouveau créneau a été refusé ; le rendez-vous initial est maintenu",
-    MEETING_REMINDER_DAY: "Votre rendez-vous a lieu demain",
-    MEETING_REMINDER_HOUR: "Votre rendez-vous commence dans une heure",
+    MEETING_REMINDER_DAY: NETWORKING_REMINDER_TITLES.fr.MEETING_REMINDER_DAY,
+    MEETING_REMINDER_HOUR: NETWORKING_REMINDER_TITLES.fr.MEETING_REMINDER_HOUR,
     MEETING_COMPLETED: "Votre rencontre a été confirmée",
     MEETING_NO_SHOW: "La présence au rendez-vous n’a pas été confirmée",
     open: "Ouvrir le networking",
@@ -121,8 +123,8 @@ const copy = {
     MEETING_CANCEL: "تم إلغاء موعدك",
     MEETING_RESCHEDULE: "تم اقتراح وقت جديد للقاء",
     MEETING_RESCHEDULE_DECLINED: "تم رفض الوقت المقترح الجديد؛ يبقى الموعد الأصلي مؤكّدًا",
-    MEETING_REMINDER_DAY: "موعدك غداً",
-    MEETING_REMINDER_HOUR: "يبدأ موعدك خلال ساعة",
+    MEETING_REMINDER_DAY: NETWORKING_REMINDER_TITLES.ar.MEETING_REMINDER_DAY,
+    MEETING_REMINDER_HOUR: NETWORKING_REMINDER_TITLES.ar.MEETING_REMINDER_HOUR,
     MEETING_COMPLETED: "تم تأكيد حضور اللقاء",
     MEETING_NO_SHOW: "لم يتم تأكيد حضور اللقاء",
     open: "فتح مساحة التواصل",
@@ -199,32 +201,6 @@ export function openNetworkingCode(value: string): string {
   const code = networkingKeyring({ legacySecret: tokenSecret, keys, writeV1: keyringWriteV1 }).open(value);
   if (!/^\d{6}$/.test(code)) throw new Error("Invalid encrypted code");
   return code;
-}
-function icsEscape(value: string) {
-  return value
-    .replace(/\\/g, "\\\\")
-    .replace(/\r/g, "")
-    .replace(/\n/g, "\\n")
-    .replace(/,/g, "\\,")
-    .replace(/;/g, "\\;");
-}
-function icsTime(date: Date) {
-  return date
-    .toISOString()
-    .replace(/[-:]/g, "")
-    .replace(/\.\d{3}Z$/, "Z");
-}
-function foldIcs(value: string) {
-  let output = "",
-    part = "";
-  for (const character of value) {
-    if (Buffer.byteLength(part + character, "utf8") > 73) {
-      output += part + "\r\n ";
-      part = "";
-    }
-    part += character;
-  }
-  return output + part;
 }
 /** The counterpart named in the message: only a visible peer of the recipient (4.6 policy, `peer` mode). */
 function notificationContact(ctx: NetworkingNotificationContext) {
