@@ -5,11 +5,7 @@ import {
   TiptapDocumentSchema,
   type TiptapDocument,
 } from "@app/contracts";
-import {
-  compileMjmlToHtml,
-  extractPlainText,
-  renderTemplateToMjml,
-} from "@app/integrations";
+import { compileTemplateContent } from "./template-content";
 
 export interface EmailTemplateStyleChange {
   path: string;
@@ -217,13 +213,9 @@ export async function runEmailTemplateStylePreflight(
     summary.reports.push(report);
 
     try {
-      const mjmlContent = renderTemplateToMjml(preflight.content);
-      const { html: htmlContent } = await compileMjmlToHtml(mjmlContent);
       const update: EmailTemplatePreflightUpdate = {
         content: preflight.content,
-        mjmlContent,
-        htmlContent,
-        plainContent: extractPlainText(preflight.content),
+        ...(await compileTemplateContent(preflight.content)),
       };
 
       if (!options.apply) {

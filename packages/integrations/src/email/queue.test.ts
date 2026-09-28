@@ -20,6 +20,8 @@ vi.mock("@app/db", async () => ({
   runLeased: (await vi.importActual<typeof import("@app/db")>("@app/db")).runLeased,
   pgUniqueViolation: (await vi.importActual<typeof import("@app/db")>("@app/db")).pgUniqueViolation,
   readEmailContextSnapshot: (await vi.importActual<typeof import("@app/db")>("@app/db")).readEmailContextSnapshot,
+  emailFailureStatus: (await vi.importActual<typeof import("@app/db")>("@app/db")).emailFailureStatus,
+  queuedEmailLogValues: (await vi.importActual<typeof import("@app/db")>("@app/db")).queuedEmailLogValues,
   getTemplateByTrigger: vi.fn(),
   createEmailLog: vi.fn(),
   hasActiveEmailLogForRegistrationTrigger: vi.fn(),
@@ -47,7 +49,7 @@ vi.mock("./providers/index", () => ({
 
 vi.mock("./rendering/index", () => ({
   // Identity resolver so tests can assert the exact strings passed downstream.
-  resolveVariables: vi.fn((tpl: string) => tpl),
+  resolveEmailParts: vi.fn((parts: unknown) => parts),
   buildEmailContextWithAccess: vi.fn(),
 }));
 
@@ -70,7 +72,7 @@ import {
   enqueueRealtimeOutboxEvent,
 } from "@app/db";
 import { JobTimeoutError, WorkerShutdownError } from "@app/shared";
-import { buildEmailContextWithAccess, resolveVariables } from "./rendering/index";
+import { buildEmailContextWithAccess, resolveEmailParts } from "./rendering/index";
 import {
   queueEmail,
   queueTriggeredEmail,
@@ -134,6 +136,59 @@ async function runOne(log: any) {
 
 // =============================================================================
 describe("queueEmail", () => {
+  it("writes the whole QUEUED row, null for each omitted field, and notifies QUEUED", async () => {
+    const listener = vi.fn();
+    setEmailStatusChangeListener(listener);
+    mocked(createEmailLog).mockResolvedValue({ ok: true, log: { id: "l1" } });
+
+    await queueEmail({ recipientEmail: "a@x.com" });
+    await queueEmail({
+      trigger: "REGISTRATION_CREATED",
+      registrationId: "reg-1",
+      recipientEmail: "b@x.com",
+      recipientName: "Bob",
+      abstractId: "abs-1",
+      abstractTrigger: "ABSTRACT_DECISION",
+      templateId: "t1",
+      contextSnapshot: { foo: "bar" },
+      dedupeKey: "outbox:1",
+    });
+
+    expect(mocked(createEmailLog).mock.calls.map(([row]) => row)).toStrictEqual([
+      {
+        trigger: null,
+        templateId: null,
+        registrationId: null,
+        abstractId: null,
+        abstractTrigger: null,
+        recipientEmail: "a@x.com",
+        recipientName: null,
+        subject: "",
+        status: "QUEUED",
+        contextSnapshot: null,
+        dedupeKey: null,
+      },
+      {
+        trigger: "REGISTRATION_CREATED",
+        templateId: "t1",
+        registrationId: "reg-1",
+        abstractId: "abs-1",
+        abstractTrigger: "ABSTRACT_DECISION",
+        recipientEmail: "b@x.com",
+        recipientName: "Bob",
+        subject: "",
+        status: "QUEUED",
+        contextSnapshot: { foo: "bar" },
+        dedupeKey: "outbox:1",
+      },
+    ]);
+    expect(listener.mock.calls).toEqual([
+      ["l1", "QUEUED"],
+      ["l1", "QUEUED"],
+    ]);
+    setEmailStatusChangeListener(undefined);
+  });
+
   it("creates a QUEUED row with empty subject", async () => {
     mocked(createEmailLog).mockResolvedValue({ ok: true, log: { id: "l1" } });
     await queueEmail({ templateId: "t1", recipientEmail: "a@x.com" });
@@ -319,14 +374,12 @@ describe("processEmailQueue", () => {
     );
     expect(markEmailSent).toHaveBeenCalledWith("log-1", "w1", "m1");
     expect(res).toEqual({ processed: 1, sent: 1, failed: 0, skipped: 0, uncertain: 0 });
-    // Subject and plain text are resolved as text (no HTML entities), the
-    // HTML body with escaping (6.1).
-    const calls = vi.mocked(resolveVariables).mock.calls;
-    expect(calls.map(([tpl, , options]) => [tpl, options])).toEqual([
-      ["Sub", { mode: "text" }],
-      ["H", undefined],
-      ["P", { mode: "text" }],
-    ]);
+    // The template's parts are filled together from the snapshot context
+    // (resolveEmailParts owns the text / HTML modes, 6.1).
+    expect(resolveEmailParts).toHaveBeenCalledExactlyOnceWith(
+      { subject: "Sub", html: "H", plain: "P" },
+      { eventName: "Conf", organizerEmail: "o@x.com", organizerName: "Org" },
+    );
   });
 
   it("claims 20 by default", async () => {
@@ -486,7 +539,7 @@ describe("processEmailQueue", () => {
 
   describe("no-template fallback (C1/N4)", () => {
     it("sends using the fallback subject/body instead of skipping", async () => {
-      // resolveVariables is mocked to identity in this file (see top-of-file
+      // resolveEmailParts is mocked to identity in this file (see top-of-file
       // mock) — so the subject/plainText below are the fallback template text
       // unchanged. Substitution itself is covered by rendering/*.test.ts; what
       // this test guards is that the fallback markers route into a real SEND.

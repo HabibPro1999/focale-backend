@@ -184,6 +184,43 @@ describe("certificate send planning (2.12)", () => {
     expect(row).not.toHaveProperty("abstractId");
   });
 
+  it("builds the whole QUEUED row of a registration and of an abstract", () => {
+    const plan = planCertificateEmailLogs(
+      input([candidate("reg-1")], [candidate("abs-1", { recipientName: null })]),
+      new Map(),
+      new Map(),
+    );
+    const contextSnapshot = {
+      fullName: "Ada Lovelace",
+      certificateCount: "2",
+      certificateList: "Attendance, Presenter",
+      _certificateTemplateIds: ["cert-a", "cert-b"],
+    };
+
+    expect(inserted(plan.registrations[0]).row).toStrictEqual({
+      id: expect.any(String),
+      trigger: "CERTIFICATE_SENT",
+      templateId: "et-1",
+      registrationId: "reg-1",
+      recipientEmail: "ada@example.com",
+      recipientName: "Ada Lovelace",
+      subject: "",
+      status: "QUEUED",
+      contextSnapshot,
+    });
+    expect(inserted(plan.abstracts[0]).row).toStrictEqual({
+      id: expect.any(String),
+      trigger: "CERTIFICATE_SENT",
+      templateId: "et-1",
+      abstractId: "abs-1",
+      recipientEmail: "ada@example.com",
+      recipientName: null,
+      subject: "",
+      status: "QUEUED",
+      contextSnapshot,
+    });
+  });
+
   it("reports already_sent when every eligible certificate is covered", () => {
     const plan = planCertificateEmailLogs(
       input([candidate("reg-1")]),

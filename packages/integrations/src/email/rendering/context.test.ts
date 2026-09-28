@@ -17,12 +17,11 @@ import {
   buildEmailContextWithAccess,
   loadEmailContextLookups,
   type EmailContextLookups,
-  resolveVariables,
-  sanitizeForHtml,
   getSampleEmailContext,
-  buildBatchEmailContext,
   buildRegistrationSelfLinks,
 } from "./context";
+import { resolveEmailParts, resolveVariables, sanitizeForHtml } from "./resolve";
+import { buildBatchEmailContext } from "./sponsorship-context";
 
 function reg(overrides: Record<string, unknown> = {}) {
   return {
@@ -440,6 +439,43 @@ describe("resolveVariables — text mode (subjects and plain-text bodies)", () =
     expect(
       resolveVariables("Hello {{firstName}},\n\nSee you.{{missing}}", { firstName: "Ana" } as never, text),
     ).toBe("Hello Ana,\n\nSee you.");
+  });
+});
+
+describe("resolveEmailParts", () => {
+  const values = {
+    fullName: "Zoë & Fils",
+    form_note: "line one\nline two",
+    sponsoredItems: '<div style="padding: 4px 0;">• <b>Atelier &amp; B :</b> 50 TND</div>',
+  } as never;
+
+  it("fills the subject and the plain text in text mode, the HTML escaped", () => {
+    const parts = {
+      subject: "Hi {{fullName}}: {{form_note}}",
+      html: "<p>{{fullName}}</p>{{sponsoredItems}}",
+      plain: "{{fullName}} — {{sponsoredItems}}",
+    };
+
+    expect(resolveEmailParts(parts, values)).toStrictEqual({
+      subject: "Hi Zoë & Fils: line one line two",
+      html:
+        "<p>Zoë &amp; Fils</p>" +
+        '<div style="padding: 4px 0;">• <b>Atelier &amp; B :</b> 50 TND</div>',
+      plain: "Zoë & Fils — • Atelier & B : 50 TND",
+    });
+  });
+
+  it("gives what resolveVariables gives each part in its mode", () => {
+    const parts = {
+      subject: "{{fullName}}",
+      html: "{{fullName}}",
+      plain: "{{fullName}}",
+    };
+    expect(resolveEmailParts(parts, values)).toStrictEqual({
+      subject: resolveVariables(parts.subject, values, { mode: "text" }),
+      html: resolveVariables(parts.html, values),
+      plain: resolveVariables(parts.plain, values, { mode: "text" }),
+    });
   });
 });
 

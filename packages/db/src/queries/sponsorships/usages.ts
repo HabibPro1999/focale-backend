@@ -1,5 +1,5 @@
 import { and, eq, ne } from "drizzle-orm";
-import type { PriceBreakdown } from "@app/contracts";
+import type { AutomaticEmailTrigger, PriceBreakdown } from "@app/contracts";
 import type { DbExecutor } from "../../client";
 import { enqueueOutboxEvent } from "../../outbox";
 import {
@@ -268,7 +268,7 @@ export async function updateUsageAmount(
 // ---------------------------------------------------------------------------
 
 export type SponsorshipEmailOutboxPayload = {
-  trigger: string;
+  trigger: AutomaticEmailTrigger;
   eventId: string;
   input: {
     recipientEmail: string;

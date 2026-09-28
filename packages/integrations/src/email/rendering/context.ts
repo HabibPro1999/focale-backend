@@ -1,8 +1,8 @@
 // =============================================================================
 // EMAIL CONTEXT
-// Builds EmailContext from registration data and resolves template variables.
-// Ported from the legacy email-context.ts. The DB-enrichment path reads through
-// @app/db query functions (the port of the legacy prisma calls).
+// Builds EmailContext from registration data (./resolve fills templates from
+// it). Ported from the legacy email-context.ts. The DB-enrichment path reads
+// through @app/db query functions (the port of the legacy prisma calls).
 // =============================================================================
 
 import { calculateSettlement } from "@app/shared";
@@ -17,7 +17,12 @@ import {
 } from "@app/db";
 import type { EmailContext } from "./types";
 import { formatDate } from "./locale";
-import { decodeEntities, escapeHtml } from "@app/shared";
+import {
+  BASE_PRICE_ITEM_LABEL,
+  bulletListHtml,
+  formatCurrency,
+  sponsoredItemHtml,
+} from "./format";
 import { integrationsConfig } from "../../config";
 
 // =============================================================================
@@ -245,7 +250,11 @@ export async function buildEmailContextWithAccess(
       const sponsoredItems: string[] = [];
       if (sponsorship.coversBasePrice && pricing) {
         sponsoredItems.push(
-          `<b>Inscription de base :</b> ${sanitizeForHtml(formatCurrency(pricing.basePrice, registration.currency))}`,
+          sponsoredItemHtml(
+            BASE_PRICE_ITEM_LABEL,
+            pricing.basePrice,
+            registration.currency,
+          ),
         );
       }
 
@@ -254,14 +263,12 @@ export async function buildEmailContextWithAccess(
         const coveredAccess = await readAccessForEmail(coveredIds, eventLookups);
         for (const access of coveredAccess) {
           sponsoredItems.push(
-            `<b>${sanitizeForHtml(access.name)} :</b> ${sanitizeForHtml(formatCurrency(access.price, registration.currency))}`,
+            sponsoredItemHtml(access.name, access.price, registration.currency),
           );
         }
       }
 
-      context.sponsoredItems = sponsoredItems
-        .map((item) => `<div style="padding: 4px 0;">• ${item}</div>`)
-        .join("");
+      context.sponsoredItems = bulletListHtml(sponsoredItems);
       // Use the clamped applied amount (registration.sponsorshipAmount), not
       // the sponsorship's face value, which may exceed the registration total.
       context.remainingAmount = formatCurrency(
@@ -277,73 +284,6 @@ export async function buildEmailContextWithAccess(
   }
 
   return context;
-}
-
-// =============================================================================
-// RESOLVE VARIABLES IN TEMPLATE
-// =============================================================================
-
-// Variables that hold server-built HTML (their user parts are escaped when they
-// are built) — inserted as-is into HTML, converted to text in text mode.
-const HTML_SAFE_VARIABLES = new Set(["sponsoredItems", "beneficiaryList"]);
-
-export interface ResolveVariablesOptions {
-  /**
-   * `html` (default): values are HTML-escaped, for HTML bodies.
-   * `text`: for subjects and plain-text bodies. Values are inserted unescaped
-   * (so "Dupont & Fils" is not sent as "Dupont &amp; Fils"), server-built HTML
-   * values become text, and CR/LF in values becomes a space (no header
-   * injection through a subject).
-   */
-  mode?: "html" | "text";
-}
-
-export function resolveVariables(
-  template: string,
-  context: EmailContext | Record<string, unknown>,
-  options: ResolveVariablesOptions = {},
-): string {
-  const mode = options.mode ?? "html";
-  return template.replace(/\{\{([A-Za-z0-9_.-]+)\}\}/g, (_match, varId) => {
-    const value = (context as Record<string, unknown>)[varId];
-
-    if (value !== undefined && value !== null && value !== "") {
-      if (mode === "text") {
-        const text = HTML_SAFE_VARIABLES.has(varId)
-          ? serverHtmlToText(String(value))
-          : String(value);
-        return text.replace(/[\r\n]+/g, " ");
-      }
-      if (HTML_SAFE_VARIABLES.has(varId)) {
-        return String(value);
-      }
-      return sanitizeForHtml(String(value));
-    }
-
-    return "";
-  });
-}
-
-/** Server-built HTML list (`<div>• …</div>…`) → text, one item per line. */
-function serverHtmlToText(html: string): string {
-  return decodeEntities(
-    html
-      .replace(/<\s*br\s*\/?>/gi, "\n")
-      .replace(/<\s*\/\s*(div|p|li)\s*>/gi, "\n")
-      .replace(/<[^>]*>/g, ""),
-  )
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join("\n");
-}
-
-// =============================================================================
-// XSS SANITIZATION
-// =============================================================================
-
-export function sanitizeForHtml(value: unknown): string {
-  return escapeHtml(String(value ?? ""));
 }
 
 // =============================================================================
@@ -378,14 +318,6 @@ const UNNAMED_REGISTRANT: Record<LanguageCode, string> = {
   en: "Registrant",
   ar: "المشارك",
 };
-
-// Sponsorship contexts are built inside the sponsorship transactions, which do
-// not load a form language yet, so their dates stay in English.
-const SPONSORSHIP_EMAIL_LANGUAGE: LanguageCode = "en";
-
-function formatCurrency(amount: number, currency = "TND"): string {
-  return `${amount.toLocaleString("fr-TN")} ${currency}`;
-}
 
 function formatPaymentStatus(status: string, language: LanguageCode): string {
   return PAYMENT_STATUS_LABELS[status]?.[language] || status;
@@ -454,216 +386,5 @@ export function getSampleEmailContext(language: LanguageCode): EmailContext {
 
     certificateCount: "2",
     certificateList: "Attendance Certificate, Speaker Certificate",
-  };
-}
-
-// =============================================================================
-// SPONSORSHIP EMAIL CONTEXT BUILDERS (pure — inputs pre-fetched by callers)
-// =============================================================================
-
-export interface BatchEmailContextInput {
-  batch: {
-    labName: string;
-    contactName: string;
-    email: string;
-    phone: string | null;
-  };
-  sponsorships: Array<{
-    beneficiaryName: string;
-    beneficiaryEmail: string;
-    totalAmount: number;
-  }>;
-  event: {
-    name: string;
-    startDate: Date;
-    location: string | null;
-    client: { name: string };
-  };
-  currency: string;
-}
-
-export interface LinkedSponsorshipContextInput {
-  amountApplied: number;
-  sponsorship: {
-    code: string;
-    beneficiaryName: string;
-    coversBasePrice: boolean;
-    coveredAccessIds: string[];
-    totalAmount: number;
-    batch: {
-      labName: string;
-      contactName: string;
-      email: string;
-    };
-  };
-  registration: {
-    id: string;
-    email: string;
-    firstName: string | null;
-    lastName: string | null;
-    phone: string | null;
-    totalAmount: number;
-    baseAmount: number;
-    sponsorshipAmount: number;
-    linkBaseUrl: string | null;
-    editToken: string | null;
-  };
-  event: {
-    name: string;
-    slug: string;
-    startDate: Date;
-    location: string | null;
-    client: { name: string };
-  };
-  pricing: { basePrice: number } | null;
-  accessItems: Array<{ id: string; name: string; price: number }>;
-  currency: string;
-}
-
-/** Lab-confirmation email context (SPONSORSHIP_BATCH_SUBMITTED). */
-export function buildBatchEmailContext(
-  input: BatchEmailContextInput,
-): Partial<EmailContext> {
-  const { batch, sponsorships, event, currency } = input;
-  const totalAmount = sponsorships.reduce((sum, s) => sum + s.totalAmount, 0);
-
-  return {
-    eventName: event.name,
-    eventDate: formatDate(event.startDate, SPONSORSHIP_EMAIL_LANGUAGE),
-    eventLocation: event.location || "",
-    organizerName: event.client.name,
-
-    labName: batch.labName,
-    labContactName: batch.contactName,
-    labEmail: batch.email,
-
-    beneficiaryCount: String(sponsorships.length),
-    totalBatchAmount: formatCurrency(totalAmount, currency),
-
-    beneficiaryList: sponsorships
-      .map(
-        (s) =>
-          `<div style="padding: 4px 0;">• <b>${sanitizeForHtml(s.beneficiaryName)}</b> (${sanitizeForHtml(s.beneficiaryEmail)}) : ${sanitizeForHtml(formatCurrency(s.totalAmount, currency))}</div>`,
-      )
-      .join(""),
-
-    firstName: batch.contactName.split(" ")[0] || batch.contactName,
-    lastName: batch.contactName.split(" ").slice(1).join(" ") || "",
-    fullName: batch.contactName,
-    email: batch.email,
-    phone: batch.phone || "",
-    registrationDate: formatDate(new Date(), SPONSORSHIP_EMAIL_LANGUAGE),
-    registrationId: "",
-    registrationNumber: "",
-    eventEndDate: "",
-    eventDescription: "",
-    totalAmount: formatCurrency(totalAmount, currency),
-    paidAmount: "0 " + currency,
-    amountDue: formatCurrency(totalAmount, currency),
-    paymentStatus: "N/A",
-    paymentMethod: "",
-    selectedAccess: "",
-    selectedWorkshops: "",
-    selectedDinners: "",
-    registrationLink: "",
-    editRegistrationLink: "",
-    paymentLink: "",
-    organizerEmail: "",
-    organizerPhone: "",
-    bankName: "",
-    bankAccountName: "",
-    bankAccountNumber: "",
-  };
-}
-
-/** Doctor-notification context (SPONSORSHIP_LINKED / SPONSORSHIP_APPLIED). */
-export function buildLinkedSponsorshipContext(
-  input: LinkedSponsorshipContextInput,
-): Partial<EmailContext> {
-  const { sponsorship, registration, event, pricing, accessItems, currency } =
-    input;
-
-  const sponsoredItems: string[] = [];
-  if (sponsorship.coversBasePrice) {
-    const basePrice = registration.baseAmount ?? pricing?.basePrice ?? 0;
-    sponsoredItems.push(
-      `<b>Inscription de base :</b> ${sanitizeForHtml(formatCurrency(basePrice, currency))}`,
-    );
-  }
-  for (const accessId of sponsorship.coveredAccessIds) {
-    const access = accessItems.find((a) => a.id === accessId);
-    if (access) {
-      sponsoredItems.push(
-        `<b>${sanitizeForHtml(access.name)} :</b> ${sanitizeForHtml(formatCurrency(access.price, currency))}`,
-      );
-    }
-  }
-
-  const { amountDue: remainingAmount } = calculateSettlement({
-    totalAmount: registration.totalAmount,
-    paidAmount: 0,
-    sponsorshipAmount: registration.sponsorshipAmount,
-  });
-
-  const selfLinks = buildRegistrationSelfLinks({
-    registrationId: registration.id,
-    eventSlug: event.slug,
-    editToken: registration.editToken,
-    linkBaseUrl: registration.linkBaseUrl,
-  });
-
-  const isFullySponsored =
-    registration.sponsorshipAmount >= registration.totalAmount;
-
-  return {
-    firstName: registration.firstName || "",
-    lastName: registration.lastName || "",
-    fullName:
-      [registration.firstName, registration.lastName]
-        .filter(Boolean)
-        .join(" ") || sponsorship.beneficiaryName,
-    email: registration.email,
-    phone: registration.phone || "",
-    registrationDate: formatDate(new Date(), SPONSORSHIP_EMAIL_LANGUAGE),
-    registrationId: registration.id,
-    registrationNumber: registration.id.slice(0, 8).toUpperCase(),
-
-    eventName: event.name,
-    eventDate: formatDate(event.startDate, SPONSORSHIP_EMAIL_LANGUAGE),
-    eventEndDate: "",
-    eventLocation: event.location || "",
-    eventDescription: "",
-    organizerName: event.client.name,
-    organizerEmail: "",
-    organizerPhone: "",
-
-    totalAmount: formatCurrency(registration.totalAmount, currency),
-    paidAmount: isFullySponsored
-      ? formatCurrency(registration.totalAmount, currency)
-      : "0 " + currency,
-    amountDue: formatCurrency(remainingAmount, currency),
-    paymentStatus: isFullySponsored ? "Paid" : "Pending",
-    paymentMethod: "",
-
-    selectedAccess: "",
-    selectedWorkshops: "",
-    selectedDinners: "",
-
-    ...selfLinks,
-
-    bankName: "",
-    bankAccountName: "",
-    bankAccountNumber: "",
-
-    sponsorshipCode: sponsorship.code,
-    sponsorshipAmount: formatCurrency(input.amountApplied, currency),
-    labName: sponsorship.batch.labName,
-    labContactName: sponsorship.batch.contactName,
-    labEmail: sponsorship.batch.email,
-    beneficiaryName: sponsorship.beneficiaryName,
-    sponsoredItems: sponsoredItems
-      .map((item) => `<div style="padding: 4px 0;">• ${item}</div>`)
-      .join(""),
-    remainingAmount: formatCurrency(remainingAmount, currency),
   };
 }

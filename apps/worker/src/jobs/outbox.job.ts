@@ -20,7 +20,6 @@ import {
   queueAbstractEmail,
   handleStorageDeleteOutbox,
 } from "@app/integrations";
-import type { AutomaticEmailTrigger } from "@app/contracts";
 import type { Job, JobContext } from "../job";
 
 const log = createLogger({ name: "worker:outbox" });
@@ -51,7 +50,7 @@ export function buildOutboxHandlers(): OutboxHandlerRegistry {
     "email.triggered": async (payload): Promise<OutboxHandlerResult> => {
       const p = payload as TriggeredEmailOutboxPayload;
       const queued = await queueTriggeredEmail(
-        p.trigger as AutomaticEmailTrigger,
+        p.trigger,
         p.eventId,
         p.registration,
       );
@@ -59,11 +58,7 @@ export function buildOutboxHandlers(): OutboxHandlerRegistry {
     },
     "email.sponsorship": async (payload): Promise<OutboxHandlerResult> => {
       const p = payload as SponsorshipEmailOutboxPayload;
-      const queued = await queueSponsorshipEmail(
-        p.trigger as AutomaticEmailTrigger,
-        p.eventId,
-        p.input,
-      );
+      const queued = await queueSponsorshipEmail(p.trigger, p.eventId, p.input);
       return queued ? "processed" : "skipped";
     },
     "email.abstract": async (payload, meta): Promise<OutboxHandlerResult> => {

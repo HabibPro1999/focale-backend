@@ -1,19 +1,12 @@
 import { and, eq, sql } from "drizzle-orm";
+import { EMAIL_FALLBACK_BODY_KEY, EMAIL_FALLBACK_SUBJECT_KEY } from "@app/contracts";
 import { newId } from "@app/shared";
 import { pgUniqueViolation, withTxn } from "../txn";
 import { abstracts } from "../schema/abstracts";
 import { emailLogs, emailTemplates } from "../schema/email";
 import { registrations } from "../schema/registrations";
-import type { EmailLogRow } from "./email";
+import type { EmailLogRow } from "./email-logs";
 import { readEmailContextSnapshot } from "./stored-json";
-
-/**
- * Keys of a plain-text fallback template stashed in context_snapshot when an
- * abstract email has no admin template (the email queue renders it like a
- * template; same keys as FALLBACK_*_KEY in @app/integrations email/queue.ts).
- */
-const EMAIL_FALLBACK_SUBJECT_KEY = "_fallbackSubject";
-const EMAIL_FALLBACK_BODY_KEY = "_fallbackPlainBody";
 
 export type ResendEmailLogResult =
   | { ok: true; log: EmailLogRow }

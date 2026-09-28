@@ -298,6 +298,13 @@ export const ResendEmailLogParamSchema = z.strictObject({
 // Stored email-log context (plan 5.2)
 // ============================================================================
 
+/** Fallback-only abstract emails (no admin template): the unresolved subject. */
+export const EMAIL_FALLBACK_SUBJECT_KEY = "_fallbackSubject";
+/** Fallback-only abstract emails: the unresolved plain-text body. */
+export const EMAIL_FALLBACK_BODY_KEY = "_fallbackPlainBody";
+/** Certificate emails: the templates this email carries (the per-registration dedupe key). */
+export const CERTIFICATE_TEMPLATE_IDS_KEY = "_certificateTemplateIds";
+
 /**
  * The stored `email_logs.context_snapshot` document: the template variables
  * captured when the email was queued (any keys; the send path resolves
@@ -307,12 +314,9 @@ export const ResendEmailLogParamSchema = z.strictObject({
  */
 export const StoredEmailContextSnapshotSchema = z
   .looseObject({
-    /** Fallback-only abstract emails (no admin template): the unresolved subject. */
-    _fallbackSubject: z.string().optional(),
-    /** Fallback-only abstract emails: the unresolved plain-text body. */
-    _fallbackPlainBody: z.string().optional(),
-    /** Certificate emails: the templates this email carries (the per-registration dedupe key). */
-    _certificateTemplateIds: z.array(z.string()).optional(),
+    [EMAIL_FALLBACK_SUBJECT_KEY]: z.string().optional(),
+    [EMAIL_FALLBACK_BODY_KEY]: z.string().optional(),
+    [CERTIFICATE_TEMPLATE_IDS_KEY]: z.array(z.string()).optional(),
   })
   .nullable();
 
