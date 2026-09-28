@@ -6,6 +6,7 @@ import {
   type UpdateThemeInput,
   type AdditionalFieldsInput,
 } from "@app/contracts";
+import { pickDefined } from "@app/shared";
 import {
   getOrCreateAbstractConfig,
   updateAbstractConfig,
@@ -18,7 +19,9 @@ import {
   updateThemeRow,
   softDeleteThemeRow,
   countCodedAbstractsByTheme,
+  type AbstractConfigInsert,
   type AbstractConfigRow,
+  type AbstractThemeInsert,
   type AbstractThemeRow,
 } from "@app/db";
 import { AppException, conflict, notFound } from "../../core/app-exception";
@@ -89,10 +92,10 @@ export class AbstractsConfigService {
     }
 
     // Build update data (only fields present in the patch).
-    const data: Record<string, unknown> = {};
-    for (const key of SCALAR_FIELDS) {
-      if (fields[key] !== undefined) data[key] = fields[key];
-    }
+    const data: Partial<AbstractConfigInsert> = pickDefined(
+      fields,
+      SCALAR_FIELDS,
+    );
     if (fields.languages !== undefined) data.languages = fields.languages;
     for (const key of DEADLINE_FIELDS) {
       const value = fields[key];
@@ -174,11 +177,11 @@ export class AbstractsConfigService {
    */
   private assertValidDeadlineWindows(
     config: AbstractConfigRow,
-    data: Record<string, unknown>,
+    data: Partial<AbstractConfigInsert>,
   ): void {
     const effective = (key: (typeof DEADLINE_FIELDS)[number]): Date | null =>
       (Object.prototype.hasOwnProperty.call(data, key)
-        ? (data[key] as Date | null)
+        ? data[key]
         : config[key]) ?? null;
 
     const submissionStartAt = effective("submissionStartAt");
@@ -287,7 +290,7 @@ export class AbstractsConfigService {
     if (!found || found.eventId !== eventId) {
       throw notFound("Theme not found");
     }
-    const data: Record<string, unknown> = {};
+    const data: Partial<AbstractThemeInsert> = {};
     if (body.translations !== undefined) data.translations = body.translations;
     if (body.label !== undefined) data.label = body.label;
     if (body.description !== undefined)

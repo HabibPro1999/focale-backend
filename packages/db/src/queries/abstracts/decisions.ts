@@ -13,6 +13,7 @@ import {
   FINAL_STATUSES,
   CODE_SUFFIX,
   type AbstractFinalType,
+  type FinalizeAbstractInput,
 } from "@app/contracts";
 import { selectDecisionEmails } from "@app/shared";
 import { getDb, type DbExecutor } from "../../client";
@@ -29,7 +30,7 @@ import {
 } from "../../schema/abstracts";
 import { events } from "../../schema/events-access";
 import { users } from "../../schema/users-clients";
-import { enqueueAbstractEmailOutboxEvent, type AbstractRow } from "./shared";
+import { enqueueAbstractEmailOutboxEvent } from "./shared";
 
 // 23505 unique violation on (eventId, code) — two themes sharing a sortOrder
 // can allocate the identical code string (H5); catching it here turns an
@@ -42,6 +43,15 @@ function isDuplicateCodeViolation(error: unknown): boolean {
 // ============================================================================
 // Admin decisions — finalize / reopen / presented
 // ============================================================================
+
+/** A printed code: final-type suffix, theme sortOrder, two-digit number. */
+function formatAbstractCode(
+  finalType: AbstractFinalType,
+  sortOrder: number,
+  codeNumber: number,
+): string {
+  return `${CODE_SUFFIX[finalType]}${sortOrder}-${String(codeNumber).padStart(2, "0")}`;
+}
 
 async function allocateAbstractCode(
   tx: DbExecutor,
@@ -88,7 +98,7 @@ async function allocateAbstractCode(
     .returning({ lastValue: abstractCodeCounters.lastValue });
 
   const codeNumber = counter.lastValue;
-  const code = `${CODE_SUFFIX[finalType]}${theme.sortOrder}-${String(codeNumber).padStart(2, "0")}`;
+  const code = formatAbstractCode(finalType, theme.sortOrder, codeNumber);
   return { code, codeNumber };
 }
 
@@ -107,7 +117,7 @@ export type FinalizeResult =
 export async function finalizeAbstractTxn(params: {
   eventId: string;
   abstractId: string;
-  decision: AbstractRow["status"];
+  decision: FinalizeAbstractInput["decision"];
   finalType: AbstractFinalType | undefined;
   performedBy: string;
 }): Promise<FinalizeResult> {
@@ -131,8 +141,13 @@ export async function finalizeAbstractTxn(params: {
       if (FINAL_STATUSES.includes(existing.status)) {
         return { ok: false, reason: "already_finalized" };
       }
-      if (decision === "ACCEPTED" && !finalType) {
-        return { ok: false, reason: "missing_final_type" };
+      // The final type an acceptance stores; any other decision stores none.
+      let acceptedType: AbstractFinalType | null = null;
+      if (decision === "ACCEPTED") {
+        if (!finalType) {
+          return { ok: false, reason: "missing_final_type" };
+        }
+        acceptedType = finalType;
       }
 
       const [ev] = await tx
@@ -167,45 +182,39 @@ export async function finalizeAbstractTxn(params: {
         .where(eq(abstractThemeLinks.abstractId, abstractId))
         .orderBy(asc(abstractThemes.sortOrder));
 
-      const nextData: {
-        status: AbstractRow["status"];
-        finalType: AbstractFinalType | null;
-        code?: string | null;
-        codeNumber?: number | null;
-      } = {
-        status: decision,
-        finalType: decision === "ACCEPTED" ? (finalType as AbstractFinalType) : null,
-      };
-
       let allocatedCode: { code: string; codeNumber: number } | null = null;
-      if (decision === "ACCEPTED") {
+      if (acceptedType) {
         const codeTheme = themes[0];
         if (!codeTheme) {
           return { ok: false, reason: "no_theme" };
         }
         if (existing.codeNumber != null) {
-          const code = `${CODE_SUFFIX[finalType as AbstractFinalType]}${codeTheme.sortOrder}-${String(existing.codeNumber).padStart(2, "0")}`;
+          const code = formatAbstractCode(
+            acceptedType,
+            codeTheme.sortOrder,
+            existing.codeNumber,
+          );
           allocatedCode = { code, codeNumber: existing.codeNumber };
         } else {
           allocatedCode = await allocateAbstractCode(
             tx,
             eventId,
-            finalType as AbstractFinalType,
+            acceptedType,
             codeTheme,
           );
         }
-        nextData.code = allocatedCode.code;
-        nextData.codeNumber = allocatedCode.codeNumber;
-      } else {
-        nextData.code = null;
-        nextData.codeNumber = null;
       }
 
       // Final-status guard (ADR 0001 rule 5); the row lock already rules out
       // another finalize in between, so 0 rows means it was final before.
       const [updated] = await tx
         .update(abstracts)
-        .set(nextData)
+        .set({
+          status: decision,
+          finalType: acceptedType,
+          code: allocatedCode?.code ?? null,
+          codeNumber: allocatedCode?.codeNumber ?? null,
+        })
         .where(
           and(
             eq(abstracts.id, abstractId),
@@ -230,6 +239,7 @@ export async function finalizeAbstractTxn(params: {
           action: "finalize",
           changes: {
             status: { old: existing.status, new: decision },
+            // The requested type, also when a rejection stores none.
             finalType: { old: existing.finalType, new: finalType ?? null },
             code: { old: existing.code, new: allocatedCode?.code ?? null },
           },

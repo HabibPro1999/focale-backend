@@ -34,20 +34,6 @@ export async function findAbstractBasic(
   return row ?? null;
 }
 
-export async function getCommitteeConfig(
-  eventId: string,
-): Promise<{ reviewersPerAbstract: number; divergenceThreshold: number } | null> {
-  const [row] = await getDb()
-    .select({
-      reviewersPerAbstract: abstractConfig.reviewersPerAbstract,
-      divergenceThreshold: abstractConfig.divergenceThreshold,
-    })
-    .from(abstractConfig)
-    .where(eq(abstractConfig.eventId, eventId))
-    .limit(1);
-  return row ?? null;
-}
-
 /** Scores of active, scored reviews for an abstract (divergence gate input). */
 export async function findScoredReviewScores(
   abstractId: string,
@@ -226,16 +212,10 @@ export async function assignReviewersTxn(params: {
   });
 }
 
-// ============================================================================
-// L3: reviewer assignment config needs distributeByTheme too
-// ============================================================================
-
 /**
- * Same shape as getCommitteeConfig plus distributeByTheme (L3: the flag was
- * defined on the schema but read nowhere in the assignReviewers path, so
- * assignments never enforced theme overlap even when admins turned it on).
- * Appended rather than added as a field to getCommitteeConfig to avoid
- * touching that existing export.
+ * The config the reviewer assignment gates read: reviewer count, divergence
+ * threshold and distributeByTheme (L3: the theme-overlap rule the flag turns
+ * on). Null when the event has no abstract config.
  */
 export async function getReviewerAssignmentConfig(
   eventId: string,

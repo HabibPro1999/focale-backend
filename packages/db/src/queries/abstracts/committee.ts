@@ -115,7 +115,7 @@ function accessibleAbstractWhere(
   return and(eq(abstracts.eventId, eventId), or(...orParts));
 }
 
-export async function countAccessibleAbstracts(
+async function countAccessibleAbstracts(
   eventId: string,
   reviewerId: string,
 ): Promise<number> {

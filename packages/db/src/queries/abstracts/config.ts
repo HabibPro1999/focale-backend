@@ -2,7 +2,7 @@
 import { count, eq } from "drizzle-orm";
 import { getDb, type DbExecutor } from "../../client";
 import { abstractConfig, abstracts } from "../../schema/abstracts";
-import type { AbstractConfigRow } from "./shared";
+import type { AbstractConfigInsert, AbstractConfigRow } from "./shared";
 
 // ============================================================================
 // Config
@@ -27,7 +27,7 @@ export async function getOrCreateAbstractConfig(
 
 export async function updateAbstractConfig(
   id: string,
-  data: Record<string, unknown>,
+  data: Partial<AbstractConfigInsert>,
   exec: DbExecutor,
 ): Promise<AbstractConfigRow> {
   const [row] = await exec
