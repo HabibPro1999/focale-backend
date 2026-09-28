@@ -33,6 +33,7 @@ import {
   networkingTotp,
   networkingHash,
 } from "./networking.security";
+import { seedNetworkingEvents } from "./__testing__/event-fixture";
 import { dbTestsEnabled } from "@app/db/testing";
 const enabled = dbTestsEnabled();
 const mfa = new NetworkingMfaService();
@@ -74,19 +75,9 @@ describe.runIf(enabled)(
         name: "Networking isolation tests",
         enabledModules: ["networking", "registrations", "emails"],
       });
-      for (const id of [ids.event, ids.other]) {
-        const row = await networkingStore(getDb()).insert("events", {
-          id,
-          clientId: ids.client,
-          name: "Networking fixture",
-          slug: id,
-          status: "OPEN",
-          startDate: new Date("2031-04-05T00:00Z"),
-          endDate: new Date("2031-04-06T00:00Z"),
-        });
-        if (id === ids.event) event = row;
-        await networkingStore(getDb()).insert("configs", { eventId: id, config });
-      }
+      [event] = await seedNetworkingEvents(db, {
+        clientId: ids.client, eventIds: [ids.event, ids.other], name: "Networking fixture", config,
+      });
       await db.insert(forms).values({
         id: ids.form,
         eventId: ids.event,
