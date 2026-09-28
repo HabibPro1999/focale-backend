@@ -7,7 +7,7 @@ import {
   resealNetworkingSecrets,
 } from "@app/db";
 import { dbTestsEnabled } from "@app/db/testing";
-import { createNetworkingWriteFixture } from "../../../../../packages/db/tests/helpers/networking-write-fixture";
+import { createNetworkingWriteFixture } from "@app/db/testing/fixtures";
 import { NetworkingService, type NetworkingContext } from "./networking.service";
 import { NetworkingMfaService } from "./networking.mfa.service";
 import { networkingHash, networkingKeys, networkingTotp, openNetworkingSecret } from "./networking.security";

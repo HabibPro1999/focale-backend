@@ -9,7 +9,7 @@ import {
 import { networkingStore } from "../../../src/queries/networking-store";
 import { networkingSecondFactors } from "../../../src/schema/networking-mfa";
 import { createNetworkingWriteFixture } from "../../helpers/networking-write-fixture";
-import { dbTestsEnabled } from "../../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 
 // Plan 4.5 key-usage report, retirement refusal and reseal on a migrated database (both engines in CI).
 const legacySecret = "legacy-networking-secret-at-least-32-chars";

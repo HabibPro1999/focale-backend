@@ -2,10 +2,9 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ScratchDatabase } from "@app/db/testing";
-import { createScratchDatabase } from "@app/db/testing";
+import { createScratchDatabase, dbTestsEnabled } from "@app/db/testing";
 import { splitMigrationStatements } from "../../src/migrator/migration";
-import { dbTestsEnabled } from "../helpers/test-env";
-import { dbTestSetupTimeoutMs } from "../../vitest.shared";
+import { dbTestSetupTimeoutMs } from "../../../vitest.shared";
 
 // 3.6: 0028 adds the UNCERTAIN email status (outside a transaction), 0029 the
 // provider-attempt marker columns and the (template_id, queued_at) index.

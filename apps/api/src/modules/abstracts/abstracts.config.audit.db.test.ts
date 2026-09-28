@@ -3,11 +3,11 @@ import * as db from "@app/db";
 import { getOrCreateAbstractConfig, isTransactionExecutor } from "@app/db";
 import { dbTestsEnabled } from "@app/db/testing";
 import {
+  auditRowsOf,
   seedAbstract,
   seedAbstractConfig,
   seedEvent,
-} from "../../../../../packages/db/tests/helpers/factories";
-import { auditRowsOf } from "../../../../../packages/db/tests/helpers/sponsorship-inspect";
+} from "@app/db/testing/fixtures";
 import { AbstractsConfigService } from "./abstracts.config.service";
 
 // Config writes and their audit rows commit together: a failed audit insert

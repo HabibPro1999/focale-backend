@@ -10,7 +10,7 @@ import { setNetworkingNoticePublisher } from "../../../src/queries/networking-no
 import { networkingNotificationsPage } from "../../../src/queries/networking-participant-read";
 import { networkingTransaction } from "../../../src/queries/networking-store";
 import { createNetworkingWriteFixture } from "../../helpers/networking-write-fixture";
-import { dbTestsEnabled } from "../../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 
 // Plan 4.3: every participant notification signals the participant's live
 // streams. Outside an api networking transaction the signal is an IDs-only

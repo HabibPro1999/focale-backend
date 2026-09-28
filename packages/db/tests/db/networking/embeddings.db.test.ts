@@ -23,7 +23,7 @@ import {
   getNetworkingRecommendationProfiles,
   findNetworkingVectorCandidates,
 } from "../../../src";
-import { dbTestsEnabled } from "../../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 
 const ids = {
   client: randomUUID(),

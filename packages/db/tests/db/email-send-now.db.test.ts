@@ -8,7 +8,7 @@ import {
   markEmailFailed,
   markEmailSent,
 } from "@app/db";
-import { dbTestsEnabled } from "../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 import { cleanupDatabase } from "../helpers/cleanup";
 
 // 3.6b: a send-now email's row is born leased and marked as a provider

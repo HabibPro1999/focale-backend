@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client } from "pg";
 import type { ScratchDatabase } from "@app/db/testing";
-import { createScratchDatabase } from "@app/db/testing";
+import { createScratchDatabase, dbTestsEnabled } from "@app/db/testing";
 import {
   LEGACY_NETWORKING_0018_CROSSWALK,
   applyMigrations,
@@ -19,8 +19,7 @@ import {
   type MigrationDefinition,
 } from "../../src/migrator";
 import { assertSchemaCurrent, type SchemaCheckLogger } from "../../src/schema-check";
-import { dbTestsEnabled } from "../helpers/test-env";
-import { dbTestSetupTimeoutMs } from "../../vitest.shared";
+import { dbTestSetupTimeoutMs } from "../../../vitest.shared";
 
 // Adoption fixtures. Each database is built by the unified runner, then its
 // ledger is removed and the legacy evidence an existing production database

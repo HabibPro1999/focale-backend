@@ -2,15 +2,14 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ScratchDatabase } from "@app/db/testing";
-import { createScratchDatabase } from "@app/db/testing";
+import { createScratchDatabase, dbTestsEnabled } from "@app/db/testing";
 import {
   defaultMigrationsDirectory,
   loadMigrations,
   splitMigrationStatements,
   verifyMigrations,
 } from "../../src/migrator";
-import { dbTestsEnabled } from "../helpers/test-env";
-import { dbTestSetupTimeoutMs } from "../../vitest.shared";
+import { dbTestSetupTimeoutMs } from "../../../vitest.shared";
 
 // 6.5: 0033 drops the unused legacy abstract_code_sequences table (and its
 // unique index), rows included.

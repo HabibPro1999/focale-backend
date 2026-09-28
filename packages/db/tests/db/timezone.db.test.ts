@@ -23,7 +23,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // because the real-DB setup assigns it before beforeAll executes.
 import { closeDb, configureDb, getDb } from "../../src/client";
 import { pgErrorCode, withExportStatementTimeout } from "../../src/txn";
-import { dbTestsEnabled } from "../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 
 const APPLICATION_NAME = "focale-db-test";
 

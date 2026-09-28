@@ -11,7 +11,7 @@ import {
   type DbExecutor,
 } from "@app/db";
 import { dbTestsEnabled } from "@app/db/testing";
-import { seedEvent, seedEventAccess } from "../../../../../packages/db/tests/helpers/factories";
+import { seedEvent, seedEventAccess } from "@app/db/testing/fixtures";
 import { AccessService } from "./access.service";
 
 // Access writes span several statements: the row, then its prerequisite edges

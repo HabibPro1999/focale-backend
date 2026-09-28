@@ -12,7 +12,7 @@ import {
   purgeNetworkingEvent,
 } from "../../../src/queries/networking-retention";
 import { createNetworkingWriteFixture } from "../../helpers/networking-write-fixture";
-import { dbTestsEnabled } from "../../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 
 // Plan 4.4: the retention purge against a migrated database (both engines in CI).
 // The table list is derived from the Drizzle schema, so a new networking table

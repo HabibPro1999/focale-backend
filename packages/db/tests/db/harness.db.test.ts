@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getDb, getEventAccessById, listEventAccessRows, events } from "@app/db";
-import { dbTestsEnabled } from "../helpers/test-env";
+import { assertDisposableDatabaseUrl, dbTestsEnabled } from "@app/db/testing";
 import { cleanupDatabase } from "../helpers/cleanup";
 import { seedEvent, seedEventAccess } from "../helpers/factories";
-import { assertDisposableDatabaseUrl } from "@app/db/testing";
 
 // General real-DB tier: proves the ported harness (env gate, factories, FK-ordered
 // cleanup) works against the live schema and that @app/db query fns round-trip.

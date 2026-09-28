@@ -14,7 +14,7 @@ import {
   seedSponsorship,
   seedSponsorshipBatch,
   seedSponsorshipUsage,
-} from "../../../../../packages/db/tests/helpers/factories";
+} from "@app/db/testing/fixtures";
 import { AccessService } from "../access/access.service";
 import { PaymentProofService } from "./registrations.payment-proof.service";
 import { RegistrationPaymentsService } from "./registrations.payments.service";

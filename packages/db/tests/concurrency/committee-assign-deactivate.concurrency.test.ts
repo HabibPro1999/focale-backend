@@ -12,7 +12,7 @@ import {
   withTxn,
 } from "@app/db";
 import { setTimeout as sleep } from "node:timers/promises";
-import { dbTestsEnabled } from "../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 import { cleanupDatabase } from "../helpers/cleanup";
 import { seedAbstract, seedEvent, seedUser, testAudit } from "../helpers/factories";
 

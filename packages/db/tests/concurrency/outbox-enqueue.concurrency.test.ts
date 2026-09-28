@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { enqueueOutboxEvent, getDb, outboxEvents, withLockingTxn } from "@app/db";
-import { dbTestsEnabled } from "../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 import { makeBarrier } from "../helpers/barrier";
 
 // 3.5: two transactions enqueue the same dedupe key at once. ON CONFLICT on

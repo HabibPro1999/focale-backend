@@ -9,6 +9,10 @@ import {
 } from "@app/db";
 import { dbTestsEnabled } from "@app/db/testing";
 import {
+  auditRowsOf,
+  readSponsorshipRow,
+  realtimeRowsOf,
+  registrationIdsOfEvent,
   seedEvent,
   seedEventAccess,
   seedForm,
@@ -16,14 +20,8 @@ import {
   seedSponsorship,
   seedSponsorshipBatch,
   seedSponsorshipUsage,
-} from "../../../../../packages/db/tests/helpers/factories";
-import {
-  auditRowsOf,
-  readSponsorshipRow,
-  realtimeRowsOf,
-  registrationIdsOfEvent,
   sponsorshipUsagesOf,
-} from "../../../../../packages/db/tests/helpers/sponsorship-inspect";
+} from "@app/db/testing/fixtures";
 import type { Config } from "../../core/config";
 import { AccessService } from "../access/access.service";
 import { PricingService } from "../pricing/pricing.service";

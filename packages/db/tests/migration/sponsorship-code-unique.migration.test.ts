@@ -2,11 +2,10 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ScratchDatabase } from "@app/db/testing";
-import { createScratchDatabase } from "@app/db/testing";
+import { createScratchDatabase, dbTestsEnabled } from "@app/db/testing";
 import { applyMigrationsForEngine } from "../../src/migrator";
 import { splitMigrationStatements } from "../../src/migrator/migration";
-import { dbTestsEnabled } from "../helpers/test-env";
-import { dbTestSetupTimeoutMs } from "../../vitest.shared";
+import { dbTestSetupTimeoutMs } from "../../../vitest.shared";
 
 // 0030 (2.7): registrations' signup codes are normalized (trim, upper-case,
 // blank -> NULL) and a partial unique index allows one registration per

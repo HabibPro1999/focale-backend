@@ -11,8 +11,11 @@ import {
   type DbExecutor,
 } from "@app/db";
 import { dbTestsEnabled } from "@app/db/testing";
-import { makeBarrier } from "../../../../../packages/db/tests/helpers/barrier";
-import { seedEvent, seedEventAccess } from "../../../../../packages/db/tests/helpers/factories";
+import {
+  makeBarrier,
+  seedEvent,
+  seedEventAccess,
+} from "@app/db/testing/fixtures";
 import { AccessService } from "./access.service";
 
 // An access edit decides from the row it re-read under its lock:

@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { createNetworkingNotification, getDb, networkingStore } from "@app/db";
 import { dbTestsEnabled } from "@app/db/testing";
-import { createNetworkingWriteFixture } from "../../../../../packages/db/tests/helpers/networking-write-fixture";
+import { createNetworkingWriteFixture } from "@app/db/testing/fixtures";
 import type { Config } from "../../core/config";
 import { networkingNotificationHub } from "../../core/networking-notification-hub";
 import { ShutdownCoordinator } from "../../core/shutdown";

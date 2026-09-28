@@ -1,8 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ScratchDatabase } from "@app/db/testing";
-import { createScratchDatabase } from "@app/db/testing";
-import { dbTestsEnabled } from "../helpers/test-env";
-import { dbTestSetupTimeoutMs } from "../../vitest.shared";
+import { createScratchDatabase, dbTestsEnabled } from "@app/db/testing";
+import { dbTestSetupTimeoutMs } from "../../../vitest.shared";
 
 describe.runIf(dbTestsEnabled())("migration tier: email dedupe index", () => {
   let scratch: ScratchDatabase;

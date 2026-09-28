@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { sql } from "drizzle-orm";
 import { getDb, registrations } from "@app/db";
 import { calculateSettlement } from "@app/shared";
-import { dbTestsEnabled } from "../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 import { cleanupDatabase } from "../helpers/cleanup";
 import { seedEvent, seedForm, seedRegistration } from "../helpers/factories";
 

@@ -9,7 +9,7 @@ import {
   requeueDeadLetteredOutboxEvents,
   runOutboxRetention,
 } from "@app/db";
-import { dbTestsEnabled } from "../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 
 // 3.5: outbox retention, dead-letter health and requeue against a migrated
 // database (both engines in CI).

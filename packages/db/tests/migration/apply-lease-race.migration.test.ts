@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client } from "pg";
 import type { ScratchDatabase } from "@app/db/testing";
-import { createScratchDatabase } from "@app/db/testing";
+import { createScratchDatabase, dbTestsEnabled } from "@app/db/testing";
 import {
   applyMigrations,
   defaultMigrationsDirectory,
@@ -15,8 +15,7 @@ import {
   type ApplyMigrationsResult,
   type MigrationDefinition,
 } from "../../src/migrator";
-import { dbTestsEnabled } from "../helpers/test-env";
-import { dbTestSetupTimeoutMs } from "../../vitest.shared";
+import { dbTestSetupTimeoutMs } from "../../../vitest.shared";
 
 // `apply` commits every unit of migration work through a lease fence: an
 // UPDATE of the lease row just before COMMIT. The CLI's heartbeat renews that

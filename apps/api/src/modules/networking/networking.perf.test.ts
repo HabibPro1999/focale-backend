@@ -2,7 +2,7 @@ import type { NestFastifyApplication } from "@nestjs/platform-fastify";
 import { describe, expect, it } from "vitest";
 import { performance } from "node:perf_hooks";
 import { writeFile } from "node:fs/promises";
-import { createNetworkingScaleFixture } from "../../../../../packages/db/tests/helpers/networking-fixture";
+import { createNetworkingScaleFixture } from "@app/db/testing/fixtures";
 import { explainNetworkingDiscovery } from "@app/db";
 import { NetworkingService } from "./networking.service";
 import { networkingHash } from "./networking.security";
