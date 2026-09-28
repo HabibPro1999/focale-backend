@@ -14,17 +14,15 @@ import {
   requirePositionalCount,
   throughOption,
 } from "./cli-arguments";
+import { applyMigrations, verifyMigrations } from "./runner";
 import {
-  applyMigrations,
-  databaseEngine,
   listMigrationRecords,
   migrationAdoptionSupport,
   migrationLedgerExists,
-  normalizeAppliedBy,
-  setUtcSession,
-  verifyMigrations,
-} from "./runner";
-import { formatAdoptionReport, adoptMigrations } from "./adopt";
+} from "./ledger";
+import { databaseEngine, normalizeAppliedBy, setUtcSession } from "./session";
+import { adoptMigrations } from "./adopt";
+import { formatAdoptionReport } from "./adopt-report";
 
 const MIGRATIONS_DIRECTORY = defaultMigrationsDirectory();
 
