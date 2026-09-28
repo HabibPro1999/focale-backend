@@ -102,8 +102,10 @@ import {
   StorageObjectNotFoundError,
   buildEmailContextWithAccess,
   deriveCertificateRenderImage,
+  isEligibleForCertificate,
   loadEmailContextLookups,
 } from "@app/integrations";
+import { logger } from "../../core/logger.service";
 import { CertificatesService } from "./certificates.service";
 
 const mockFileType = vi.mocked(fileTypeFromBuffer);
@@ -493,6 +495,42 @@ describe("CertificatesService", () => {
       expect(deleteCertificateTemplateById).toHaveBeenCalledWith(templateId, rootDb);
     });
 
+    it("logs each failed image delete and still deletes the row after both", async () => {
+      const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+      mockStorageDelete
+        .mockRejectedValueOnce(new Error("storage down"))
+        .mockRejectedValueOnce(new Error("storage down"));
+      vi.mocked(getCertificateTemplateForDelete).mockResolvedValue({
+        id: templateId,
+        eventId: "ev1",
+        templateUrl:
+          "https://storage.googleapis.com/bucket/ev1/certificates/tpl1-u1.png",
+        renderImageKey: "ev1/certificates/tpl1-u1-render.jpg",
+      });
+      vi.mocked(deleteCertificateTemplateById).mockResolvedValue();
+
+      try {
+        await service.deleteTemplate(templateId);
+
+        expect(warn.mock.calls).toEqual([
+          [
+            { err: expect.any(Error), key: "ev1/certificates/tpl1-u1.png" },
+            "Failed to delete certificate template image",
+          ],
+          [
+            { err: expect.any(Error), key: "ev1/certificates/tpl1-u1-render.jpg" },
+            "Failed to delete certificate image",
+          ],
+        ]);
+        const [, lastStorageDelete] = mockStorageDelete.mock.invocationCallOrder;
+        expect(
+          vi.mocked(deleteCertificateTemplateById).mock.invocationCallOrder[0],
+        ).toBeGreaterThan(lastStorageDelete);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
     it("throws 404 AppException when template not found", async () => {
       vi.mocked(getCertificateTemplateForDelete).mockResolvedValue(null);
 
@@ -853,8 +891,6 @@ describe("CertificatesService", () => {
   }
 
   describe("sendCertificates", () => {
-    const event = { id: eventId, clientId: "c1" };
-
     function registration(overrides: Record<string, unknown> = {}) {
       return {
         id: "reg-1",
@@ -898,7 +934,7 @@ describe("CertificatesService", () => {
       vi.mocked(getTemplateByTrigger).mockResolvedValue(null);
 
       await expect(
-        service.sendCertificates(event, undefined),
+        service.sendCertificates(eventId, undefined),
       ).rejects.toMatchObject({
         statusCode: 400,
         code: ErrorCodes.VALIDATION_ERROR,
@@ -910,11 +946,90 @@ describe("CertificatesService", () => {
       vi.mocked(listActiveImageReadyCertificateTemplates).mockResolvedValue([]);
 
       await expect(
-        service.sendCertificates(event, undefined),
+        service.sendCertificates(eventId, undefined),
       ).rejects.toMatchObject({
         statusCode: 400,
         code: ErrorCodes.VALIDATION_ERROR,
       });
+    });
+
+    it("hands eligibility each template's certificate data", async () => {
+      vi.mocked(getTemplateByTrigger).mockResolvedValue({ id: "et1" } as never);
+      vi.mocked(listActiveImageReadyCertificateTemplates).mockResolvedValue([
+        certTemplate({
+          renderImageKey: "evt/certificates/c1-render.jpg",
+          zones: null,
+          applicableRoles: null,
+          accessId: "acc-1",
+          access: { id: "acc-1", name: "Workshop", type: "WORKSHOP" },
+          allowedAbstractFinalTypes: undefined,
+          active: true,
+          createdAt: new Date(0),
+        }) as never,
+      ]);
+      vi.mocked(getRegistrationsForCertificateSend).mockResolvedValue([
+        registration() as never,
+      ]);
+
+      await service.sendCertificates(eventId, undefined);
+
+      expect(vi.mocked(isEligibleForCertificate).mock.calls[0][1]).toStrictEqual({
+        id: "c1",
+        name: "Cert A",
+        templateUrl: "url",
+        templateWidth: 10,
+        templateHeight: 10,
+        renderImageKey: "evt/certificates/c1-render.jpg",
+        zones: [],
+        applicableRoles: [],
+        accessId: "acc-1",
+        access: { id: "acc-1", name: "Workshop" },
+        scope: "BOTH",
+        allowedAbstractFinalTypes: null,
+      });
+    });
+
+    it("picks each registrant's certificates by scope, role and check-in", async () => {
+      const actual =
+        await vi.importActual<typeof import("@app/integrations")>("@app/integrations");
+      vi.mocked(isEligibleForCertificate).mockImplementation(
+        actual.isEligibleForCertificate,
+      );
+      vi.mocked(getTemplateByTrigger).mockResolvedValue({ id: "et1" } as never);
+      vi.mocked(listActiveImageReadyCertificateTemplates).mockResolvedValue([
+        certTemplate({ id: "main" }),
+        certTemplate({ id: "speaker", applicableRoles: ["SPEAKER"] }),
+        certTemplate({ id: "workshop", accessId: "acc-1" }),
+        certTemplate({ id: "abstract-only", scope: "ABSTRACT" }),
+      ] as never);
+      vi.mocked(getRegistrationsForCertificateSend).mockResolvedValue([
+        registration({ id: "reg-1" }),
+        registration({
+          id: "reg-2",
+          role: "SPEAKER",
+          checkedInAt: null,
+          accessCheckIns: [{ accessId: "acc-1" }],
+        }),
+        registration({ id: "reg-3", role: "SPEAKER" }),
+        registration({ id: "reg-4", checkedInAt: null }),
+      ] as never);
+
+      try {
+        await service.sendCertificates(eventId, undefined);
+
+        expect(
+          queuedInput().registrations.map((c) => [
+            c.targetId,
+            c.certificates.map((t) => t.id),
+          ]),
+        ).toEqual([
+          ["reg-1", ["main"]],
+          ["reg-2", ["workshop"]],
+          ["reg-3", ["main", "speaker"]],
+        ]);
+      } finally {
+        vi.mocked(isEligibleForCertificate).mockImplementation(() => true);
+      }
     });
 
     it("queues one email per eligible registrant through the event-locked transaction", async () => {
@@ -926,7 +1041,7 @@ describe("CertificatesService", () => {
         registration() as never,
       ]);
 
-      const result = await service.sendCertificates(event, undefined);
+      const result = await service.sendCertificates(eventId, undefined);
 
       expect(result).toEqual({
         success: true,
@@ -963,7 +1078,7 @@ describe("CertificatesService", () => {
       ]);
       fakeQueue({ registrations: { "reg-1": ["c1"] } });
 
-      const result = await service.sendCertificates(event, undefined);
+      const result = await service.sendCertificates(eventId, undefined);
 
       expect(result).toMatchObject({
         queued: 0,
@@ -986,7 +1101,7 @@ describe("CertificatesService", () => {
       ]);
       fakeQueue({ registrations: { "reg-1": ["c1"], "reg-2": ["c1", "c2"] } });
 
-      const result = await service.sendCertificates(event, undefined);
+      const result = await service.sendCertificates(eventId, undefined);
 
       expect(result).toMatchObject({
         queued: 1,
@@ -1007,7 +1122,7 @@ describe("CertificatesService", () => {
       ]);
       fakeQueue({}, ["reg-2"]);
 
-      const result = await service.sendCertificates(event, undefined);
+      const result = await service.sendCertificates(eventId, undefined);
 
       expect(result).toMatchObject({
         queued: 1,
@@ -1028,7 +1143,7 @@ describe("CertificatesService", () => {
       ]);
       vi.mocked(queueCertificateEmailLogsTxn).mockResolvedValue(null);
 
-      await expect(service.sendCertificates(event, undefined)).rejects.toMatchObject({
+      await expect(service.sendCertificates(eventId, undefined)).rejects.toMatchObject({
         statusCode: 404,
         code: ErrorCodes.NOT_FOUND,
       });
@@ -1056,7 +1171,7 @@ describe("CertificatesService", () => {
           ]),
         );
 
-        const result = await service.sendCertificates(event, undefined);
+        const result = await service.sendCertificates(eventId, undefined);
 
         expect(getAlreadySentCertTemplateIds).toHaveBeenCalledTimes(1);
         expect(getAlreadySentCertTemplateIds).toHaveBeenCalledWith(["reg-1", "reg-2", "reg-3"]);
@@ -1077,7 +1192,7 @@ describe("CertificatesService", () => {
       });
 
       it("loads the event's pricing and access once for the whole send", async () => {
-        await service.sendCertificates(event, undefined);
+        await service.sendCertificates(eventId, undefined);
 
         expect(loadEmailContextLookups).toHaveBeenCalledTimes(1);
         const [[lookupEventId, accessIds]] = vi.mocked(loadEmailContextLookups).mock.calls;
@@ -1095,7 +1210,7 @@ describe("CertificatesService", () => {
           new Map(["reg-1", "reg-2", "reg-3"].map((id) => [id, new Set(["c1", "c2"])])),
         );
 
-        const result = await service.sendCertificates(event, undefined);
+        const result = await service.sendCertificates(eventId, undefined);
 
         expect(loadEmailContextLookups).not.toHaveBeenCalled();
         expect(buildEmailContextWithAccess).not.toHaveBeenCalled();
@@ -1129,7 +1244,7 @@ describe("CertificatesService", () => {
         } as never,
       ]);
 
-      const result = await service.sendCertificates(event, ["reg-1"], ["abs-1"]);
+      const result = await service.sendCertificates(eventId, ["reg-1"], ["abs-1"]);
 
       expect(queueCertificateEmailLogsTxn).toHaveBeenCalledTimes(1);
       expect(queuedInput().registrations.map((c) => c.targetId)).toEqual(["reg-1"]);
@@ -1143,8 +1258,6 @@ describe("CertificatesService", () => {
   // sendCertificates — abstract certificates (H2)
   // -------------------------------------------------------------------------
   describe("sendCertificates — abstract certificates (H2)", () => {
-    const event = { id: eventId, clientId: "c1" };
-
     function certTemplate(overrides: Record<string, unknown> = {}) {
       return {
         id: "c1",
@@ -1192,7 +1305,7 @@ describe("CertificatesService", () => {
     });
 
     it("omitting abstractIds leaves the response shape untouched (no abstracts key)", async () => {
-      const result = await service.sendCertificates(event, []);
+      const result = await service.sendCertificates(eventId, []);
 
       expect(result.abstracts).toBeUndefined();
       expect(getAbstractsForCertificateSend).not.toHaveBeenCalled();
@@ -1201,7 +1314,7 @@ describe("CertificatesService", () => {
     it("narrows registrations to none when abstractIds is provided without registrationIds", async () => {
       vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([]);
 
-      await service.sendCertificates(event, undefined, ["abs-1"]);
+      await service.sendCertificates(eventId, undefined, ["abs-1"]);
 
       expect(getRegistrationsForCertificateSend).toHaveBeenCalledWith(eventId, []);
     });
@@ -1211,7 +1324,7 @@ describe("CertificatesService", () => {
         abstractRow({ status: "SUBMITTED" }) as never,
       ]);
 
-      const result = await service.sendCertificates(event, [], ["abs-1"]);
+      const result = await service.sendCertificates(eventId, [], ["abs-1"]);
 
       expect(result.abstracts).toMatchObject({
         queued: 0,
@@ -1233,7 +1346,7 @@ describe("CertificatesService", () => {
         abstractRow({ presentedAt: null }) as never,
       ]);
 
-      const result = await service.sendCertificates(event, [], ["abs-1"]);
+      const result = await service.sendCertificates(eventId, [], ["abs-1"]);
 
       expect(result.abstracts?.results).toEqual([
         {
@@ -1249,7 +1362,7 @@ describe("CertificatesService", () => {
       // wrong-event/missing id simply never comes back.
       vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([]);
 
-      const result = await service.sendCertificates(event, [], ["missing-abs"]);
+      const result = await service.sendCertificates(eventId, [], ["missing-abs"]);
 
       expect(result.abstracts?.results).toEqual([
         {
@@ -1266,7 +1379,7 @@ describe("CertificatesService", () => {
       ]);
       fakeQueue({ abstracts: { "abs-1": ["c1"] } });
 
-      const result = await service.sendCertificates(event, [], ["abs-1"]);
+      const result = await service.sendCertificates(eventId, [], ["abs-1"]);
 
       expect(result.abstracts).toMatchObject({
         queued: 0,
@@ -1283,7 +1396,7 @@ describe("CertificatesService", () => {
       ]);
       fakeQueue({}, ["abs-2"]);
 
-      const result = await service.sendCertificates(event, [], ["abs-1", "abs-2"]);
+      const result = await service.sendCertificates(eventId, [], ["abs-1", "abs-2"]);
 
       expect(result.abstracts).toEqual({
         queued: 1,
@@ -1302,7 +1415,7 @@ describe("CertificatesService", () => {
         abstractRow({ id: "abs-3" }) as never,
       ]);
 
-      const result = await service.sendCertificates(event, [], ["abs-1", "missing", "abs-3", "abs-1"]);
+      const result = await service.sendCertificates(eventId, [], ["abs-1", "missing", "abs-3", "abs-1"]);
 
       expect(result.abstracts?.results.map((r) => [r.abstractId, r.status])).toEqual([
         ["abs-1", "queued"],
@@ -1318,7 +1431,7 @@ describe("CertificatesService", () => {
         abstractRow({ id: "abs-2", content: { title: "Second" } }) as never,
       ]);
 
-      const result = await service.sendCertificates(event, [], ["abs-1", "abs-2"]);
+      const result = await service.sendCertificates(eventId, [], ["abs-1", "abs-2"]);
 
       expect(result.abstracts).toMatchObject({ queued: 2, skipped: 0, total: 2 });
       expect(
@@ -1334,7 +1447,7 @@ describe("CertificatesService", () => {
         abstractRow() as never,
       ]);
 
-      const result = await service.sendCertificates(event, [], ["abs-1"]);
+      const result = await service.sendCertificates(eventId, [], ["abs-1"]);
 
       expect(result.abstracts).toMatchObject({
         queued: 1,
@@ -1363,7 +1476,7 @@ describe("CertificatesService", () => {
         abstractRow({ finalType: "ORAL_COMMUNICATION" }) as never,
       ]);
 
-      await service.sendCertificates(event, [], ["abs-1"]);
+      await service.sendCertificates(eventId, [], ["abs-1"]);
 
       const [candidate] = queuedInput().abstracts;
       expect(candidate.contextSnapshot).toMatchObject({
@@ -1372,12 +1485,24 @@ describe("CertificatesService", () => {
       expect(candidate.contextSnapshot).not.toHaveProperty("abstractFinalTypeLabel");
     });
 
+    it("passes an abstract type without a label through as is", async () => {
+      vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
+        abstractRow({ finalType: null, requestedType: "ROUND_TABLE" }) as never,
+      ]);
+
+      await service.sendCertificates(eventId, [], ["abs-1"]);
+
+      expect(queuedInput().abstracts[0].contextSnapshot).toMatchObject({
+        abstractFinalType: "ROUND_TABLE",
+      });
+    });
+
     it("labels a not-yet-finalized abstract by its requestedType", async () => {
       vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
         abstractRow({ finalType: null, requestedType: "POSTER" }) as never,
       ]);
 
-      await service.sendCertificates(event, [], ["abs-1"]);
+      await service.sendCertificates(eventId, [], ["abs-1"]);
 
       expect(queuedInput().abstracts[0].contextSnapshot).toMatchObject({
         abstractFinalType: "Poster",
@@ -1398,7 +1523,7 @@ describe("CertificatesService", () => {
             },
           }) as never,
         ]);
-        await service.sendCertificates(event, [], ["abs-1"]);
+        await service.sendCertificates(eventId, [], ["abs-1"]);
 
         expect(queuedInput().abstracts[0].contextSnapshot).toMatchObject({
           eventDate: "2 octobre 2026",
@@ -1419,7 +1544,7 @@ describe("CertificatesService", () => {
           abstractRow() as never,
         ]);
 
-        const result = await service.sendCertificates(event, [], ["abs-1"]);
+        const result = await service.sendCertificates(eventId, [], ["abs-1"]);
 
         expect(result.abstracts).toMatchObject({
           queued: 0,
@@ -1444,7 +1569,7 @@ describe("CertificatesService", () => {
           abstractRow() as never,
         ]);
 
-        const result = await service.sendCertificates(event, [], ["abs-1"]);
+        const result = await service.sendCertificates(eventId, [], ["abs-1"]);
 
         expect(result.abstracts).toMatchObject({
           queued: 1,
@@ -1460,7 +1585,7 @@ describe("CertificatesService", () => {
           abstractRow({ finalType: "ORAL_COMMUNICATION" }) as never,
         ]);
 
-        const result = await service.sendCertificates(event, [], ["abs-1"]);
+        const result = await service.sendCertificates(eventId, [], ["abs-1"]);
 
         expect(result.abstracts).toMatchObject({
           queued: 0,
@@ -1476,7 +1601,7 @@ describe("CertificatesService", () => {
           abstractRow({ finalType: "ORAL_COMMUNICATION" }) as never,
         ]);
 
-        const result = await service.sendCertificates(event, [], ["abs-1"]);
+        const result = await service.sendCertificates(eventId, [], ["abs-1"]);
 
         expect(result.abstracts).toMatchObject({
           queued: 1,

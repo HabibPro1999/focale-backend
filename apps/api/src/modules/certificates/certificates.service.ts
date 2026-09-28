@@ -2,11 +2,9 @@ import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { fileTypeFromBuffer } from "file-type";
 import sharp from "sharp";
-import { ABSTRACT_FINAL_TYPE_LABELS } from "@app/contracts";
 import { getAbstractTitle } from "@app/shared";
 import type {
   CreateCertificateTemplateInput,
-  StoredCertificateZones,
   UpdateCertificateTemplateInput,
 } from "@app/contracts";
 import {
@@ -45,6 +43,8 @@ import {
   formatDate,
   isEligibleForCertificate,
   isAbstractEligibleForCertificate,
+  labelForAbstractType,
+  toCertificateTemplateData,
   StorageObjectNotFoundError,
   type DownloadedFile,
   type CertificateTemplateData,
@@ -65,11 +65,6 @@ const CONTEXT_CONCURRENCY = 10;
 
 const INVALID_TEMPLATE_IMAGE_MESSAGE =
   "Invalid image. Upload a valid PNG or JPEG of at most 20 megapixels.";
-
-interface SendEventContext {
-  id: string;
-  clientId: string;
-}
 
 export interface SendCertificatesResult {
   success: true;
@@ -130,12 +125,19 @@ function ineligibilityReason(
   return null;
 }
 
-async function deleteCertificateImageBestEffort(key: string): Promise<void> {
+async function deleteCertificateImageBestEffort(
+  key: string,
+  failureMessage = "Failed to delete certificate image",
+): Promise<void> {
   try {
     await getStorageProvider().delete(key);
   } catch (err) {
-    logger.warn({ err, key }, "Failed to delete certificate image");
+    logger.warn({ err, key }, failureMessage);
   }
+}
+
+function templateNotFound() {
+  return notFound("Certificate template not found");
 }
 
 @Injectable()
@@ -152,7 +154,7 @@ export class CertificatesService {
   async getTemplate(id: string): Promise<CertificateTemplateWithEvent> {
     const template = await getCertificateTemplateWithEvent(id);
     if (!template) {
-      throw notFound("Certificate template not found");
+      throw templateNotFound();
     }
     return template;
   }
@@ -234,40 +236,20 @@ export class CertificatesService {
     }
     if (input.accessId != null) {
       if (!current) {
-        throw notFound("Certificate template not found");
+        throw templateNotFound();
       }
       await this.assertAccessBelongsToEvent(input.accessId, current.eventId);
     }
 
-    const patch: {
-      name?: string;
-      zones?: StoredCertificateZones;
-      applicableRoles?: string[];
-      active?: boolean;
-      accessId?: string | null;
-      scope?: string;
-      allowedAbstractFinalTypes?: string[] | null;
-    } = {};
-    if (input.name !== undefined) patch.name = input.name;
-    if (input.zones !== undefined) patch.zones = input.zones;
-    if (input.applicableRoles !== undefined) {
-      patch.applicableRoles = input.applicableRoles;
-    }
-    if (input.active !== undefined) patch.active = input.active;
-    if (input.accessId !== undefined) patch.accessId = input.accessId;
-    if (input.scope !== undefined) patch.scope = input.scope;
-    if (input.allowedAbstractFinalTypes !== undefined) {
-      patch.allowedAbstractFinalTypes = input.allowedAbstractFinalTypes;
-    }
-
-    return updateCertificateTemplate(id, patch, getDb());
+    // The query writes only the fields the input defines.
+    return updateCertificateTemplate(id, input, getDb());
   }
 
   /** Delete a template + its stored image (image delete is best-effort). */
   async deleteTemplate(id: string): Promise<void> {
     const template = await getCertificateTemplateForDelete(id);
     if (!template) {
-      throw notFound("Certificate template not found");
+      throw templateNotFound();
     }
 
     if (template.templateUrl) {
@@ -275,14 +257,10 @@ export class CertificatesService {
         allowBareKey: false,
       });
       if (key) {
-        try {
-          await getStorageProvider().delete(key);
-        } catch (err) {
-          logger.warn(
-            { err, key },
-            "Failed to delete certificate template image",
-          );
-        }
+        await deleteCertificateImageBestEffort(
+          key,
+          "Failed to delete certificate template image",
+        );
       }
     }
     // 3.8: the render image, only when it lies under this event's prefix.
@@ -314,7 +292,7 @@ export class CertificatesService {
 
     const template = await getCertificateTemplateForUpload(id);
     if (!template) {
-      throw notFound("Certificate template not found");
+      throw templateNotFound();
     }
 
     // Header-only read, but it enforces the pixel limit before anything is
@@ -376,7 +354,7 @@ export class CertificatesService {
     if (!updated) {
       // The template was deleted while the image was uploading.
       await removeNewImages();
-      throw notFound("Certificate template not found");
+      throw templateNotFound();
     }
 
     if (template.templateUrl && template.templateUrl !== templateUrl) {
@@ -402,7 +380,7 @@ export class CertificatesService {
   // ==========================================================================
 
   async sendCertificates(
-    event: SendEventContext,
+    eventId: string,
     registrationIds: string[] | undefined,
     abstractIds?: string[],
   ): Promise<SendCertificatesResult> {
@@ -418,7 +396,7 @@ export class CertificatesService {
         : registrationIds;
 
     // 1. CERTIFICATE_SENT email template must be configured.
-    const emailTemplate = await getTemplateByTrigger(event.id, "CERTIFICATE_SENT");
+    const emailTemplate = await getTemplateByTrigger(eventId, "CERTIFICATE_SENT");
     if (!emailTemplate) {
       throw badRequest(
         "No CERTIFICATE_SENT email template configured for this event. Create one in the Email Templates section first.",
@@ -426,54 +404,25 @@ export class CertificatesService {
     }
 
     // 2. Active, image-ready certificate templates.
-    const certTemplates = await listActiveImageReadyCertificateTemplates(event.id);
+    const certTemplates = await listActiveImageReadyCertificateTemplates(eventId);
     if (certTemplates.length === 0) {
       throw badRequest("No active certificate templates found for this event.");
     }
 
     // 3. Target registrations (undefined = all; empty array = none).
     const registrations = await getRegistrationsForCertificateSend(
-      event.id,
+      eventId,
       effectiveRegistrationIds,
     );
 
     // Build template data once — same for all registrants.
-    const templateData: CertificateTemplateData[] = certTemplates.map((t) => ({
-      id: t.id,
-      name: t.name,
-      templateUrl: t.templateUrl,
-      templateWidth: t.templateWidth,
-      templateHeight: t.templateHeight,
-      renderImageKey: t.renderImageKey,
-      zones: t.zones ?? [],
-      applicableRoles: (t.applicableRoles as string[] | null) ?? [],
-      accessId: t.accessId,
-      access: t.access ? { id: t.access.id, name: t.access.name } : null,
-      scope: t.scope,
-      allowedAbstractFinalTypes: (t.allowedAbstractFinalTypes as string[] | null) ?? null,
-    }));
+    const templateData = toCertificateTemplateData(certTemplates);
 
     // 4. Filter to registrations with ≥1 eligible template (pure, no I/O).
     const eligibleRegs = registrations
       .map((reg) => {
         const eligible = templateData.filter((t) =>
-          isEligibleForCertificate(
-            {
-              id: reg.id,
-              firstName: reg.firstName,
-              lastName: reg.lastName,
-              role: reg.role,
-              checkedInAt: reg.checkedInAt,
-              accessCheckIns: reg.accessCheckIns,
-              language: reg.language,
-              event: {
-                name: reg.event.name,
-                startDate: reg.event.startDate,
-                location: reg.event.location,
-              },
-            },
-            t,
-          ),
+          isEligibleForCertificate(reg, t),
         );
         return { reg, eligible };
       })
@@ -498,7 +447,7 @@ export class CertificatesService {
     const contextLookups =
       regsToQueue.length > 0
         ? await loadEmailContextLookups(
-            event.id,
+            eventId,
             regsToQueue.flatMap(({ reg }) => reg.accessTypeIds ?? []),
           )
         : undefined;
@@ -525,13 +474,13 @@ export class CertificatesService {
     // 7. Abstract presenter certificates (H2) — only when requested.
     const abstractPlan =
       abstractIds !== undefined
-        ? await this.planAbstractCertificates(event, templateData, abstractIds)
+        ? await this.planAbstractCertificates(eventId, templateData, abstractIds)
         : undefined;
 
     // 8. Queue both batches in one transaction, under the event lock, deduped
     // per certificate template against what is already queued or sent.
     const outcomes = await queueCertificateEmailLogsTxn({
-      eventId: event.id,
+      eventId,
       emailTemplateId: emailTemplate.id,
       registrations: registrationCandidates,
       abstracts: abstractPlan?.candidates ?? [],
@@ -566,7 +515,7 @@ export class CertificatesService {
       breakdown,
     };
     logger.info(
-      { eventId: event.id, queued, alreadySent, skippedConflict, total: registrations.length, breakdown },
+      { eventId, queued, alreadySent, skippedConflict, total: registrations.length, breakdown },
       "Certificate emails queued",
     );
 
@@ -574,7 +523,7 @@ export class CertificatesService {
       result.abstracts = abstractPlan.summarize(outcomes.abstracts);
       logger.info(
         {
-          eventId: event.id,
+          eventId,
           queued: result.abstracts.queued,
           skipped: result.abstracts.skipped,
           total: result.abstracts.total,
@@ -600,7 +549,7 @@ export class CertificatesService {
    * one author on file).
    */
   private async planAbstractCertificates(
-    event: SendEventContext,
+    eventId: string,
     certTemplates: CertificateTemplateData[],
     abstractIds: string[],
   ): Promise<{
@@ -610,7 +559,7 @@ export class CertificatesService {
     const uniqueIds = Array.from(new Set(abstractIds));
     const found =
       uniqueIds.length > 0
-        ? await getAbstractsForCertificateSend(event.id, uniqueIds)
+        ? await getAbstractsForCertificateSend(eventId, uniqueIds)
         : [];
     const byId = new Map(found.map((a) => [a.id, a]));
 
@@ -620,7 +569,7 @@ export class CertificatesService {
 
     for (const id of uniqueIds) {
       const maybeAbstract = byId.get(id);
-      const reason = ineligibilityReason(maybeAbstract, event.id);
+      const reason = ineligibilityReason(maybeAbstract, eventId);
       if (reason) {
         slots.push({ abstractId: id, status: "ineligible", reason });
         continue;
@@ -647,7 +596,6 @@ export class CertificatesService {
         .filter(Boolean)
         .join(" ")
         .trim();
-      const abstractType = abstract.finalType ?? abstract.requestedType;
 
       slots.push(candidates.length);
       candidates.push({
@@ -659,10 +607,10 @@ export class CertificatesService {
           fullName: authorName || "—",
           abstractTitle: getAbstractTitle(abstract.content),
           abstractCode: abstract.code ?? "—",
-          abstractFinalType:
-            ABSTRACT_FINAL_TYPE_LABELS[
-              abstractType as keyof typeof ABSTRACT_FINAL_TYPE_LABELS
-            ] ?? abstractType,
+          abstractFinalType: labelForAbstractType(
+            abstract.finalType,
+            abstract.requestedType,
+          ),
           eventName: abstract.event.name,
           eventDate: formatDate(abstract.event.startDate, abstract.language),
           eventLocation: abstract.event.location ?? "—",
