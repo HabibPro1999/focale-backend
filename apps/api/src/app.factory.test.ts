@@ -68,12 +68,15 @@ describe("buildApp config wiring", () => {
         headers: { origin: "https://admin.example.com" },
       });
       expect(allowed.headers["access-control-allow-origin"]).toBe("https://admin.example.com");
+      expect(allowed.headers["access-control-allow-credentials"]).toBe("true");
+      expect(allowed.headers["access-control-expose-headers"]).toBe("Retry-After");
       const denied = await app.inject({
         method: "GET",
         url: "/health/live",
         headers: { origin: "https://evil.example.com" },
       });
       expect(denied.headers["access-control-allow-origin"]).toBeUndefined();
+      expect(denied.headers["access-control-expose-headers"]).toBeUndefined();
     } finally {
       await app.close();
     }

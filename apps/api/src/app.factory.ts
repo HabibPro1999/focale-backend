@@ -50,7 +50,8 @@ export async function buildApp(
   });
 
   // CORS allow-list (validated origins; `*` only outside production), no-origin
-  // requests allowed, credentials always on.
+  // requests allowed, credentials always on. Retry-After is exposed so the
+  // cross-origin frontends can honor busy/draining/export retry timing.
   const { allowAnyOrigin, origins: allowedOrigins } = config.http.cors;
   await fastify.register(cors, {
     origin: (origin, callback) => {
@@ -61,6 +62,7 @@ export async function buildApp(
       }
     },
     credentials: true,
+    exposedHeaders: ["Retry-After"],
   });
 
   await fastify.register(cookie);
