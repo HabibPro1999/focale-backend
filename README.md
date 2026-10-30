@@ -1196,7 +1196,12 @@ were obsolete and 29 were open. The open items:
 
 **Admin**
 
-<!-- admin-followups: filled after the admin follow-up branch -->
+Done on admin `release/prod-alignment` (`23c8f32`): a refused create places
+the `FRM_9001` field errors under their inputs as the edit does; a refused
+manual check-in shows the reason (`CHK_17003` to `CHK_17006` in fr and en);
+the audit panel labels `POST_EVENT_REPORT` and `POST_EVENT_REPORT_REGENERATE`;
+a certificate template whose image is gone (`RES_3001`) says so. Still open:
+the certificate preview shows its generic state when that image is missing.
 
 **Form, backend and admin together**
 
@@ -1215,8 +1220,8 @@ were obsolete and 29 were open. The open items:
 - Optional: admin, form and networking can replace hand-written request and
   response types with `packages/contracts/generated/types/contracts.input.ts`
   and `contracts.output.ts` when those files are next touched.
-
-<!-- form-followups: filled after the form follow-up branch -->
+- Done on form `release/prod-alignment` (`653163f`): the retired `CHK_17002`
+  mapping is gone.
 
 ## Testing and environment safety
 
