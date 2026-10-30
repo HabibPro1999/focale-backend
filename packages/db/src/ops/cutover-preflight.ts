@@ -222,8 +222,16 @@ function beginStatement(engine: DatabaseEngine): { sql: string; isolation: strin
 
 let savepointCounter = 0;
 
+/**
+ * The first retry error of the current attempt. Callers such as the adopt
+ * planner (a failed catalog probe) or the 0011 check (a failing predicate)
+ * catch errors and carry on, which would hide it; the transaction is dead
+ * after it, so inReadOnlySnapshot starts again whenever one was recorded.
+ */
+const retryErrors = new WeakMap<Client, unknown>();
+
 /** Run `operation` under a savepoint so an error does not abort the snapshot transaction. */
-async function isolated<T>(client: Client, operation: () => Promise<T>): Promise<T> {
+export async function isolated<T>(client: Client, operation: () => Promise<T>): Promise<T> {
   savepointCounter += 1;
   const name = `cutover_preflight_${savepointCounter}`;
   await client.query(`SAVEPOINT ${name}`);
@@ -232,8 +240,12 @@ async function isolated<T>(client: Client, operation: () => Promise<T>): Promise
     await client.query(`RELEASE SAVEPOINT ${name}`);
     return value;
   } catch (error) {
-    // A retry error invalidates the transaction; the caller starts it again.
-    if (!isRetryable(error)) await client.query(`ROLLBACK TO SAVEPOINT ${name}`);
+    // CockroachDB cannot roll back to a savepoint after a retry error.
+    if (isRetryable(error)) {
+      if (!retryErrors.has(client)) retryErrors.set(client, error);
+    } else {
+      await client.query(`ROLLBACK TO SAVEPOINT ${name}`);
+    }
     throw error;
   }
 }
@@ -243,13 +255,14 @@ async function isolated<T>(client: Client, operation: () => Promise<T>): Promise
  * refuses writes; always rolled back. Retried from the start on a CockroachDB
  * retry error.
  */
-async function inReadOnlySnapshot<T>(
+export async function inReadOnlySnapshot<T>(
   client: Client,
   engine: DatabaseEngine,
   collect: (session: CutoverPreflightReport["session"]) => Promise<T>,
 ): Promise<T> {
   const begin = beginStatement(engine);
   for (let attempt = 1; ; attempt += 1) {
+    retryErrors.delete(client);
     await client.query(begin.sql);
     try {
       const readOnly = await client.query("SHOW transaction_read_only");
@@ -257,10 +270,14 @@ async function inReadOnlySnapshot<T>(
       if (value !== "on" && value !== true) throw new Error("The preflight transaction is not read-only; stopping before any other query");
       await setUtcSession(client);
       const writeProbe = await proveWritesRefused(client);
-      return await collect({ readOnly: true, isolation: begin.isolation, writeProbe, attempts: attempt });
+      const result = await collect({ readOnly: true, isolation: begin.isolation, writeProbe, attempts: attempt });
+      const swallowed = retryErrors.get(client);
+      if (swallowed) throw swallowed;
+      return result;
     } catch (error) {
-      if (isRetryable(error) && attempt < RETRY_ATTEMPTS) continue;
-      throw error;
+      const cause = retryErrors.get(client) ?? error;
+      if (isRetryable(cause) && attempt < RETRY_ATTEMPTS) continue;
+      throw cause;
     } finally {
       await client.query("ROLLBACK").catch(() => undefined);
     }

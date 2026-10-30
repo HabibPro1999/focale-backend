@@ -2,8 +2,11 @@ import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { Client } from "pg";
 import {
   compareTableCounts,
+  inReadOnlySnapshot,
+  isolated,
   parseTableCountsFile,
   writeCutoverPostflight,
   writeCutoverPreflight,
@@ -260,5 +263,71 @@ describe("cutover preflight command line", () => {
     expect(() => parseCutoverCliArguments(["preflight", "--out", "--baseline", "x"])).toThrow("--out needs a value");
     expect(() => parseCutoverCliArguments(["preflight", "--out=a", "--out=b"])).toThrow("--out is given twice");
     expect(() => parseCutoverCliArguments(["preflight", "dir"])).toThrow("Unexpected argument: dir");
+  });
+});
+
+describe("cutover preflight read-only snapshot", () => {
+  /** A connection that refuses writes; `SELECT flaky` fails with 40001 `failures` times. */
+  function fakeClient(failures: number) {
+    const statements: string[] = [];
+    const client = {
+      async query(sql: string) {
+        statements.push(sql);
+        if (sql === "SHOW transaction_read_only") return { rows: [{ transaction_read_only: "on" }] };
+        if (sql.includes("information_schema.tables")) return { rows: [{ table_name: "registrations" }] };
+        if (sql.startsWith("DELETE")) throw Object.assign(new Error("cannot execute DELETE in a read-only transaction"), { code: "25006" });
+        if (sql === "SELECT flaky" && failures > 0) {
+          failures -= 1;
+          throw Object.assign(new Error("restart transaction: ReadWithinUncertaintyIntervalError"), { code: "40001" });
+        }
+        return { rows: [] };
+      },
+    };
+    return { client: client as unknown as Client, statements };
+  }
+
+  it("starts the transaction again after a retry error, even when the reader swallowed it", async () => {
+    const { client, statements } = fakeClient(1);
+    const result = await inReadOnlySnapshot(client, "cockroach", async (session) => {
+      // Like adopt's catalog probes or the 0011 check: the error is caught and the reader carries on.
+      const outcome = await isolated(client, () => client.query("SELECT flaky")).then(() => "read", () => "swallowed");
+      return { outcome, session };
+    });
+    expect(result).toEqual({
+      outcome: "read",
+      session: { readOnly: true, isolation: "serializable, priority low", writeProbe: { table: "registrations", sqlstate: "25006" }, attempts: 2 },
+    });
+    expect(statements.filter((sql) => sql.startsWith("BEGIN"))).toEqual([
+      "BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE, PRIORITY LOW, READ ONLY",
+      "BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE, PRIORITY LOW, READ ONLY",
+    ]);
+    expect(statements.filter((sql) => sql === "ROLLBACK")).toHaveLength(2);
+    expect(statements).not.toContain("COMMIT");
+    // No ROLLBACK TO SAVEPOINT after the retry error (CockroachDB refuses it); one after each refused write probe.
+    expect(statements.filter((sql) => sql.startsWith("ROLLBACK TO SAVEPOINT"))).toHaveLength(2);
+  });
+
+  it("gives up after three attempts and reports the retry error", async () => {
+    const { client, statements } = fakeClient(5);
+    await expect(inReadOnlySnapshot(client, "cockroach", async () => {
+      await isolated(client, () => client.query("SELECT flaky")).catch(() => undefined);
+      return "done";
+    })).rejects.toThrow("ReadWithinUncertaintyIntervalError");
+    expect(statements.filter((sql) => sql.startsWith("BEGIN"))).toHaveLength(3);
+  });
+
+  it("stops before reading anything when a write is not refused", async () => {
+    const statements: string[] = [];
+    const client = {
+      async query(sql: string) {
+        statements.push(sql);
+        if (sql === "SHOW transaction_read_only") return { rows: [{ transaction_read_only: "on" }] };
+        if (sql.includes("information_schema.tables")) return { rows: [{ table_name: "registrations" }] };
+        return { rows: [] };
+      },
+    } as unknown as Client;
+    const collect = async () => "read";
+    await expect(inReadOnlySnapshot(client, "postgres", collect)).rejects.toThrow("A write was not refused");
+    expect(statements.at(-1)).toBe("ROLLBACK");
   });
 });
