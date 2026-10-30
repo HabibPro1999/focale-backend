@@ -17,6 +17,7 @@ runtime. This is a semantic port, not a merge of the legacy application.
 | `25bf7fd`, `3043a84` | Hashed invite tokens, configurable seven-day lifetime, single-use claims, public verify/set-password/resend routes, admin resend/override cleanup. Separate Nest invite and email services preserve existing template lookup and email audit tracking. |
 | `660c87f` | Effective presentation-type filter (final decision, otherwise requested type); unpaginated XLSX export using the same filters, dynamic reviewer columns, escaped cells and download filenames. Shared French labels and author formatting. |
 | `30dcc52`, `8cdbd52` | Undated access and all ADDONs use `addonGroup.slots`; deterministic order, same-type exclusivity with included/existing-selection exemptions; optional required-selection enforcement on public create and access edits. |
+| `0f86c91d` (ported after the `8cdbd52` batch) | Template bulk send to abstract authors: audience `abstracts` with `abstractIds` or `abstractFilters` (status list, theme, effective presentation type) and `dedupeByEmail` (default true); abstracts module gate after the template checks; one QUEUED log per author with its abstract id and a context snapshot (abstract variables plus the registrant ones); `skipped` in every audience's response. Snapshot dates follow the abstract config's language, as for the other abstract emails. |
 
 Develop-specific fixes retained include Tunisia-local access date buckets,
 committee account eligibility and cross-client password-reset restrictions,
