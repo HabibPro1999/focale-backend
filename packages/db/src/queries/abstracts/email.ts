@@ -1,15 +1,17 @@
 /**
  * Abstract email reads: the SKIPPED-row ops query behind
- * requeue-skipped-abstract-emails, and the context the worker's email.abstract
- * handler renders from.
+ * requeue-skipped-abstract-emails, the context the worker's email.abstract
+ * handler renders from, and the recipients of a bulk send to abstract authors.
  */
-import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { getPrimaryLanguage, type LanguageCode } from "@app/contracts";
 import { getDb } from "../../client";
 import { abstractConfig, abstracts } from "../../schema/abstracts";
 import { events } from "../../schema/events-access";
 import { emailLogs } from "../../schema/email";
 import { abstractEmailTrigger } from "../../schema/enums";
+import { clients } from "../../schema/users-clients";
+import { buildAdminAbstractsWhere } from "./admin-reads";
 import type { AbstractRow } from "./shared";
 
 // ============================================================================
@@ -197,4 +199,171 @@ export async function getAbstractForEmailContext(
       finalFileUploadEnabled: cfg?.finalFileUploadEnabled ?? false,
     },
   };
+}
+
+// ----------------------------------------------------------------------------
+// Bulk-email recipients (template send route, audience "abstracts"). Port of
+// the legacy listAbstractsForBulkEmail (backend 0f86c91d): explicit ids (held
+// to the event, filters ignored) or the filters, oldest abstract first. A
+// blank author email is skipped; with dedupeByEmail, so is every later
+// abstract of the same author (normalized email). Both are counted.
+// ----------------------------------------------------------------------------
+
+/** An abstract with what the bulk-email context adds: author contact, event dates, organizer. */
+export interface AbstractForBulkEmail extends AbstractForEmailContext {
+  authorPhone: string;
+  authorAffiliation: string | null;
+  event: AbstractForEmailContext["event"] & {
+    startDate: Date;
+    endDate: Date;
+    location: string | null;
+    client: { name: string; email: string | null; phone: string | null };
+  };
+}
+
+export interface ListAbstractsForBulkEmailOptions {
+  abstractIds?: string[];
+  filters?: {
+    status?: AbstractRow["status"][];
+    themeId?: string;
+    /** The effective type: the final decision, else the requested type. */
+    presentationType?: AbstractRow["requestedType"];
+  };
+  /** Default true. */
+  dedupeByEmail?: boolean;
+}
+
+export async function listAbstractsForBulkEmail(
+  eventId: string,
+  options: ListAbstractsForBulkEmailOptions = {},
+): Promise<{ recipients: AbstractForBulkEmail[]; skipped: number }> {
+  const { abstractIds, filters, dedupeByEmail = true } = options;
+  const where =
+    abstractIds && abstractIds.length > 0
+      ? and(eq(abstracts.eventId, eventId), inArray(abstracts.id, abstractIds))
+      : and(
+          buildAdminAbstractsWhere(eventId, {
+            themeId: filters?.themeId,
+            presentationType: filters?.presentationType,
+          }),
+          filters?.status && filters.status.length > 0
+            ? inArray(abstracts.status, filters.status)
+            : undefined,
+        );
+
+  const db = getDb();
+  const [rows, [event]] = await Promise.all([
+    db
+      .select({
+        id: abstracts.id,
+        authorFirstName: abstracts.authorFirstName,
+        authorLastName: abstracts.authorLastName,
+        authorAffiliation: abstracts.authorAffiliation,
+        authorEmail: abstracts.authorEmail,
+        authorEmailNormalized: abstracts.authorEmailNormalized,
+        authorPhone: abstracts.authorPhone,
+        content: abstracts.content,
+        status: abstracts.status,
+        requestedType: abstracts.requestedType,
+        finalType: abstracts.finalType,
+        code: abstracts.code,
+        editToken: abstracts.editToken,
+        linkBaseUrl: abstracts.linkBaseUrl,
+      })
+      .from(abstracts)
+      .where(where)
+      // The id breaks created_at ties, so the abstract dedupe keeps is stable.
+      .orderBy(asc(abstracts.createdAt), asc(abstracts.id)),
+    db
+      .select({
+        name: events.name,
+        slug: events.slug,
+        clientId: events.clientId,
+        startDate: events.startDate,
+        endDate: events.endDate,
+        location: events.location,
+        clientName: clients.name,
+        clientEmail: clients.email,
+        clientPhone: clients.phone,
+        submissionStartAt: abstractConfig.submissionStartAt,
+        submissionDeadline: abstractConfig.submissionDeadline,
+        editingDeadline: abstractConfig.editingDeadline,
+        scoringStartAt: abstractConfig.scoringStartAt,
+        scoringDeadline: abstractConfig.scoringDeadline,
+        finalFileDeadline: abstractConfig.finalFileDeadline,
+        finalFileUploadEnabled: abstractConfig.finalFileUploadEnabled,
+        languages: abstractConfig.languages,
+      })
+      .from(events)
+      .innerJoin(clients, eq(clients.id, events.clientId))
+      .leftJoin(abstractConfig, eq(abstractConfig.eventId, events.id))
+      .where(eq(events.id, eventId))
+      .limit(1),
+  ]);
+
+  if (!event) return { recipients: [], skipped: 0 };
+
+  const eventContext: AbstractForBulkEmail["event"] = {
+    name: event.name,
+    slug: event.slug,
+    clientId: event.clientId,
+    startDate: event.startDate,
+    endDate: event.endDate,
+    location: event.location,
+    client: { name: event.clientName, email: event.clientEmail, phone: event.clientPhone },
+  };
+  // No abstract config: dates default to null, the upload flag to false, the language to fr.
+  const config: AbstractForBulkEmail["config"] = {
+    submissionStartAt: event.submissionStartAt ?? null,
+    submissionDeadline: event.submissionDeadline ?? null,
+    editingDeadline: event.editingDeadline ?? null,
+    scoringStartAt: event.scoringStartAt ?? null,
+    scoringDeadline: event.scoringDeadline ?? null,
+    finalFileDeadline: event.finalFileDeadline ?? null,
+    finalFileUploadEnabled: event.finalFileUploadEnabled ?? false,
+  };
+  const language = getPrimaryLanguage(event.languages);
+
+  const recipients: AbstractForBulkEmail[] = [];
+  const seen = new Set<string>();
+  let skipped = 0;
+
+  for (const row of rows) {
+    const authorEmail = row.authorEmail.trim();
+    if (!authorEmail) {
+      skipped++;
+      continue;
+    }
+
+    if (dedupeByEmail) {
+      const key = row.authorEmailNormalized ?? authorEmail.toLowerCase();
+      if (seen.has(key)) {
+        skipped++;
+        continue;
+      }
+      seen.add(key);
+    }
+
+    recipients.push({
+      id: row.id,
+      authorFirstName: row.authorFirstName,
+      authorLastName: row.authorLastName,
+      authorAffiliation: row.authorAffiliation,
+      authorEmail,
+      authorPhone: row.authorPhone,
+      content: row.content,
+      status: row.status,
+      requestedType: row.requestedType,
+      finalType: row.finalType,
+      code: row.code,
+      editToken: row.editToken,
+      linkBaseUrl: row.linkBaseUrl,
+      eventId,
+      language,
+      event: eventContext,
+      config,
+    });
+  }
+
+  return { recipients, skipped };
 }
