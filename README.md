@@ -6,7 +6,8 @@ API and a background worker, using Drizzle on PostgreSQL or CockroachDB.
 The root `Dockerfile` and generated `.env.example` belong to this workspace.
 The legacy Bun, Fastify and Prisma application that production runs until the
 cutover is kept at git tag `legacy-final` (main `0f86c91d`) for rollback and
-reference.
+reference. Code comments that name a root `src/`, `prisma/` or `tests/` path
+(for example "ported from legacy `src/modules/...`") refer to that tag.
 
 - [Production cutover](#production-cutover): the one-time move from the legacy
   app, Render services, rollback, data repairs

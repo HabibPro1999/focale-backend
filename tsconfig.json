@@ -1,7 +1,6 @@
 // Solution-style root: no files of its own, only references to the workspace
 // packages (each checked by its own tsconfig; `pnpm typecheck` runs them per
-// package, `tsc -b` works too). The legacy Bun app in src/ is not part of it:
-// its old config is tsconfig.legacy.json, kept for reference only.
+// package, `tsc -b` works too).
 {
   "files": [],
   "references": [

@@ -35,7 +35,7 @@ new RuleTester({
     // Direction is allowed, even through a relative path into a lower package.
     { filename: at("apps/api/src/modules/n/x.db.test.ts"), code: `import { f } from "../../../../../packages/db/tests/helpers/factories";` },
     { filename: at("apps/worker/src/jobs/x.ts"), code: `import { run } from "../job-runner"; const m = await import(specifier);` },
-    // Outside the workspace packages (legacy src/, root files): not policed.
+    // Outside the workspace packages (root files): not policed.
     { filename: at("src/legacy.ts"), code: `import { AppModule } from "@app/api";` },
   ],
   invalid: [

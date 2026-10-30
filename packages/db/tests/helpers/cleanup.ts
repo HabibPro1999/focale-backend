@@ -31,7 +31,7 @@ import {
   users,
 } from "@app/db";
 
-// FK-ordered delete, ported from legacy tests/helpers/test-app.cleanupDatabase
+// FK-ordered delete, ported from legacy tests/helpers/test-app.cleanupDatabase (tag legacy-final)
 // and extended to the Drizzle tables the DB tests write. Children are deleted before
 // parents because several parent FKs use ON DELETE RESTRICT (registrations →
 // forms → events), so a blanket delete in the wrong order would fail. Ordered
