@@ -403,6 +403,12 @@ async function runDataChecks(
       entries.push({ ...base, status: "skipped", summary: `the ledger records it as ${state}; apply will not run it`, affectedRows: 0 });
       continue;
     }
+    // Without a ledger, adopt --apply records these verdicts, so apply never
+    // runs the file (for example 0010 on production's timestamptz(6) columns).
+    if (!ledger.present && (verdict === "applied" || verdict === "baseline")) {
+      entries.push({ ...base, status: "skipped", summary: `adopt records it as ${verdict}; apply will not run it`, affectedRows: 0 });
+      continue;
+    }
     if (!migration) {
       entries.push({ ...base, status: "error", summary: "not part of this build", affectedRows: 0, error: "migration file not found" });
       continue;

@@ -199,6 +199,7 @@ describe.runIf(dbTestsEnabled())("cutover preflight and postflight", () => {
       expect(report.adopt.lines?.[0]).toMatch(/^Migration adoption \((postgres|cockroach); dry run \(no changes\)\):$/);
       const verdicts = Object.fromEntries((report.adopt.verdicts ?? []).map((entry) => [entry.id, entry.verdict]));
       for (const id of ["0004", "0006", "0011", "0030"]) expect(verdicts[id]).toBe("pending");
+      expect(verdicts["0010"]).toBe("applied");
       const ledger = await database.client.query("SELECT to_regclass('public.schema_migrations') IS NULL AS absent");
       expect(ledger.rows[0]?.absent).toBe(true);
     });
@@ -213,14 +214,10 @@ describe.runIf(dbTestsEnabled())("cutover preflight and postflight", () => {
         expect.objectContaining({ id: "t-loser", sort_order: 2, new_sort_order: 6, issued_codes: 0, slot_kept_by: "t-coded", updated_at: "2026-01-02 03:04:05.678" }),
       ]);
 
-      expect(check(report, "0010")).toMatchObject({ status: "changes-rows", affectedRows: 2 });
-      expect(check(report, "0010").details?.columns).toEqual(expect.arrayContaining([
-        expect.objectContaining({ table: "registrations", dataType: "timestamp with time zone", precision: 6, nonNullValues: 2 }),
-      ]));
-      expect(exported(run.result, "0010").rows).toEqual([
-        expect.objectContaining({ table_name: "access_check_ins", id: "ci-1", checked_in_at: "2026-05-04 09:30:00.987654+00", new_checked_in_at: "2026-05-04 09:30:00.988+00" }),
-        expect.objectContaining({ table_name: "registrations", id: "reg-net", checked_in_at: "2026-05-04 09:00:00.123456+00", new_checked_in_at: "2026-05-04 09:00:00.123+00" }),
-      ]);
+      // Adopt accepts production's timestamptz(6) columns as 0010, so apply
+      // never rewrites them and no check-in value loses its microseconds.
+      expect(check(report, "0010")).toMatchObject({ status: "skipped", adopt: "applied", affectedRows: 0 });
+      expect(check(report, "0010").export).toBeUndefined();
 
       expect(check(report, "0011")).toMatchObject({ status: "changes-rows", affectedRows: 1, review: true });
       expect(exported(run.result, "0011").rows).toEqual([expect.objectContaining({
@@ -268,7 +265,7 @@ describe.runIf(dbTestsEnabled())("cutover preflight and postflight", () => {
       const { directory } = run;
       expect((await readdir(directory)).sort()).toEqual(["affected", "report.json", "report.md", "table-counts.json"]);
       expect((await readdir(join(directory, "affected"))).sort())
-        .toEqual(["0004.json", "0006.json", "0010.json", "0011.json", "0030.json", "0033.json"]);
+        .toEqual(["0004.json", "0006.json", "0011.json", "0030.json", "0033.json"]);
       const markdown = await readFile(join(directory, "report.md"), "utf8");
       expect(markdown).toContain("**Personal data.**");
       expect(markdown).not.toContain(database.url);

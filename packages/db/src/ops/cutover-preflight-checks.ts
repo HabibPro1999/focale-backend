@@ -275,7 +275,7 @@ export const DATA_CHECKS: DataCheckDefinition[] = [
     file: "0010_checkin_timestamptz.sql",
     effect: "rewrites registrations.checked_in_at and access_check_ins.checked_in_at as timestamptz(3), rounding sub-millisecond values",
     citations: [
-      { line: 3, fragment: "datetime_precision = 3" },
+      { line: 3, fragment: "datetime_precision IN (3, 6)" },
       { line: 6, fragment: "SET TIME ZONE 'UTC';" },
       { line: 8, fragment: 'ALTER TABLE "registrations" ALTER COLUMN "checked_in_at" TYPE timestamptz(3) USING "checked_in_at"::timestamptz(3);' },
       { line: 10, fragment: 'ALTER TABLE "access_check_ins" ALTER COLUMN "checked_in_at" TYPE timestamptz(3) USING "checked_in_at"::timestamptz(3);' },
