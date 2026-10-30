@@ -240,3 +240,88 @@ describe("BulkSendFilterSchema role filter", () => {
     ).toBe(false);
   });
 });
+
+describe("BulkSendEmailSchema abstracts audience", () => {
+  const abstractId = "22222222-2222-4222-8222-222222222222";
+  const themeId = "33333333-3333-4333-8333-333333333333";
+
+  it("defaults to the registrant audience with dedupe enabled", () => {
+    const parsed = BulkSendEmailSchema.safeParse({});
+    expect(parsed.success).toBe(true);
+    expect(parsed.data).toEqual({ audience: "registrants", dedupeByEmail: true });
+  });
+
+  it("accepts the abstracts audience with filters", () => {
+    const parsed = BulkSendEmailSchema.safeParse({
+      audience: "abstracts",
+      abstractFilters: {
+        status: ["ACCEPTED", "PENDING"],
+        themeId,
+        presentationType: "POSTER",
+      },
+      dedupeByEmail: false,
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.dedupeByEmail).toBe(false);
+  });
+
+  it("accepts the abstracts audience with explicit abstract ids", () => {
+    const parsed = BulkSendEmailSchema.safeParse({
+      audience: "abstracts",
+      abstractIds: [abstractId],
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects unknown abstract statuses", () => {
+    const parsed = BulkSendEmailSchema.safeParse({
+      audience: "abstracts",
+      abstractFilters: { status: ["WITHDRAWN"] },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects CONFERENCE as a presentation type filter", () => {
+    const parsed = BulkSendEmailSchema.safeParse({
+      audience: "abstracts",
+      abstractFilters: { presentationType: "CONFERENCE" },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects unknown abstract filter keys", () => {
+    const parsed = BulkSendEmailSchema.safeParse({
+      audience: "abstracts",
+      abstractFilters: { q: "dupont" },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it.each([
+    ["registrants", { abstractIds: [abstractId] }],
+    ["sponsors", { abstractFilters: { status: ["ACCEPTED"] } }],
+  ] as const)("rejects abstract fields on the %s audience", (audience, fields) => {
+    const parsed = BulkSendEmailSchema.safeParse({ audience, ...fields });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues[0]).toMatchObject({
+      path: ["abstractIds"],
+      message: 'abstractIds and abstractFilters require audience "abstracts"',
+    });
+  });
+
+  it("keeps registrant payloads valid", () => {
+    const parsed = BulkSendEmailSchema.safeParse({
+      audience: "registrants",
+      registrationIds: [abstractId],
+      filters: { paymentStatus: ["PAID"] },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("accepts the admin dialog's abstracts body", () => {
+    // BulkSendDialog: { audience, abstractFilters? (only when set), dedupeByEmail }.
+    expect(
+      BulkSendEmailSchema.safeParse({ audience: "abstracts", dedupeByEmail: true }).success,
+    ).toBe(true);
+  });
+});

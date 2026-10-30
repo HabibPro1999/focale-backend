@@ -17,6 +17,10 @@
       "module": "packages/contracts/src/abstracts.ts",
       "type": "AbstractBookJobParam"
     },
+    "AbstractBulkSendFilterSchema": {
+      "module": "packages/contracts/src/email.ts",
+      "type": "AbstractBulkSendFilter"
+    },
     "AbstractEmailTriggerSchema": {
       "module": "packages/contracts/src/email.ts",
       "type": "AbstractEmailTrigger"

@@ -13,6 +13,12 @@ export type AbstractBookJobParam = {
   jobId: string;
 };
 
+export type AbstractBulkSendFilter = {
+  status?: Array<"SUBMITTED" | "UNDER_REVIEW" | "REVIEW_COMPLETE" | "ACCEPTED" | "REJECTED" | "PENDING">;
+  themeId?: string;
+  presentationType?: "ORAL_COMMUNICATION" | "POSTER";
+};
+
 export type AbstractEmailTrigger = "ABSTRACT_SUBMISSION_ACK" | "ABSTRACT_EDIT_ACK" | "ABSTRACT_DECISION" | "ABSTRACT_ACCEPTED" | "ABSTRACT_REJECTED" | "ABSTRACT_COMMITTEE_INVITE" | "ABSTRACT_COMMITTEE_COMMENTS" | "ABSTRACT_SCORE_DIVERGENCE" | "ABSTRACT_FINAL_FILE_REQUEST";
 
 export type AbstractIdParam = {
@@ -313,9 +319,13 @@ export type BeneficiaryTemplate = {
 
 export type BulkSendEmail = {
   /** @default "registrants" */
-  audience: "registrants" | "sponsors";
+  audience: "registrants" | "sponsors" | "abstracts";
   registrationIds?: string[];
   filters?: BulkSendFilter;
+  abstractIds?: string[];
+  abstractFilters?: AbstractBulkSendFilter;
+  /** @default true */
+  dedupeByEmail: boolean;
 };
 
 export type BulkSendFilter = {

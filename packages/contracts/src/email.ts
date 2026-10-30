@@ -1,3 +1,4 @@
+import { ABSTRACT_STATUSES } from "./abstracts";
 import { PaymentStatusSchema, RegistrationRoleSchema } from "./registration-enums";
 import { z } from "zod";
 import { paginationQueryShape } from "./zod-helpers";
@@ -244,11 +245,35 @@ export const BulkSendFilterSchema = z.strictObject({
   role: z.array(RegistrationRoleSchema).optional(),
 });
 
-export const BulkSendEmailSchema = z.strictObject({
-  audience: z.enum(["registrants", "sponsors"]).default("registrants"),
-  registrationIds: z.array(z.string().uuid()).optional(),
-  filters: BulkSendFilterSchema.optional(),
+/** Abstract submitters: the presentation type is the effective one (final, else requested). */
+export const AbstractBulkSendFilterSchema = z.strictObject({
+  status: z.array(z.enum(ABSTRACT_STATUSES)).optional(),
+  themeId: z.string().uuid().optional(),
+  presentationType: z.enum(["ORAL_COMMUNICATION", "POSTER"]).optional(),
 });
+
+export const BulkSendEmailSchema = z
+  .strictObject({
+    audience: z
+      .enum(["registrants", "sponsors", "abstracts"])
+      .default("registrants"),
+    registrationIds: z.array(z.string().uuid()).optional(),
+    filters: BulkSendFilterSchema.optional(),
+    // Abstract audience: explicit ids take precedence over filters.
+    abstractIds: z.array(z.string().uuid()).optional(),
+    abstractFilters: AbstractBulkSendFilterSchema.optional(),
+    // One email per author (normalized email), oldest abstract first.
+    dedupeByEmail: z.boolean().default(true),
+  })
+  .refine(
+    (data) =>
+      data.audience === "abstracts" ||
+      (data.abstractIds === undefined && data.abstractFilters === undefined),
+    {
+      message: 'abstractIds and abstractFilters require audience "abstracts"',
+      path: ["abstractIds"],
+    },
+  );
 
 // ============================================================================
 // Test Send + Custom Send Schemas
@@ -342,6 +367,7 @@ export type ListEventEmailLogsQuery = z.infer<
   typeof ListEventEmailLogsQuerySchema
 >;
 export type BulkSendFilter = z.infer<typeof BulkSendFilterSchema>;
+export type AbstractBulkSendFilter = z.infer<typeof AbstractBulkSendFilterSchema>;
 export type BulkSendEmailInput = z.infer<typeof BulkSendEmailSchema>;
 export type TestSendEmailInput = z.infer<typeof TestSendEmailSchema>;
 export type SendCustomEmailInput = z.infer<typeof SendCustomEmailSchema>;

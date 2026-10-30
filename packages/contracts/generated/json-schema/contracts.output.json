@@ -42,6 +42,38 @@
       ],
       "type": "object"
     },
+    "AbstractBulkSendFilterSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "items": {
+            "enum": [
+              "SUBMITTED",
+              "UNDER_REVIEW",
+              "REVIEW_COMPLETE",
+              "ACCEPTED",
+              "REJECTED",
+              "PENDING"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "themeId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "presentationType": {
+          "enum": [
+            "ORAL_COMMUNICATION",
+            "POSTER"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "AbstractEmailTriggerSchema": {
       "enum": [
         "ABSTRACT_SUBMISSION_ACK",
@@ -1435,7 +1467,8 @@
           "default": "registrants",
           "enum": [
             "registrants",
-            "sponsors"
+            "sponsors",
+            "abstracts"
           ],
           "type": "string"
         },
@@ -1449,10 +1482,26 @@
         },
         "filters": {
           "$ref": "#/$defs/BulkSendFilterSchema"
+        },
+        "abstractIds": {
+          "items": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "abstractFilters": {
+          "$ref": "#/$defs/AbstractBulkSendFilterSchema"
+        },
+        "dedupeByEmail": {
+          "default": true,
+          "type": "boolean"
         }
       },
       "required": [
-        "audience"
+        "audience",
+        "dedupeByEmail"
       ],
       "type": "object"
     },
