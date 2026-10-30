@@ -747,7 +747,19 @@ or a sign-off. The database steps are detailed in the
    - Whatever posts check-ins to `POST /api/events/:eventId/checkin/sync` sends
      `scannedAt` with seconds: the zod 4.6 update refuses minute precision
      (`2026-10-30T10:15Z`) with 400; legacy accepted it. Browser
-     `toISOString()` always has seconds.
+     `toISOString()` always has seconds. That client must also send at most
+     500 `checkIns` per request (more is a 400 `VAL_2001` and nothing syncs),
+     and read a concurrent duplicate scan under `alreadyCheckedIn` and a
+     payment that stopped being settled under `errors`. No repository here
+     calls this route, so confirm whether such a client exists.
+   - `node apps/api/dist/scripts/form-condition-report.js` (read-only) lists
+     the form fields whose conditions the public form evaluates differently
+     from their configuration: an uppercase `conditionLogic`, non-string
+     values, unknown operators or fields. Decide each listed form before the
+     window (your decision): legacy's server compared the logic without regard
+     to case, this build follows the form app, which treats anything but
+     `'and'` as OR, so a field with an uppercase `AND` and two or more
+     conditions changes visibility and required checks at the switch.
    - Optional: `node apps/api/dist/scripts/email-template-style-preflight.js`
      reports, per email template, the text-align, font-size and line-height
      attributes it would remove or normalize and the templates that need a
@@ -757,9 +769,15 @@ or a sign-off. The database steps are detailed in the
 **Frontends first (the same day as the backend window)**
 
 7. Merge form `develop` into `main` and wait for the Vercel production deploy.
+   `develop` must already hold the form `release/prod-alignment` branch (it
+   adds the localized refusal for an origin missing from
+   `PUBLIC_LINK_ALLOWED_ORIGINS`); the same applies to admin in step 8.
    Against the live legacy API: load a public form, open an existing payment
    link, edit link and abstract link, and submit one test registration.
-8. Merge admin `develop` into `main` and deploy. Log in as a super admin and
+8. Merge admin `develop` into `main` and deploy, with
+   `VITE_REALTIME_ENABLED=true` in the Vercel production environment (without
+   it, capacity changes, email statuses and reconnects after a deploy show
+   only after a manual refresh). Log in as a super admin and
    as a client admin; open registrations. From now until the API switch,
    freeze what admin `develop` cannot do on the legacy API: saving email
    templates and certificate templates and sending abstract presenter
@@ -833,6 +851,13 @@ Behavior that changes for users at the switch:
   language the same way.
 - Registrations repaired by 0011 now show the net amount they were quoted
   instead of 0 due; the over-quote rows show more (migrator README, step 4).
+- Form fields with an uppercase `AND` and two or more conditions are evaluated
+  as OR on the server too, as the form app already does (the form-condition
+  report in step 6 lists them).
+- Certificate PDFs are drawn from a JPEG background capped at 3508 px
+  (quality 88, CMYK converted to sRGB, transparency printed white): compare
+  one certificate per real template with legacy's output in the rehearsal
+  (step 2).
 
 ### Environment for the cutover
 
@@ -1143,7 +1168,54 @@ logs.
 
 ### Open frontend follow-ups
 
-<!-- open-frontend-followups: filled by the lead from the follow-up audit -->
+The 38 frontend follow-up notes the backend work left at the repository root
+were checked item by item against the release branches (backend, admin and
+form `release/prod-alignment`, networking `develop`), then removed; their text
+stays in git history. Of 274 items, 147 were done, 96 were information only, 2
+were obsolete and 29 were open. The open items:
+
+**Operations (all in the cutover steps above)**
+
+| Item | Severity | Where |
+|---|---|---|
+| `PUBLIC_LINK_ALLOWED_ORIGINS` lists every public form origin; an incomplete list still boots, then refuses each registration and abstract submission from a missing origin with 422 `VAL_2001` | blocker | [step 6](#cutover-order), [Environment for the cutover](#environment-for-the-cutover) |
+| `CORS_ORIGIN` lists the exact admin and form origins; `*` or a wildcard host stops boot | blocker | [Environment for the cutover](#environment-for-the-cutover), `check-config` in steps 5 and 12 |
+| Sponsorship code repair, then `apply --apply-deferred=0030` | high | [Data repairs](#data-repairs) |
+| The worker knows `networking.event.sync` and `networking.registration.sync` before the API enqueues them | high | step 13 |
+| `stored-json-report` before the API serves; `JSONB_VALIDATION=warn` until it is clean | high, medium | step 11 |
+| `form-condition-report` and a per-form decision | medium | step 6 |
+| Certificate PDFs from real templates compared with legacy | medium | step 2, step 14 |
+| `VITE_REALTIME_ENABLED=true` in the admin production build | medium | step 8 |
+| Networking smoke tests | medium | [If networking launches](#if-networking-launches) |
+| Form and admin ship from their `release/prod-alignment` branches | low | step 7 |
+| SendGrid **Processed** event (Resend `email.sent`) | low | step 6 |
+| `uncertainCount` watched; `UNCERTAIN` rows decided before a rollback | low | step 14, [Rollback](#rollback-backend-only) |
+| `backfill-certificate-renders` for templates uploaded before 0032 | low | [After the cutover](#after-the-cutover) |
+| A check-in client outside these repositories, if one exists | info | step 6 |
+
+**Admin**
+
+<!-- admin-followups: filled after the admin follow-up branch -->
+
+**Form, backend and admin together**
+
+- The condition evaluator has three quirks: an uppercase `conditionLogic`
+  `AND` is evaluated as OR, a non-string condition value throws on
+  `.toLowerCase()`, and the form's `FieldRenderer` defaults an empty logic to
+  `'and'` while validation does not. The backend
+  (`packages/shared/src/field-visibility.ts`) and the admin
+  (`utils/conditions.ts`) mirror the form on purpose, so the cutover adds no
+  divergence between them. A fix changes form `src/lib/conditions.ts`, those
+  two copies and the shared parity fixtures in one release; lowercasing stored
+  forms is a per-form decision driven by the form-condition report.
+- Optional: a self-edit of a `PAID` registration in the form could compare a
+  fresh quote with the current total before it sends; the up-front notice and
+  the `REG_8014` recovery cover it today.
+- Optional: admin, form and networking can replace hand-written request and
+  response types with `packages/contracts/generated/types/contracts.input.ts`
+  and `contracts.output.ts` when those files are next touched.
+
+<!-- form-followups: filled after the form follow-up branch -->
 
 ## Testing and environment safety
 
