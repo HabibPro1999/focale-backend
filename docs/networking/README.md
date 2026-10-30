@@ -2,9 +2,7 @@
 
 The networking module shares Focale’s NestJS API, Drizzle database, registration records, storage and email providers. Organizers configure it in the existing **admin develop** app. Participants use the separate networking PWA repository. Registration forms offer a profile preview and networking participation choice.
 
-Current behavior and operator procedures are documented below. Earlier implementation,
-audit and verification notes are retained in [history](history/README.md); their
-test counts and deployment statements describe their original dates.
+Current behavior and operator procedures are documented below. Earlier implementation, audit and verification notes are in the git history. Networking has never been deployed to production; what a first launch needs is in the root README, "Production cutover", "If networking launches".
 
 ## Services and configuration
 
@@ -35,7 +33,7 @@ A missing embedding credential leaves the participant directory usable with an e
 
 ## Database migration
 
-Existing databases must already have the platform baseline through 0011 applied. The unified runner refuses to run against an existing database without its ledger; adopt the existing history first with `node packages/db/dist/migrator/cli.js adopt` (dry run) and then `adopt --apply` (see `packages/db/src/migrator/README.md`).
+Networking's schema comes from migrations 0012-0020 (0017 on CockroachDB only), 0022, 0025, 0026, 0031, 0034 and 0035, applied by the unified runner with the platform's. The runner refuses to run against an existing database without its ledger; adopt the existing history first with `node packages/db/dist/migrator/cli.js adopt` (dry run) and then `adopt --apply`. On production they apply in the same `apply` as the rest of the cutover ([migrator README, Production rollout](../../packages/db/src/migrator/README.md#production-rollout-operator-steps)).
 
 PostgreSQL requires the pgvector extension package installed on the server and the `vector` extension installed in the database before migration 0013. The runner checks for it and never installs extensions. CockroachDB uses native `VECTOR`; the runner detects CockroachDB and does not check for a PostgreSQL extension. Verify the deployed CockroachDB version has native vector support before migration.
 
@@ -52,7 +50,7 @@ pnpm --filter @app/db exec node scripts/migrate-networking.mjs
 pnpm --filter @app/db exec node scripts/migrate-networking.mjs --apply
 ```
 
-The shim delegates to the unified runner, which records migration checksums and skips previously applied files; changed applied migrations cause an error. Future changes belong in a new numbered migration. Existing databases without the unified ledger require adoption (`adopt`, then `adopt --apply`) before `apply` will proceed; `adopt` maps the old `networking_migrations` rows, including the CockroachDB 0018 steps, onto the unified ledger.
+The shim delegates to the built unified runner: `plan` by default, `apply --yes` with `--apply`, forwarding `--through=NNNN` and `--apply-deferred=NNNN`. `--bootstrap-test` (with `--apply`) first checks that `DATABASE_URL` names a local, dedicated `networking_test_*` (or `focale_networking_test_*`) database; it does not create the database or bypass the runner's checks. The shim does not manage `sql_safe_updates` or check vector backfills. The runner records migration checksums and skips previously applied files; changed applied migrations cause an error. Future changes belong in a new numbered migration. Existing databases without the unified ledger require adoption (`adopt`, then `adopt --apply`) before `apply` will proceed; `adopt` maps the old `networking_migrations` rows, including the CockroachDB 0018 steps, onto the unified ledger.
 
 Vector lookup uses exact cosine distance within eligible event profiles up to 5,000 embedded profiles per event. Above that it retrieves bounded candidates through the approximate (ANN) index and reranks them exactly. Only CockroachDB has an ANN migration (0017, see below); PostgreSQL has none, so large events there always use the fallback.
 
@@ -102,6 +100,31 @@ Administrator endpoints:
 - `POST /api/events/:eventId/networking/recommendations/reindex`: retry/rebuild eligible event profiles, preserving live worker leases.
 
 After fixing provider credentials or a delivery failure, inspect job state and explicitly reindex exhausted embedding jobs as needed. Validate recommendation relevance using reviewed real professional pairs; synthetic distance tests prove filtering and ranking mechanics, not real-world matchmaking accuracy.
+
+### Recommendation performance
+
+- Up to 5,000 embedded profiles per event and model: exact weighted scoring.
+- Larger events: three cosine searches (profile similarity, needs→offers, offers→needs), then exact 40/40/20 scoring of their de-duplicated candidate union. Empty offers or needs skip the complementary search. The first search asks for 240 neighbors per signal for the API's 60-candidate page; when eligibility filters leave too few, breadth grows to 960 and then 3,840 per signal. Work stays bounded: there is no unbounded exact fallback for large events, so the shortlist can miss eligible matches when many nearest neighbors are excluded.
+- CockroachDB searches an index prefixed by event, kind and model (0017). PostgreSQL keeps exact distance scans; no PostgreSQL ANN index is installed.
+- A per-process cache (30 s, 1,000 entries) keeps candidate IDs and scores only and merges simultaneous requests for one key (event, caller, model, professional-text hash, allowed payment statuses). Empty or pending results and failures are not cached. Every request authenticates again and rechecks eligibility, consent, visibility, payment, blocks, passes and connections; an exhausted cached page is refreshed once. Changed candidate text or newly eligible participants can take up to 30 s to affect ranking.
+- Activity heartbeats update `last_active_at` without `updated_at`, so browsing does not enqueue unchanged profiles for embedding checks.
+
+Worker throughput: by default up to 128 profiles per tick (8 batches of 16) on two lanes, each claiming only when ready, under the existing leases and retry backoff; the three vectors of a profile are saved in one upsert. `NETWORKING_EMBEDDING_BATCH_SIZE` (1-32, default 16), `NETWORKING_EMBEDDING_BATCHES_PER_TICK` (1-32, default 8) and `NETWORKING_EMBEDDING_CONCURRENCY` (1-4, default 2) are ceilings, not guaranteed rates: tune them against the provider's rate limits and database capacity. Overlapping ticks are skipped. Long multilingual input is split into requests of at most 96 documents and 200,000 UTF-8 bytes; unchanged text makes no provider call.
+
+Measured on a local single-node CockroachDB 26.2.5 with 10,000 synthetic profiles and three sequential callers ([result](../../packages/db/scripts/benchmarks/networking-vectors-10000.json)): exact weighted baseline 987-1,290 ms, indexed shortlist with exact reranking 564-641 ms, top-30 overlap with the exact baseline 100% for all three callers. At 3,000 profiles the index was slower (396-537 ms against 313-378 ms), hence the 5,000-profile cutoff, an initial tuning choice. The fixture stores 1,536 dimensions built from 32 synthetic features: it is a reproducible retrieval test, not evidence of match relevance, production latency or capacity. Before a large event, measure latency, database CPU, shortlist recall on representative profiles and accepted connections and meetings.
+
+To rerun, on a dedicated local disposable database that nothing else uses, initialized with `migrate-networking.mjs --apply --bootstrap-test` (the benchmark accepts 5,001-100,000 profiles, uses synthetic vectors without provider calls, checks index use on CockroachDB, compares top-30 results and removes its fixture):
+
+```sh
+ALLOW_DB_TESTS=1 \
+TEST_DATABASE_URL=postgresql://localhost/focale_networking_test_vectors \
+NETWORKING_VECTOR_SIZE=10000 \
+NETWORKING_VECTOR_REPORT=/tmp/networking-vectors.json \
+NODE_OPTIONS=--conditions=@app/source \
+pnpm --filter @app/db exec tsx scripts/benchmark-networking-vectors.ts
+```
+
+Participant discovery latency (directory, filters, query with recommended sort, at 2,000 and 10,000 profiles) is measured by the opt-in `apps/api/src/modules/networking/networking.perf.test.ts` (`NETWORKING_PERFORMANCE=1`, `ALLOW_DB_TESTS=1`, `TEST_DATABASE_URL`); its last recorded result is [networking-performance.json](../../packages/db/scripts/benchmarks/networking-performance.json).
 
 ### Vector index health and runbook (CockroachDB)
 
@@ -248,7 +271,9 @@ Only allocations (a meeting request's hold, accepting a proposal, rescheduling a
 
 ## Participant notification stream
 
-`GET /api/networking/:slug/stream` (SSE) is the PWA's live notification feed (`apps/api/src/modules/networking/networking.stream.ts`; client contract in `FRONTEND_FOLLOWUP_4_3.md`).
+`GET /api/networking/:slug/stream` (SSE) is the PWA's live notification feed (`apps/api/src/modules/networking/networking.stream.ts`), authenticated with the participant bearer.
+
+- **Client contract.** Frames: `event: ready` (first frame, always with an `id`); `event: notifications` with rows **oldest first**, at most 100 per frame, which can repeat (merge by `row.id`); `event: replay-gap` (refetch `GET notifications`); `event: reconnect` (`reason` `lifetime` or `error`: reconnect at once with `Last-Event-ID`); `event: replaced` (`reason` `stream-limit`: reconnect only when the tab is visible again, or two tabs evict each other in a loop); `event: session-ended` (`code`: handle it like the same error on any participant route, do not reconnect blindly); `event: shutdown` (reconnect after `reconnectInMs`); a `: heartbeat` comment every `SSE_HEARTBEAT_MS` (25 s) when idle. The server closes the response after `reconnect`, `replaced`, `session-ended` and `shutdown`; any other close means reconnect. Only the last frame of a burst carries the `id`. A bad session fails with an ordinary HTTP error before any frame, and a deploy answers 503 `SRV_5003` with `Retry-After`.
 
 - **Signals.** Every participant notification is written by `createNetworkingNotification`, which also signals the participant's streams. The signal carries IDs only (`eventId`, `profileId`, `notificationId`). Inside an API networking transaction it is published to the in-process `NetworkingNotificationHub` right after commit (never for a rolled-back attempt). Anywhere else (the worker, registration and payment paths, `withSerializableTxn`) it is a `networking.notify` outbox row in the same transaction, which the API's realtime pump relays to the hub within about a second. The hub is separate from the admin realtime bus and keyed by (event, participant), so a notice never wakes another participant's or another event's stream.
 - **Catch-up.** A woken stream runs a keyset query over its own participant's rows created since its watermark minus 10 s (`networkingNotificationsPage`: `(profile_id, created_at)` index, paged by id), and sends what it has not sent yet. Signals during a catch-up coalesce into one more pass. A 60 s resync runs the same query without a signal.
@@ -391,5 +416,6 @@ Organizer routes use the shared event/tenant/module guards (129 total guarded
 routes across the API, 28 in networking). All 74 networking JSON routes have
 closed response contracts; current fields and privacy exclusions are preserved.
 Raw exports, calendar ICS, the personal JSON download and SSE keep their explicit
-envelope exemptions. See the backend frontend-follow-up files for guard ordering
-and generated response types.
+envelope exemptions. The guards' refusal order is in the root README ("Tenant
+scoping"); the response types are generated into `packages/contracts/generated/`
+(root README, "Frontend contract artifacts").

@@ -80,7 +80,7 @@ export function preflightFindings(report: CutoverPreflightReport): PreflightFind
     const readCommitted = report.database.settings["sql.txn.read_committed_isolation.enabled"];
     if (readCommitted?.error) review("sql.txn.read_committed_isolation.enabled", `unreadable (${readCommitted.error})`);
     else if (!settingTrue(readCommitted?.value)) {
-      review("sql.txn.read_committed_isolation.enabled", "off: READ COMMITTED transactions run as SERIALIZABLE (docs/adr/0001-concurrency-control.md assumes on)");
+      review("sql.txn.read_committed_isolation.enabled", "off: READ COMMITTED transactions run as SERIALIZABLE (packages/db/README.md, Concurrency control, assumes on)");
     }
   }
 
