@@ -65,15 +65,27 @@ export async function createMigrationLedger(client: Client): Promise<void> {
   );
 }
 
-export async function assertAdoptionRequiredIfNonEmpty(client: Client): Promise<void> {
-  if (!(await schemaHasApplicationObjects(client))) return;
-  if (!(await tableExists(client, "schema_migrations"))) {
-    throw new Error("Refusing to apply migrations to a non-empty schema without a ledger; run migrate adopt first");
-  }
+/**
+ * Whether the schema still needs `migrate adopt`: it has application tables but
+ * no ledger table (`missing`) or a ledger without rows (`empty`). Null for an
+ * empty schema or one with ledger rows. apply and the production boot check
+ * both refuse such a schema.
+ */
+export async function adoptionRequired(client: Client): Promise<"missing" | "empty" | null> {
+  if (!(await schemaHasApplicationObjects(client))) return null;
+  if (!(await tableExists(client, "schema_migrations"))) return "missing";
   const ledger = await client.query<{ present: boolean }>(
     "SELECT EXISTS (SELECT 1 FROM public.schema_migrations) AS present",
   );
-  if (!ledger.rows[0]?.present) {
+  return ledger.rows[0]?.present ? null : "empty";
+}
+
+export async function assertAdoptionRequiredIfNonEmpty(client: Client): Promise<void> {
+  const required = await adoptionRequired(client);
+  if (required === "missing") {
+    throw new Error("Refusing to apply migrations to a non-empty schema without a ledger; run migrate adopt first");
+  }
+  if (required === "empty") {
     throw new Error("Refusing to apply migrations to a non-empty schema with an empty ledger; run migrate adopt first");
   }
 }

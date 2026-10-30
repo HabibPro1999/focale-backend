@@ -15,6 +15,7 @@ const state = vi.hoisted(() => {
     integrations: { email: { provider: "test" } },
     realtime: { disabled: false },
     MIGRATIONS_CHECK: "enforce",
+    isProduction: false,
     lifecycle: { shutdownGraceMs: 3210 },
     PORT: 4321,
   };
@@ -101,6 +102,7 @@ beforeEach(() => {
   state.trace.length = 0;
   state.handlers.clear();
   state.config.realtime.disabled = false;
+  state.config.isProduction = false;
   state.schemaError = undefined;
   state.shutdownOptions = undefined;
   vi.spyOn(process, "on").mockImplementation((signal, handler) => {
@@ -139,6 +141,7 @@ describe("API bootstrap wiring", () => {
     expect(db.assertSchemaCurrent).toHaveBeenCalledWith({
       mode: "enforce",
       logger: state.logger,
+      production: false,
     });
     expect(state.readiness.recordSchemaCheck).toHaveBeenCalledWith(
       state.schemaCheck,
@@ -171,6 +174,17 @@ describe("API bootstrap wiring", () => {
     );
     await state.shutdownOptions?.closeDb();
     expect(state.trace.slice(-2)).toEqual(["flush", "closeDb"]);
+  });
+
+  it("tells the schema check it runs in production, where an unadopted database is fatal in every mode", async () => {
+    state.config.isProduction = true;
+    await boot();
+    await vi.waitFor(() => expect(state.app.listen).toHaveBeenCalled());
+    expect(db.assertSchemaCurrent).toHaveBeenCalledWith({
+      mode: "enforce",
+      logger: state.logger,
+      production: true,
+    });
   });
 
   it("reports schema failure without building or listening", async () => {

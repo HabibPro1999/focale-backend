@@ -17,6 +17,7 @@ const state = vi.hoisted(() => {
     integrations: { email: { provider: "test" } },
     realtime: { disabled: false },
     MIGRATIONS_CHECK: "enforce",
+    isProduction: false,
     runWorkers: true,
     lifecycle: {
       shutdownGraceMs: 3210,
@@ -121,6 +122,7 @@ beforeEach(() => {
   state.handlers.clear();
   state.config.realtime.disabled = false;
   state.config.runWorkers = true;
+  state.config.isProduction = false;
   state.schemaError = undefined;
   state.shutdownOptions = undefined;
   state.heartbeatOptions = undefined;
@@ -162,6 +164,7 @@ describe("worker bootstrap wiring", () => {
     expect(db.assertSchemaCurrent).toHaveBeenCalledWith({
       mode: "enforce",
       logger: state.logger,
+      production: false,
     });
     expect(state.heartbeat.start).toHaveBeenCalledWith({
       disabled: false,
@@ -218,6 +221,40 @@ describe("worker bootstrap wiring", () => {
     );
     await state.heartbeatOptions?.prune?.();
     expect(db.pruneWorkerHeartbeats).toHaveBeenCalledWith("pool");
+  });
+
+  it("tells the schema check it runs in production, where an unadopted database is fatal in every mode", async () => {
+    state.config.isProduction = true;
+    await boot();
+    await vi.waitFor(() => expect(state.handlers.has("SIGTERM")).toBe(true));
+    expect(db.assertSchemaCurrent).toHaveBeenCalledWith({
+      mode: "enforce",
+      logger: state.logger,
+      production: true,
+    });
+  });
+
+  // The rollout runs migrate adopt and apply from this idle worker's shell
+  // while the production database cannot pass the check yet.
+  it("idles with RUN_WORKERS=false in production without running the schema check", async () => {
+    state.config.isProduction = true;
+    state.config.runWorkers = false;
+    await boot();
+    await vi.waitFor(() => expect(state.handlers.has("SIGTERM")).toBe(true));
+    expect(db.assertSchemaCurrent).not.toHaveBeenCalled();
+    expect(state.trace).toEqual([
+      "unhandledRejection",
+      "config",
+      "runtime",
+      "workerId",
+      "heartbeat",
+      "heartbeat.start",
+      "shutdown",
+      "SIGINT",
+      "SIGTERM",
+    ]);
+    expect(state.heartbeat.start).toHaveBeenCalledWith({ disabled: true });
+    expect(process.exit).not.toHaveBeenCalled();
   });
 
   it("reports schema failure before starting the context or heartbeat", async () => {

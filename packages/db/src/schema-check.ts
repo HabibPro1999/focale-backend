@@ -2,6 +2,7 @@ import type { AppConfig } from "@app/contracts";
 import type { Client, PoolClient } from "pg";
 import { getDb } from "./client";
 import {
+  adoptionRequired,
   databaseEngine,
   defaultMigrationsDirectory,
   loadMigrations,
@@ -23,6 +24,12 @@ export type SchemaCheckClient = Pick<PoolClient, "query" | "release">;
 export interface SchemaCheckOptions {
   mode: MigrationsCheckMode;
   logger: SchemaCheckLogger;
+  /**
+   * NODE_ENV=production: a database with application tables but no migration
+   * ledger, or an empty one (the legacy database before `migrate adopt`),
+   * stops the process in every mode, `off` included.
+   */
+  production?: boolean;
   /** Bound for connecting plus every check query (default 15 s). */
   timeoutMs?: number;
   /**
@@ -48,6 +55,23 @@ export class SchemaNotCurrentError extends Error {
   constructor(readonly errors: string[]) {
     super(`Database schema check failed (MIGRATIONS_CHECK=enforce):\n${errors.map((e) => `  - ${e}`).join("\n")}`);
     this.name = "SchemaNotCurrentError";
+  }
+}
+
+/** Production boot on a legacy database that `migrate adopt` has not adopted. */
+export class UnadoptedDatabaseError extends Error {
+  constructor(readonly ledger: "missing" | "empty") {
+    super(
+      [
+        `Refusing to start in production: the database has application tables but ${
+          ledger === "missing" ? "no migration ledger" : "an empty migration ledger"
+        }, so it has not been adopted (MIGRATIONS_CHECK does not override this).`,
+        "Adopt it from a shell of this build, such as a worker with RUN_WORKERS=false (it idles before this check):",
+        "`node packages/db/dist/migrator/cli.js adopt`, then `adopt --apply`, the 0011 check, `apply --yes` and",
+        '`verify --schema`, as "Production rollout" in packages/db/src/migrator/README.md describes.',
+      ].join("\n"),
+    );
+    this.name = "UnadoptedDatabaseError";
   }
 }
 
@@ -82,10 +106,16 @@ export async function inspectSchema(client: SchemaCheckClient): Promise<SchemaIn
   return { errors: [...errors, ...verification.errors], warnings: verification.warnings };
 }
 
+/** The inspection plus, in production, why the database still needs adopting. */
+interface BootInspection extends SchemaInspection {
+  unadopted?: "missing" | "empty";
+}
+
 async function inspectWithDeadline(
   connect: () => Promise<SchemaCheckClient>,
   timeoutMs: number,
-): Promise<SchemaInspection> {
+  inspect: (client: SchemaCheckClient) => Promise<BootInspection>,
+): Promise<BootInspection> {
   let timedOut = false;
   let timer: NodeJS.Timeout | undefined;
   let client: SchemaCheckClient | undefined;
@@ -96,7 +126,7 @@ async function inspectWithDeadline(
       throw new Error("schema check connection arrived after the deadline");
     }
     client = connected;
-    return inspectSchema(connected);
+    return inspect(connected);
   })();
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
@@ -128,20 +158,46 @@ function applicationPoolClient(): Promise<SchemaCheckClient> {
  * SchemaNotCurrentError on pending, checksum-mismatched or missing-ledger
  * state, a non-UTC session, or an unreachable database; `warn` logs the same
  * findings and continues; `off` skips the check. Deferred and newer-unknown
- * migrations only warn. Bounded by `timeoutMs`, so boot never hangs.
+ * migrations only warn. With `production`, a database that has application
+ * tables but no ledger rows throws UnadoptedDatabaseError in every mode (under
+ * `off` that is the only query); an unreachable database keeps the mode's
+ * behavior. Bounded by `timeoutMs`, so boot never hangs.
  */
 export async function assertSchemaCurrent(options: SchemaCheckOptions): Promise<SchemaCheckResult> {
   const { mode, logger } = options;
-  if (mode === "off") {
+  const production = options.production === true;
+  if (mode === "off" && !production) {
     logger.info({ migrationsCheck: mode }, "Database schema check skipped");
     return { mode, skipped: true, errors: [], warnings: [] };
   }
   const inspection = await inspectWithDeadline(
     options.connect ?? applicationPoolClient,
     options.timeoutMs ?? DEFAULT_SCHEMA_CHECK_TIMEOUT_MS,
+    async (client): Promise<BootInspection> => {
+      const inspection = mode === "off" ? { errors: [], warnings: [] } : await inspectSchema(client);
+      const unadopted = production ? await adoptionRequired(client as unknown as Client) : null;
+      return unadopted ? { ...inspection, unadopted } : inspection;
+    },
   );
+  if (inspection.unadopted) {
+    logger.error(
+      { migrationsCheck: mode, ledger: inspection.unadopted },
+      "Database has not been adopted by the migrator; refusing to start",
+    );
+    throw new UnadoptedDatabaseError(inspection.unadopted);
+  }
   const errors = inspection.errors.map(redactCredentials);
   const warnings = inspection.warnings.map(redactCredentials);
+  if (mode === "off") {
+    for (const error of errors) {
+      logger.warn(
+        { migrationsCheck: mode },
+        `Database adoption check did not complete (continuing because MIGRATIONS_CHECK=off): ${error}`,
+      );
+    }
+    logger.info({ migrationsCheck: mode }, "Database schema check skipped");
+    return { mode, skipped: true, errors: [], warnings: [] };
+  }
   for (const warning of warnings) logger.warn({ migrationsCheck: mode }, `Database schema: ${warning}`);
   if (errors.length && mode === "enforce") {
     logger.error({ migrationsCheck: mode, errors }, "Database schema is not current; refusing to start");

@@ -22,6 +22,7 @@ export {
   schemaHasApplicationObjects,
   migrationLedgerExists,
   createMigrationLedger,
+  adoptionRequired,
   assertAdoptionRequiredIfNonEmpty,
   listMigrationRecords,
   listMigrationStepRecords,

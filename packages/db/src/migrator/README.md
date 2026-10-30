@@ -113,13 +113,22 @@ only warn. The check is bounded (15 s) and read-only.
 - `MIGRATIONS_CHECK=warn` (default): errors are logged and boot continues.
 - `MIGRATIONS_CHECK=off`: no check.
 
+In production (`NODE_ENV=production`) a database with application tables but
+no ledger, or an empty one, has not been adopted: the API and a job-running
+worker refuse to start on it in every mode, `off` included
+(`UnadoptedDatabaseError`, whose message says how to adopt). Under `off` that
+is the only query. An unreachable database keeps the mode's behavior. A worker
+with `RUN_WORKERS=false` idles before the check (`apps/worker/src/main.ts`), so
+its shell can run the rollout below.
+
 ## Production rollout (operator steps)
 
 Run these against production only in a planned window, with credentials loaded
 the way operators already do; nothing here is automated by the repository.
 
-1. Deploy this build with `MIGRATIONS_CHECK=warn` (the default). The boot check
-   logs the missing ledger but the services start.
+1. Start this build only as a worker with `RUN_WORKERS=false` and run steps
+   2-6 from its shell: until the ledger is adopted, the API and a job-running
+   worker refuse to start on the production database (see the boot check).
 2. Run `node packages/db/dist/migrator/cli.js adopt` (dry run) and review the
    report: every migration's verdict, its probe counts, legacy ledger evidence
    and any abort reasons. This also settles whether production has 0016/0017.
