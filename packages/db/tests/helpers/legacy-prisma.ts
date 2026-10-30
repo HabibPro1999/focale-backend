@@ -122,6 +122,15 @@ export async function loadLegacyPrismaSchema(
   }
 }
 
+/** Writes only the fixture's `_prisma_migrations` table and rows, e.g. beside a schema the runner built. */
+export async function writeLegacyPrismaLedger(client: Client): Promise<void> {
+  const statements = legacyPrismaStatements("cockroach").filter((statement) =>
+    /^(?:CREATE TABLE|INSERT INTO) "_prisma_migrations"/.test(statement),
+  );
+  if (statements.length !== 2) throw new Error("The legacy Prisma fixture no longer has its _prisma_migrations section");
+  for (const statement of statements) await client.query(statement);
+}
+
 /**
  * A scratch database shaped like production before the cutover: the legacy
  * Prisma schema and `_prisma_migrations`, no `schema_migrations`. Adopt it

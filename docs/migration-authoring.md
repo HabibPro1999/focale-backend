@@ -52,11 +52,16 @@ The runner splits SQL only at `--> statement-breakpoint` markers, never at
 semicolons. A file may not contain `BEGIN`: the runner owns the transactions.
 
 The catalog probes (used by `verify --schema` and `adopt`) are derived from
-`CREATE TABLE`, `CREATE TYPE`, `CREATE [UNIQUE|VECTOR] INDEX`, `DROP INDEX`,
+`CREATE TABLE` (the table and each column it declares), `CREATE TYPE … AS ENUM`
+(the type and each label), `CREATE [UNIQUE|VECTOR] INDEX`, `DROP INDEX`,
 `DROP TABLE`, `ALTER INDEX … RENAME TO`, `ALTER TABLE … ADD COLUMN` and
-`ALTER TABLE … ADD CONSTRAINT`. Anything else (`DROP COLUMN`,
-`DROP CONSTRAINT`, data changes) needs a `verify` directive, or a
+`ALTER TABLE … ADD CONSTRAINT`. They check that objects exist, not their
+types. Anything else (`DROP COLUMN`, `DROP CONSTRAINT`, `ALTER TYPE … ADD
+VALUE`, data changes) needs a `verify` directive, or a
 `packages/db/src/migrator/catalog.ts` change as 0033 made for `DROP TABLE`.
+A foreign key added with `ADD CONSTRAINT` also matches under Prisma's default
+name, `<table>_<columns>_fkey`, since the legacy production database names
+its keys that way; inline `REFERENCES` keys (0008) get no probe.
 
 ## Expand and contract
 
@@ -165,7 +170,10 @@ reads UTC. See the conventions in
    runs on both engines in CI.
 4. If a later file supersedes an object an earlier one created (a dropped or
    replaced index or table), update the superseded list in
-   `packages/db/src/migrator/adopt.test.ts` (0031 and 0033 did).
+   `packages/db/src/migrator/adopt.test.ts` (0031 and 0033 did). Add the
+   migration's verdict on the legacy production schema to `LEGACY_VERDICTS` in
+   `packages/db/tests/migration/legacy-prisma-adopt.migration.test.ts`:
+   `pending`, unless that schema already has its objects.
 5. `node packages/db/dist/migrator/cli.js plan` passes (CI runs it in the
    image).
 6. The PR body says whether the migration must be applied before the code, and
