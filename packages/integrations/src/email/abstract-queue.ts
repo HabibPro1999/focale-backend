@@ -18,6 +18,9 @@ import { ABSTRACT_STATUS_LABELS_FR, ABSTRACT_TYPE_LABELS_FR } from "@app/contrac
 // queue — see abstracts.committee.service.ts) is a genuine unbuildable-context
 // failure and throws, so the outbox reports it as "failed" (retried, then
 // dead-lettered) rather than a silent "skipped".
+//
+// It also builds the context snapshot of a bulk send to abstract authors
+// (buildAbstractBulkEmailContext), queued by the API's template send route.
 // =============================================================================
 
 import { createLogger, getAbstractTitle } from "@app/shared";
@@ -31,6 +34,7 @@ import {
   findAbstractEmailTemplate,
   pgUniqueViolation,
   EMAIL_LOGS_DEDUPE_KEY_ACTIVE_KEY,
+  type AbstractForBulkEmail,
   type AbstractForEmailContext,
   type AbstractEmailOutboxPayload,
 } from "@app/db";
@@ -196,6 +200,37 @@ function buildAbstractEmailContext(
     // Back-compat alias for templates authored before explicit date variables.
     deadlineDate: editingDeadline,
     committeeComments: "",
+  };
+}
+
+/**
+ * Port of legacy buildAbstractBulkEmailContext (backend 0f86c91d): the
+ * abstract variables plus the base registrant variable ids, so a MANUAL
+ * template ("Bonjour {{firstName}}") renders for abstract authors. Stored as
+ * the email log's context snapshot; the worker sends from it (fromName =
+ * eventName, reply-to = organizerEmail).
+ */
+export function buildAbstractBulkEmailContext(
+  abstract: AbstractForBulkEmail,
+): Record<string, string> {
+  const context = buildAbstractEmailContext(abstract);
+  const { event, language } = abstract;
+
+  return {
+    ...context,
+    firstName: abstract.authorFirstName,
+    lastName: abstract.authorLastName,
+    fullName: context.authorName,
+    email: abstract.authorEmail,
+    phone: abstract.authorPhone,
+    authorAffiliation: abstract.authorAffiliation ?? "",
+    eventName: event.name,
+    eventDate: formatDate(event.startDate, language),
+    eventEndDate: formatDate(event.endDate, language),
+    eventLocation: event.location ?? "",
+    organizerName: event.client.name,
+    organizerEmail: event.client.email ?? "",
+    organizerPhone: event.client.phone ?? "",
   };
 }
 

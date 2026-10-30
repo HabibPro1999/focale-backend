@@ -16,7 +16,7 @@ import {
   findAbstractEmailTemplate,
   pgUniqueViolation,
 } from "@app/db";
-import { queueAbstractEmail } from "./abstract-queue";
+import { buildAbstractBulkEmailContext, queueAbstractEmail } from "./abstract-queue";
 
 const mocked = <T>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
 
@@ -251,5 +251,80 @@ describe("queueAbstractEmail — abstract not found", () => {
     });
     expect(out).toBe(false);
     expect(queueEmailMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("buildAbstractBulkEmailContext (bulk send to abstract authors)", () => {
+  // Noon UTC: the same calendar day in any host timezone.
+  const bulkAbstract = (language: string) =>
+    abstract({
+      authorAffiliation: null,
+      authorPhone: "+21612345678",
+      status: "ACCEPTED",
+      requestedType: "POSTER",
+      code: "PC1-01",
+      language,
+      event: {
+        name: "Congress",
+        slug: "congress",
+        clientId: "client-1",
+        startDate: new Date("2026-04-20T12:00:00Z"),
+        endDate: new Date("2026-04-22T12:00:00Z"),
+        location: null,
+        client: { name: "Client", email: null, phone: "+216" },
+      },
+      config: {
+        submissionStartAt: null,
+        submissionDeadline: null,
+        editingDeadline: new Date("2026-03-01T12:00:00Z"),
+        scoringStartAt: null,
+        scoringDeadline: null,
+        finalFileDeadline: null,
+        finalFileUploadEnabled: false,
+      },
+    });
+
+  it("adds the base registrant variables to the abstract variables", () => {
+    expect(buildAbstractBulkEmailContext(bulkAbstract("fr"))).toEqual({
+      authorName: "Jane Doe",
+      submissionTitle: "My Abstract",
+      submissionStatus: "Accepté",
+      presentationType: "Communication affichée",
+      submissionCode: "PC1-01",
+      congressName: "Congress",
+      platformLink: "https://events.example.com/congress",
+      abstractEditLink: "https://events.example.com/congress/abstracts/ab-1/tok",
+      finalFileUploadLink: "https://events.example.com/congress/abstracts/ab-1/tok",
+      submissionStartAt: "",
+      submissionDeadline: "",
+      editingDeadline: "1 mars 2026",
+      scoringStartAt: "",
+      scoringDeadline: "",
+      finalFileDeadline: "",
+      finalFileUploadEnabled: "Non",
+      deadlineDate: "1 mars 2026",
+      committeeComments: "",
+      firstName: "Jane",
+      lastName: "Doe",
+      fullName: "Jane Doe",
+      email: "jane@x.com",
+      phone: "+21612345678",
+      authorAffiliation: "",
+      eventName: "Congress",
+      eventDate: "20 avril 2026",
+      eventEndDate: "22 avril 2026",
+      eventLocation: "",
+      organizerName: "Client",
+      organizerEmail: "",
+      organizerPhone: "+216",
+    });
+  });
+
+  it("formats the event dates in the abstract config's language", () => {
+    expect(buildAbstractBulkEmailContext(bulkAbstract("en"))).toMatchObject({
+      eventDate: "April 20, 2026",
+      eventEndDate: "April 22, 2026",
+      editingDeadline: "March 1, 2026",
+    });
   });
 });
