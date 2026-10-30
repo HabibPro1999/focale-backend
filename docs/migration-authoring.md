@@ -22,7 +22,12 @@ writing a file that is safe on both engines and during a deploy.
 - Never edit, rename, renumber or delete a merged migration. The ledger stores
   each file's checksum; a changed body fails `verify` and the boot check (the
   `-- migrate:` header lines are left out of the checksum). Fix mistakes with a
-  new migration.
+  new migration. The one exception is a `-- migrate:` line that changes only
+  how `adopt` and `verify --schema` recognize the migration, never what it
+  runs: 0010's `verify` accepts precision 6 so the legacy production check-in
+  columns are adopted as applied instead of rewritten. Give the reason in a
+  `/* */` comment inside the directive's SQL; an ordinary comment line is part
+  of the checksum.
 - `migrations/cockroach/NNNN_name.sql` replaces the shared file with the same
   number on CockroachDB, or adds a CockroachDB-only migration (0017, the vector
   index). Prefer SQL both engines accept; 0017 and 0018 are the only overrides.

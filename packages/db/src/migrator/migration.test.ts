@@ -12,6 +12,7 @@ import {
   parseMigrationDirectives,
   sha256,
   splitMigrationStatements,
+  statementChecksum,
 } from "./migration";
 import {
   assertLegacyNetworking0018Crosswalk,
@@ -78,7 +79,22 @@ describe("unified migration format", () => {
     expect(migration?.statements[1]).toContain('ALTER TABLE "registrations"');
     expect(migration?.statements[2]).toContain('ALTER TABLE "access_check_ins"');
     expect(migration?.directives.verify).toHaveLength(1);
-    expect(migration?.directives.verify[0]).toContain("datetime_precision = 3");
+    // 3 is what the file makes; 6 is the legacy Prisma TIMESTAMPTZ(6) columns,
+    // which adoption records as applied instead of rewriting them.
+    expect(migration?.directives.verify[0]).toContain("datetime_precision IN (3, 6)");
+  });
+
+  it("keeps 0010's checksums: only its verify header was widened", async () => {
+    for (const engine of ["postgres", "cockroach"] as const) {
+      const migration = (await loadMigrations(migrationsDirectory, engine)).find((candidate) => candidate.id === "0010")!;
+      // The values every database that ran 0010 recorded.
+      expect(migration.checksum).toBe("af07c8be1cf4d8376e96a05592eca9de8864bb86e73ac4e6707653e060d06299");
+      expect(migration.statements.map(statementChecksum)).toEqual([
+        "be673069549682ac708bf33cea1614c3b85e04ecf41f72ada44bcb9f10155cb5",
+        "600a4ea10fe7d20baed2ef7f56424a929dcc3f2009fe72ce46a2dfb76b3a4399",
+        "c3da676e8e68684b68c00066d27498bccdc25bb7ef83a94a71849b29c2c5706a",
+      ]);
+    }
   });
 
   it("selects Cockroach-only and override migration variants by number", async () => {
