@@ -35,6 +35,19 @@ open longer than the 30 s heartbeat interval can hit a renewal on every
 attempt; it then fails safely (rolled back, re-runnable), so keep transactional
 units short on CockroachDB, for example as `per-statement` steps.
 
+The runner never records a schema change it saw fail. On CockroachDB with
+`autocommit_before_ddl` off, a schema change on a table that is not
+`schema_locked` runs after COMMIT; when it fails (a unique index that meets
+duplicate rows), COMMIT returns XXA00 ("transaction committed but schema change
+aborted"): the change is rolled back but the transaction's other writes,
+ledger rows included, stay committed. The runner then removes the step rows
+that transaction wrote and its migration row (or puts back the deferred row an
+`--apply-deferred` replaced) in a new fenced transaction, and fails; fix the
+data and run the same `apply` again. With `autocommit_before_ddl` on (the
+CockroachDB 26.2 default), CockroachDB commits the open transaction before each
+schema change and runs the change on its own, so the statement fails itself
+and is never recorded; there a `per-file` file is not one transaction.
+
 SQL is divided only at explicit `--> statement-breakpoint` markers, both the
 inline Drizzle form (`;--> statement-breakpoint`) and standalone lines used by
 the CockroachDB override. The runner never splits on ordinary semicolons. New
