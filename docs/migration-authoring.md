@@ -22,7 +22,12 @@ writing a file that is safe on both engines and during a deploy.
 - Never edit, rename, renumber or delete a merged migration. The ledger stores
   each file's checksum; a changed body fails `verify` and the boot check (the
   `-- migrate:` header lines are left out of the checksum). Fix mistakes with a
-  new migration.
+  new migration. The one exception is a `-- migrate:` line that changes only
+  how `adopt` and `verify --schema` recognize the migration, never what it
+  runs: 0010's `verify` accepts precision 6 so the legacy production check-in
+  columns are adopted as applied instead of rewritten. Give the reason in a
+  `/* */` comment inside the directive's SQL; an ordinary comment line is part
+  of the checksum.
 - `migrations/cockroach/NNNN_name.sql` replaces the shared file with the same
   number on CockroachDB, or adds a CockroachDB-only migration (0017, the vector
   index). Prefer SQL both engines accept; 0017 and 0018 are the only overrides.
@@ -47,11 +52,16 @@ The runner splits SQL only at `--> statement-breakpoint` markers, never at
 semicolons. A file may not contain `BEGIN`: the runner owns the transactions.
 
 The catalog probes (used by `verify --schema` and `adopt`) are derived from
-`CREATE TABLE`, `CREATE TYPE`, `CREATE [UNIQUE|VECTOR] INDEX`, `DROP INDEX`,
+`CREATE TABLE` (the table and each column it declares), `CREATE TYPE … AS ENUM`
+(the type and each label), `CREATE [UNIQUE|VECTOR] INDEX`, `DROP INDEX`,
 `DROP TABLE`, `ALTER INDEX … RENAME TO`, `ALTER TABLE … ADD COLUMN` and
-`ALTER TABLE … ADD CONSTRAINT`. Anything else (`DROP COLUMN`,
-`DROP CONSTRAINT`, data changes) needs a `verify` directive, or a
+`ALTER TABLE … ADD CONSTRAINT`. They check that objects exist, not their
+types. Anything else (`DROP COLUMN`, `DROP CONSTRAINT`, `ALTER TYPE … ADD
+VALUE`, data changes) needs a `verify` directive, or a
 `packages/db/src/migrator/catalog.ts` change as 0033 made for `DROP TABLE`.
+A foreign key added with `ADD CONSTRAINT` also matches under Prisma's default
+name, `<table>_<columns>_fkey`, since the legacy production database names
+its keys that way; inline `REFERENCES` keys (0008) get no probe.
 
 ## Expand and contract
 
@@ -160,7 +170,10 @@ reads UTC. See the conventions in
    runs on both engines in CI.
 4. If a later file supersedes an object an earlier one created (a dropped or
    replaced index or table), update the superseded list in
-   `packages/db/src/migrator/adopt.test.ts` (0031 and 0033 did).
+   `packages/db/src/migrator/adopt.test.ts` (0031 and 0033 did). Add the
+   migration's verdict on the legacy production schema to `LEGACY_VERDICTS` in
+   `packages/db/tests/migration/legacy-prisma-adopt.migration.test.ts`:
+   `pending`, unless that schema already has its objects.
 5. `node packages/db/dist/migrator/cli.js plan` passes (CI runs it in the
    image).
 6. The PR body says whether the migration must be applied before the code, and

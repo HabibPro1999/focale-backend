@@ -5,10 +5,10 @@ The test helper is exported as `@app/db/testing` only for the workspace's
 point. Test suites read process variables only; they never load `.env` files.
 
 The shared fixtures in `tests/helpers/` (seed factories, networking fixtures,
-the race barrier and row readers) are exported as `@app/db/testing/fixtures`,
-under the same `@app/source`-only condition. The build compiles `src/` only, so
-they never reach `dist`. App tests import them from there instead of reaching
-into `packages/db/tests` by relative path.
+the legacy Prisma database, the race barrier and row readers) are exported as
+`@app/db/testing/fixtures`, under the same `@app/source`-only condition. The
+build compiles `src/` only, so they never reach `dist`. App tests import them
+from there instead of reaching into `packages/db/tests` by relative path.
 
 Every Vitest config in `apps/` and `packages/` is built from
 `packages/vitest.shared.ts`: the resolve conditions, the SWC decorator options,
@@ -28,7 +28,11 @@ Opting in without an admin URL is an error; without the opt-in, DB tiers skip.
 `createScratchDatabase({ label, to? })` creates a generated `focale_test_*`
 database, explicitly provisions `vector` only on its new PostgreSQL database,
 then applies the unified migration runner. `database.applyMigrations({ to? })`
-can resume the runner after a fixture has been seeded. Migration execution uses
+can resume the runner after a fixture has been seeded. With `empty: true` it
+applies nothing: `createLegacyPrismaDatabase({ label })` uses that to build the
+legacy production schema (Prisma's, with `_prisma_migrations` and no ledger)
+from `tests/migration/fixtures/legacy-prisma-schema.cockroach.sql`, for tests
+of `migrate adopt` and of the data a cutover must keep. Migration execution uses
 the migration client's normal transaction isolation and its own lease heartbeat.
 `close()` closes the client and drops its database: PostgreSQL uses
 `DROP DATABASE ... WITH (FORCE)`, while CockroachDB uses `DROP DATABASE ...

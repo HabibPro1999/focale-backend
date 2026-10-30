@@ -1,4 +1,4 @@
-import { catalogObjectKey, deriveCatalogProbes } from "./catalog";
+import { catalogObjectKey, deriveCatalogProbes, droppedTable } from "./catalog";
 import type { MigrationDefinition } from "./migration";
 import type { LegacyNetworkingState } from "./legacy-networking";
 import type {
@@ -24,29 +24,35 @@ function isPrerequisiteProbe(probe: Probe): boolean {
 export function describeProbe(probe: Probe): string {
   if ("query" in probe) return `verify ${probe.query.length > 80 ? `${probe.query.slice(0, 77)}...` : probe.query}`;
   const target = probe.table ? `${probe.table}.${probe.name}` : probe.name;
-  return `${probe.kind} ${target}${probe.expectedPresent ? "" : " (absent)"}`;
+  const aliases = probe.aliases?.length ? ` (or ${probe.aliases.join(", ")})` : "";
+  return `${probe.kind} ${target}${aliases}${probe.expectedPresent ? "" : " (absent)"}`;
 }
 
 /**
  * For each migration, the object probes that a later migration in the list
- * declares again, mapped to that later migration's id.
+ * declares again, mapped to that later migration's id. A later dropped table
+ * also takes the earlier probes of its columns (droppedTable in ./catalog).
  */
 export function supersededObjectProbes(
   migrations: MigrationDefinition[],
 ): Map<string, Map<string, string>> {
   const result = new Map<string, Map<string, string>>();
   const declaredLater = new Map<string, string>();
+  const droppedLater = new Map<string, string>();
   for (const migration of [...migrations].sort((a, b) => b.id.localeCompare(a.id))) {
-    const keys = deriveCatalogProbes(migration)
-      .filter((probe): probe is CatalogObjectProbe => !("query" in probe))
-      .map(catalogObjectKey);
+    const probes = deriveCatalogProbes(migration).filter((probe): probe is CatalogObjectProbe => !("query" in probe));
     const superseded = new Map<string, string>();
-    for (const key of keys) {
-      const by = declaredLater.get(key);
+    for (const probe of probes) {
+      const key = catalogObjectKey(probe);
+      const by = declaredLater.get(key) ?? (probe.kind === "column" ? droppedLater.get(probe.table ?? "") : undefined);
       if (by) superseded.set(key, by);
     }
     result.set(migration.id, superseded);
-    for (const key of keys) declaredLater.set(key, migration.id);
+    for (const probe of probes) {
+      declaredLater.set(catalogObjectKey(probe), migration.id);
+      const dropped = droppedTable(probe);
+      if (dropped) droppedLater.set(dropped, migration.id);
+    }
   }
   return result;
 }

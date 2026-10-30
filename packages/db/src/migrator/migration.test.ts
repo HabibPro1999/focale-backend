@@ -12,6 +12,7 @@ import {
   parseMigrationDirectives,
   sha256,
   splitMigrationStatements,
+  statementChecksum,
 } from "./migration";
 import {
   assertLegacyNetworking0018Crosswalk,
@@ -78,7 +79,22 @@ describe("unified migration format", () => {
     expect(migration?.statements[1]).toContain('ALTER TABLE "registrations"');
     expect(migration?.statements[2]).toContain('ALTER TABLE "access_check_ins"');
     expect(migration?.directives.verify).toHaveLength(1);
-    expect(migration?.directives.verify[0]).toContain("datetime_precision = 3");
+    // 3 is what the file makes; 6 is the legacy Prisma TIMESTAMPTZ(6) columns,
+    // which adoption records as applied instead of rewriting them.
+    expect(migration?.directives.verify[0]).toContain("datetime_precision IN (3, 6)");
+  });
+
+  it("keeps 0010's checksums: only its verify header was widened", async () => {
+    for (const engine of ["postgres", "cockroach"] as const) {
+      const migration = (await loadMigrations(migrationsDirectory, engine)).find((candidate) => candidate.id === "0010")!;
+      // The values every database that ran 0010 recorded.
+      expect(migration.checksum).toBe("af07c8be1cf4d8376e96a05592eca9de8864bb86e73ac4e6707653e060d06299");
+      expect(migration.statements.map(statementChecksum)).toEqual([
+        "be673069549682ac708bf33cea1614c3b85e04ecf41f72ada44bcb9f10155cb5",
+        "600a4ea10fe7d20baed2ef7f56424a929dcc3f2009fe72ce46a2dfb76b3a4399",
+        "c3da676e8e68684b68c00066d27498bccdc25bb7ef83a94a71849b29c2c5706a",
+      ]);
+    }
   });
 
   it("selects Cockroach-only and override migration variants by number", async () => {
@@ -226,7 +242,43 @@ describe("unified migration format", () => {
       "table::networking_embedding_jobs",
       "index:networking_embedding_jobs:networking_embedding_jobs_pending_idx",
     ]));
-    expect(names("0013")).toHaveLength(5);
+    // Plus the columns of its first statement, CREATE TABLE networking_embeddings.
+    expect(names("0013")?.filter((name) => name.startsWith("column:"))).toEqual([
+      "column:networking_embeddings:created_at",
+      "column:networking_embeddings:embedding",
+      "column:networking_embeddings:event_id",
+      "column:networking_embeddings:id",
+      "column:networking_embeddings:kind",
+      "column:networking_embeddings:model",
+      "column:networking_embeddings:profile_id",
+      "column:networking_embeddings:source_hash",
+      "column:networking_embeddings:updated_at",
+    ]);
+    expect(names("0013")).toHaveLength(14);
+  });
+
+  it("probes the columns and enum labels 0000 declares", async () => {
+    for (const engine of ["postgres", "cockroach"] as const) {
+      const migrations = await loadMigrations(migrationsDirectory, engine);
+      const probes = deriveCatalogProbes(migrations.find((candidate) => candidate.id === "0000")!).filter(
+        (probe): probe is CatalogObjectProbe => "kind" in probe,
+      );
+      const count = (kind: CatalogObjectProbe["kind"]) => probes.filter((probe) => probe.kind === kind).length;
+      expect({
+        table: count("table"),
+        column: count("column"),
+        type: count("type"),
+        label: count("label"),
+        index: count("index"),
+        constraint: count("constraint"),
+      }).toEqual({ table: 29, column: 385, type: 19, label: 88, index: 92, constraint: 43 });
+      expect(probes).toContainEqual(expect.objectContaining({ kind: "column", table: "registrations", name: "registration_role" }));
+      expect(probes).toContainEqual(expect.objectContaining({ kind: "label", table: "PaymentStatus", name: "SPONSORED" }));
+      // 0028 adds UNCERTAIN; 0000 does not require it.
+      expect(probes.filter((probe) => probe.kind === "label" && probe.table === "EmailStatus").map((probe) => probe.name)).toEqual([
+        "QUEUED", "SENDING", "SENT", "DELIVERED", "OPENED", "CLICKED", "BOUNCED", "DROPPED", "FAILED", "SKIPPED",
+      ]);
+    }
   });
 
   it("uses the final migration state for catalog checks when later DDL replaces an object", async () => {
@@ -281,6 +333,8 @@ describe("unified migration format", () => {
       for (const probe of finalProbes) {
         expect(probe).toEqual(expect.objectContaining({ migrationId: "0033", expectedPresent: false }));
       }
+      // The columns 0000 declared went with the table.
+      expect(effective.filter((probe) => "kind" in probe && probe.table === "abstract_code_sequences")).toEqual([]);
     }
   });
 

@@ -47,6 +47,8 @@ async function bootstrap() {
 
   if (!config.runWorkers) {
     // Idle instead of exiting: an exited worker ends (or restarts) its container.
+    // This returns before the schema check, so an idle worker's shell can run
+    // migrate adopt and apply on a database the check would refuse.
     log.info("RUN_WORKERS=false; jobs disabled, worker idling with a disabled heartbeat");
     heartbeat.start({ disabled: true });
     onSignals(
@@ -62,7 +64,9 @@ async function bootstrap() {
   }
 
   // MIGRATIONS_CHECK: enforce refuses to start on a stale schema; warn logs.
-  await assertSchemaCurrent({ mode: config.MIGRATIONS_CHECK, logger: log });
+  // In production a database that was never adopted (tables, no migration
+  // ledger) refuses to start in every mode.
+  await assertSchemaCurrent({ mode: config.MIGRATIONS_CHECK, logger: log, production: config.isProduction });
 
   const ctx = await NestFactory.createApplicationContext(WorkerModule, {
     bufferLogs: true,
