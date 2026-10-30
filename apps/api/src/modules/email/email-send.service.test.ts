@@ -9,6 +9,7 @@ vi.mock("@app/db", async (importOriginal) => ({
   getRegistrationFormLanguage: vi.fn(),
   getRegistrationsByIds: vi.fn(),
   getRegistrationsByFilters: vi.fn(),
+  listAbstractsForBulkEmail: vi.fn(),
   listSponsorshipBatchesForBulk: vi.fn(),
   getClientById: vi.fn(),
   insertEmailLogsSkippingConflicts: vi.fn(),
@@ -25,6 +26,10 @@ vi.mock("@app/integrations", () => ({
     organizerName: "Org",
   })),
   buildBatchEmailContext: vi.fn(() => ({ labName: "Lab" })),
+  buildAbstractBulkEmailContext: vi.fn((abstract: { authorFirstName: string }) => ({
+    firstName: abstract.authorFirstName,
+    congressName: "Congress",
+  })),
   renderTemplateToMjml: vi.fn(() => "MJML"),
   compileMjmlToHtml: vi.fn(() => ({ html: "HTML", errors: [] })),
   extractPlainText: vi.fn(() => "PLAIN"),
@@ -37,9 +42,11 @@ import {
   getRegistrationFormLanguage,
   getRegistrationsByIds,
   getRegistrationsByFilters,
+  listAbstractsForBulkEmail,
   listSponsorshipBatchesForBulk,
   getClientById,
   insertEmailLogsSkippingConflicts,
+  type AbstractForBulkEmail,
 } from "@app/db";
 import { getSampleEmailContext, resendUncertainEmail, resolveEmailParts, sendEmailNow } from "@app/integrations";
 import { EmailSendService } from "./email-send.service";
@@ -130,11 +137,13 @@ describe("bulkSend — registrants", () => {
     vi.mocked(insertEmailLogsSkippingConflicts).mockResolvedValue(new Set(["log-1"]));
     const res = await service.bulkSend(event, "tmpl-1", {
       audience: "registrants",
+      dedupeByEmail: true,
       registrationIds: ["r1"],
     });
     expect(res).toEqual({
       success: true,
       queued: 1,
+      skipped: 0,
       message: "1 emails queued for sending",
     });
     const [rows, exec] = vi.mocked(insertEmailLogsSkippingConflicts).mock.calls[0];
@@ -157,6 +166,7 @@ describe("bulkSend — registrants", () => {
 
     await service.bulkSend(event, "tmpl-1", {
       audience: "registrants",
+      dedupeByEmail: true,
       registrationIds: ["r1", "r2"],
     });
 
@@ -187,6 +197,7 @@ describe("bulkSend — registrants", () => {
     vi.mocked(insertEmailLogsSkippingConflicts).mockResolvedValue(new Set(["log-1"]));
     await service.bulkSend(event, "tmpl-1", {
       audience: "registrants",
+      dedupeByEmail: true,
       filters: { paymentStatus: ["PAID"] },
     });
     expect(getRegistrationsByFilters).toHaveBeenCalledWith("event-1", {
@@ -206,12 +217,14 @@ describe("bulkSend — registrants", () => {
     vi.mocked(insertEmailLogsSkippingConflicts).mockResolvedValue(new Set(["log-1"]));
     const res = await service.bulkSend(event, "tmpl-1", {
       audience: "registrants",
+      dedupeByEmail: true,
       registrationIds: ["r1", "r2"],
     });
     expect(vi.mocked(insertEmailLogsSkippingConflicts).mock.calls[0][0]).toHaveLength(2);
     expect(res).toEqual({
       success: true,
       queued: 1,
+      skipped: 0,
       message: "1 emails queued for sending",
     });
   });
@@ -220,10 +233,12 @@ describe("bulkSend — registrants", () => {
     vi.mocked(getRegistrationsByFilters).mockResolvedValue([]);
     const res = await service.bulkSend(event, "tmpl-1", {
       audience: "registrants",
+      dedupeByEmail: true,
     });
     expect(res).toEqual({
       success: true,
       queued: 0,
+      skipped: 0,
       message: "No recipients matched the criteria",
     });
     expect(insertEmailLogsSkippingConflicts).not.toHaveBeenCalled();
@@ -257,6 +272,7 @@ describe("bulkSend — sponsors", () => {
 
     const res = await service.bulkSend(event, "tmpl-1", {
       audience: "sponsors",
+      dedupeByEmail: true,
     });
     expect(res.queued).toBe(1);
     const rows = vi.mocked(insertEmailLogsSkippingConflicts).mock.calls[0][0];
@@ -276,7 +292,7 @@ describe("bulkSend — sponsors", () => {
     ]);
     vi.mocked(insertEmailLogsSkippingConflicts).mockResolvedValue(new Set());
 
-    await service.bulkSend(event, "tmpl-1", { audience: "sponsors" });
+    await service.bulkSend(event, "tmpl-1", { audience: "sponsors", dedupeByEmail: true });
 
     expect(vi.mocked(insertEmailLogsSkippingConflicts).mock.calls[0][0]).toStrictEqual([
       {
@@ -303,11 +319,95 @@ describe("bulkSend — sponsors", () => {
     vi.mocked(listSponsorshipBatchesForBulk).mockResolvedValue([]);
     const res = await service.bulkSend(event, "tmpl-1", {
       audience: "sponsors",
+      dedupeByEmail: true,
     });
     expect(res).toEqual({
       success: true,
       queued: 0,
+      skipped: 0,
       message: "No sponsors found for this event",
+    });
+    expect(insertEmailLogsSkippingConflicts).not.toHaveBeenCalled();
+  });
+});
+
+describe("bulkSend — abstracts (backend 0f86c91d)", () => {
+  const recipient = (overrides: Partial<AbstractForBulkEmail> = {}) =>
+    ({
+      id: "abstract-1",
+      authorFirstName: "Ada",
+      authorLastName: "Lovelace",
+      authorEmail: "ada@example.com",
+      ...overrides,
+    }) as AbstractForBulkEmail;
+
+  it("passes the ids, filters and dedupe flag to the recipient read", async () => {
+    vi.mocked(listAbstractsForBulkEmail).mockResolvedValue({ recipients: [], skipped: 0 });
+    await service.bulkSend(event, "tmpl-1", {
+      audience: "abstracts",
+      abstractIds: ["abstract-9"],
+      abstractFilters: { status: ["ACCEPTED"], presentationType: "POSTER" },
+      dedupeByEmail: false,
+    });
+    expect(listAbstractsForBulkEmail).toHaveBeenCalledWith("event-1", {
+      abstractIds: ["abstract-9"],
+      filters: { status: ["ACCEPTED"], presentationType: "POSTER" },
+      dedupeByEmail: false,
+    });
+  });
+
+  it("queues one snapshot row per recipient, linked to its abstract, and reports the skipped ones", async () => {
+    vi.mocked(listAbstractsForBulkEmail).mockResolvedValue({
+      recipients: [
+        recipient(),
+        recipient({ id: "abstract-2", authorFirstName: " ", authorLastName: "", authorEmail: "alan@example.com" }),
+      ],
+      skipped: 3,
+    });
+    vi.mocked(insertEmailLogsSkippingConflicts).mockResolvedValue(new Set(["log-1", "log-2"]));
+
+    const res = await service.bulkSend(event, "tmpl-1", { audience: "abstracts", dedupeByEmail: true });
+
+    expect(res).toEqual({
+      success: true,
+      queued: 2,
+      skipped: 3,
+      message: "2 emails queued for sending",
+    });
+    const [rows, exec] = vi.mocked(insertEmailLogsSkippingConflicts).mock.calls[0];
+    expect(exec).toBe(tx); // one transaction: all-or-nothing batch
+    expect(rows).toStrictEqual([
+      {
+        templateId: "tmpl-1",
+        abstractId: "abstract-1",
+        recipientEmail: "ada@example.com",
+        recipientName: "Ada Lovelace",
+        contextSnapshot: { firstName: "Ada", congressName: "Congress" },
+        subject: "",
+        status: "QUEUED",
+      },
+      {
+        templateId: "tmpl-1",
+        abstractId: "abstract-2",
+        recipientEmail: "alan@example.com",
+        recipientName: null,
+        contextSnapshot: { firstName: " ", congressName: "Congress" },
+        subject: "",
+        status: "QUEUED",
+      },
+    ]);
+    expect(getRegistrationsByFilters).not.toHaveBeenCalled();
+    expect(listSponsorshipBatchesForBulk).not.toHaveBeenCalled();
+  });
+
+  it("returns queued:0 with the skipped count when no author is left", async () => {
+    vi.mocked(listAbstractsForBulkEmail).mockResolvedValue({ recipients: [], skipped: 2 });
+    const res = await service.bulkSend(event, "tmpl-1", { audience: "abstracts", dedupeByEmail: true });
+    expect(res).toEqual({
+      success: true,
+      queued: 0,
+      skipped: 2,
+      message: "No abstract submitters matched the criteria",
     });
     expect(insertEmailLogsSkippingConflicts).not.toHaveBeenCalled();
   });

@@ -634,6 +634,24 @@ describe("processEmailQueue", () => {
     expect(res.sent).toBe(1);
   });
 
+  it("sends a bulk abstract log from its snapshot: MANUAL template, no registration, no trigger", async () => {
+    const res = await runOne(
+      claimed({
+        abstractId: "abstract-1",
+        abstractTrigger: null,
+        registration: null,
+        contextSnapshot: { firstName: "Ada", eventName: "Congress", organizerEmail: "org@x.com" },
+        template: { ...claimed().template, category: "MANUAL", trigger: null },
+      }),
+    );
+    expect(buildEmailContextWithAccess).not.toHaveBeenCalled();
+    expect(sendEmailMock).toHaveBeenCalledWith(
+      expect.objectContaining({ fromName: "Congress", replyTo: "org@x.com" }),
+    );
+    expect(res.sent).toBe(1);
+    expect(res.skipped).toBe(0);
+  });
+
   it("skips when context cannot be built (empty snapshot, no registration)", async () => {
     const res = await runOne(
       claimed({ contextSnapshot: {}, registration: null }),

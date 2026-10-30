@@ -31,7 +31,8 @@ export interface ListAdminAbstractsFilters {
   offset: number;
 }
 
-function buildAdminAbstractsWhere(
+/** The admin list's filters; the bulk-email recipient read (`./email`) shares it. */
+export function buildAdminAbstractsWhere(
   eventId: string,
   filters: Omit<ListAdminAbstractsFilters, "limit" | "offset">,
 ) {

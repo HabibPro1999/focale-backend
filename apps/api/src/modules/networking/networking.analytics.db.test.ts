@@ -1,8 +1,9 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { NetworkingConfigSchema } from "@app/contracts";
+import { NetworkingAdminAnalyticsResponseSchema, NetworkingConfigSchema } from "@app/contracts";
 import { clients, getDb, networkingPostEventReportData, networkingStore, type NetworkingRow } from "@app/db";
 import { dbTestsEnabled } from "@app/db/testing";
+import { projectOntoContract } from "../../core/response-contract";
 import { NETWORKING_ENGAGEMENT_LIMIT, networkingAnalytics } from "./networking.analytics";
 import { networkingAnalyticsV1 } from "./__testing__/networking-analytics-v1";
 import { buildEligibilityMatrix, insertMatrixParticipant, type Matrix, type MatrixScope } from "./__testing__/eligibility-matrix-db";
@@ -169,6 +170,19 @@ describe.runIf(dbTestsEnabled())("organizer analytics as SQL aggregates (4.9)", 
     expect(comparable(after)).toEqual(comparable(before));
     expect(engagementTotal).toBe(before.engagement.length);
     expect(after.engagement.length).toBe(Math.min(NETWORKING_ENGAGEMENT_LIMIT, before.engagement.length));
+  });
+
+  // The route's response contract keeps every figure the admin shows. Only the
+  // engagement rows' extra counts (export-only) are left out of the response.
+  it("keeps every computed figure through the analytics response contract", async () => {
+    const result = await networkingAnalytics(ids.rich, now);
+    const { value, stripped } = projectOntoContract(NetworkingAdminAnalyticsResponseSchema, result);
+    expect(stripped.sort()).toEqual(["engagement[].completedMeetings", "engagement[].likes", "engagement[].swipes"]);
+    const { engagement, ...figures } = result;
+    expect(value).toMatchObject(figures);
+    expect(Object.keys(value as object)).toEqual(Object.keys(result));
+    expect(NetworkingAdminAnalyticsResponseSchema.safeParse(value).error?.issues ?? []).toEqual([]);
+    expect(engagement.length).toBeGreaterThan(0);
   });
 
   it("orders engagement by booked meetings, then matches, messages and swipes", async () => {
