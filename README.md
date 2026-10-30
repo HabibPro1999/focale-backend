@@ -1117,9 +1117,10 @@ checkout: `pnpm --filter @app/worker <name>`.
 Main's commits up to `8cdbd52` were reviewed and their behavior ported into
 the Nest workspace (a semantic port, not a merge of the legacy app). Main
 itself, at `0f86c91d`, was then merged into develop (`91377a6c`), which put
-main's legacy `src/`, `tests/` and `prisma/` changes (including the Prisma
-migrations `20260806000000_add_multilanguage_forms` and
-`20260814000000_add_committee_invite_tokens`) in the tree as reference only,
+main's legacy application changes (including the Prisma migrations
+`20260806000000_add_multilanguage_forms` and
+`20260814000000_add_committee_invite_tokens`) into the tree as reference, now
+kept only at `legacy-final`,
 and the one feature main had added since, the abstracts bulk send of
 `0f86c91d`, was ported too.
 
