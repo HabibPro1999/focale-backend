@@ -153,7 +153,9 @@ export function formatCutoverPreflightMarkdown(report: CutoverPreflightReport, c
 
   lines.push("## Migration ledger", "");
   if (!report.ledger.present) lines.push("No `schema_migrations` table: the database has not been adopted yet.");
-  else {
+  else if (report.ledger.records.length === 0 && report.ledger.unknown.length === 0) {
+    lines.push("`schema_migrations` exists but records no migration (an `adopt --apply` stopped after creating it): the database has not been adopted yet.");
+  } else {
     lines.push(`\`schema_migrations\` records ${report.ledger.records.length} migration(s).`);
     const deferred = report.ledger.records.filter((record) => record.status === "deferred").map((record) => record.id);
     if (deferred.length) lines.push(`Deferred: ${deferred.join(", ")}.`);
