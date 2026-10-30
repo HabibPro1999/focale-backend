@@ -172,5 +172,6 @@ the way operators already do; nothing here is automated by the repository.
 7. Set `MIGRATIONS_CHECK=enforce` on every service and add the Render
    Pre-Deploy Command `node packages/db/dist/migrator/cli.js apply --yes` to
    the API and worker services (the lease serializes them). Use `/health/live`
-   as the API health check path.
+   as the API health check path. Then deploy the API, and unset
+   `RUN_WORKERS` on the worker and deploy it again.
 8. After this rollout, retire the laptop migration flow (`load-env.fish`).
