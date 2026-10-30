@@ -24,7 +24,8 @@
     "test:concurrency": "vitest run --config vitest.concurrency.config.ts",
     "test:migration": "vitest run --config vitest.migration.config.ts",
     "migrator": "node dist/migrator/cli.js",
-    "networking:vector-index": "node dist/ops/networking-vector-index-cli.js"
+    "networking:vector-index": "node dist/ops/networking-vector-index-cli.js",
+    "cutover:preflight": "node dist/ops/cutover-preflight-cli.js"
   },
   "dependencies": {
     "@app/contracts": "workspace:*",
