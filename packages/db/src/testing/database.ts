@@ -8,6 +8,8 @@ export interface ScratchDatabaseOptions {
   label: string;
   /** Apply through this four-digit migration ID, inclusive. */
   to?: string;
+  /** Apply no migration, for a fixture that builds a legacy schema (PostgreSQL still gets the vector extension). */
+  empty?: boolean;
 }
 
 export interface ScratchDatabase {
@@ -118,7 +120,7 @@ async function connectScratch(
   baseUrl: URL,
   engine: DatabaseEngine,
   adminUrl: string,
-  apply: boolean,
+  bootstrap: "migrate" | "empty" | "none",
   to?: string,
 ): Promise<ScratchDatabase> {
   const url = withDatabase(baseUrl, name);
@@ -130,8 +132,8 @@ async function connectScratch(
     await client.connect();
     connected = true;
     await client.query("SET TIME ZONE 'UTC'");
-    if (apply) {
-      await provisionVectorExtension(client, engine);
+    if (bootstrap !== "none") await provisionVectorExtension(client, engine);
+    if (bootstrap === "migrate") {
       await applyMigrationsForEngine(client, engine, {
         through: to,
         leaseConnectionString: url,
@@ -174,12 +176,15 @@ async function connectScratch(
   };
 }
 
-/** Create a uniquely named test database, explicitly bootstrap it, and migrate it. */
+/** Create a uniquely named test database, explicitly bootstrap it, and migrate it unless `empty`. */
 export async function createScratchDatabase(
   options: ScratchDatabaseOptions,
 ): Promise<ScratchDatabase> {
   if (options.to && !/^\d{4}$/.test(options.to)) {
     throw new Error("[test-db] `to` must be a four-digit migration ID.");
+  }
+  if (options.to && options.empty) {
+    throw new Error("[test-db] `to` and `empty` cannot be combined.");
   }
   const adminUrl = loadDbTestAdminUrl();
   const { client: admin, engine } = await openAdmin(adminUrl);
@@ -190,7 +195,7 @@ export async function createScratchDatabase(
   } finally {
     await admin.end();
   }
-  return connectScratch(name, adminParsed, engine, adminUrl, true, options.to);
+  return connectScratch(name, adminParsed, engine, adminUrl, options.empty ? "empty" : "migrate", options.to);
 }
 
 /** Reapply the unified runner to a scratch database; applied migrations are skipped. */
@@ -227,5 +232,5 @@ export async function createTestDatabase(
     await admin.end();
   }
   const cloned = engine === "postgres" && Boolean(options.templateName);
-  return connectScratch(name, adminParsed, engine, adminUrl, !cloned);
+  return connectScratch(name, adminParsed, engine, adminUrl, cloned ? "none" : "migrate");
 }
