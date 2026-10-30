@@ -7,6 +7,7 @@ import {
   runLeaseFencedTransaction,
 } from "./runner";
 import type { MigrationDefinition } from "./migration";
+import type { SchemaMigrationRecord } from "./types";
 
 describe("migration step ledger decoding", () => {
   it("normalizes CockroachDB INT8 step indexes to numbers", async () => {
@@ -242,5 +243,170 @@ describe("lease-fenced transactions", () => {
     expect(sent.filter((sql) => sql.includes("INSERT INTO public.schema_migration_steps"))).toHaveLength(2);
     expect(sent.filter((sql) => sql.includes("INSERT INTO public.schema_migrations"))).toHaveLength(2);
     expect(sent.filter((sql) => sql === "COMMIT")).toHaveLength(2);
+  });
+});
+
+describe("schema changes rolled back after COMMIT (CockroachDB XXA00)", () => {
+  const INDEX = "CREATE UNIQUE INDEX IF NOT EXISTS jobs_active_key ON jobs (event_id) WHERE status = 'PENDING'";
+  const NORMALIZE = "UPDATE jobs SET status = 'PENDING' WHERE status = 'pending'";
+
+  function definition(
+    id: string,
+    transaction: "per-file" | "per-statement",
+    statements: string[],
+    deferUnless?: string,
+  ): MigrationDefinition {
+    return {
+      id,
+      name: `${id}_jobs_active_unique.sql`,
+      variant: "shared",
+      filePath: `${id}_jobs_active_unique.sql`,
+      source: statements.join("\n--> statement-breakpoint\n"),
+      checksum: id.repeat(16),
+      directives: {
+        transaction,
+        requiresExtensions: [],
+        idempotent: true,
+        deferrable: Boolean(deferUnless),
+        ...(deferUnless ? { deferUnless } : {}),
+        verify: [],
+      },
+      statements,
+    };
+  }
+
+  /**
+   * A CockroachDB client whose ledger holds `records`. The transaction that runs
+   * `failing` fails as `failure` says: "commit" answers its COMMIT with XXA00
+   * (committed, schema change rolled back); "statement" fails the statement
+   * itself, as PostgreSQL does and CockroachDB with autocommit_before_ddl on.
+   * Lease reads succeed; SELECTs are left out of `sent`.
+   */
+  function abortingClient(
+    failing: string,
+    failure: "commit" | "statement",
+    records: SchemaMigrationRecord[] = [],
+    options: { cleanupFails?: boolean } = {},
+  ) {
+    const sent: Array<{ sql: string; values?: unknown[] }> = [];
+    let owner = "";
+    let failCommit = false;
+    const client = {
+      async query(sql: string, values?: unknown[]) {
+        if (sql === "SET TIME ZONE 'UTC'") return { rows: [] };
+        if (sql.includes("SELECT version()")) return { rows: [{ version: "CockroachDB CCL v26.2.5" }] };
+        if (sql.includes("table_name NOT IN")) return { rows: [{ present: true }] };
+        if (sql.includes("information_schema.tables")) return { rows: [{ present: true }] };
+        if (sql.includes("SELECT EXISTS (SELECT 1 FROM public.schema_migrations)")) return { rows: [{ present: true }] };
+        if (sql.includes("FROM public.schema_migrations ORDER BY id")) return { rows: records };
+        if (sql.includes("SET owner = $1")) owner = String(values?.[0]);
+        if (sql.includes("SELECT owner")) return { rows: [{ owner, active: true }] };
+        if (sql.trim().startsWith("SELECT")) return { rows: [] };
+        sent.push({ sql: sql.trim().split(/\s+/).slice(0, 3).join(" ").replace(/ SET$/, ""), values });
+        if (sql === failing && failure === "statement") {
+          throw Object.assign(new Error('duplicate key value violates unique constraint "jobs_active_key"'), { code: "23505" });
+        }
+        if (sql === failing) failCommit = true;
+        if (sql === "COMMIT" && failCommit) {
+          failCommit = false;
+          throw Object.assign(
+            new Error('transaction committed but schema change aborted with error: (23505): duplicate key value violates unique constraint "jobs_active_key"'),
+            { code: "XXA00" },
+          );
+        }
+        if (sql.trim().startsWith("DELETE") && options.cleanupFails) throw new Error("connection terminated");
+        return { rowCount: 1, rows: [] };
+      },
+    } as unknown as Client;
+    const after = (statement: string) => sent.slice(sent.findIndex((entry) => entry.sql === statement)).map((entry) => entry.sql);
+    return { client, sent, after };
+  }
+
+  it("removes the step and migration rows a per-file transaction committed, then fails", async () => {
+    const migration = definition("9001", "per-file", [INDEX]);
+    const { client, sent, after } = abortingClient(INDEX, "commit");
+
+    const failure = await applyMigrations(client, [migration]).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: "XXA00", message: expect.stringMatching(/^Migration 9001 was not applied: .*Its ledger rows were removed/) });
+    expect((failure as Error).cause).toMatchObject({ code: "XXA00" });
+    expect(after("CREATE UNIQUE INDEX")).toEqual([
+      "CREATE UNIQUE INDEX",
+      "INSERT INTO public.schema_migration_steps",
+      "INSERT INTO public.schema_migrations",
+      "UPDATE public.schema_migration_lock",
+      "COMMIT",
+      "ROLLBACK",
+      // A new lease-fenced transaction removes what the committed one wrote.
+      "BEGIN",
+      "DELETE FROM public.schema_migration_steps",
+      "DELETE FROM public.schema_migrations",
+      "UPDATE public.schema_migration_lock",
+      "COMMIT",
+      // Lease release.
+      "UPDATE public.schema_migration_lock",
+    ]);
+    expect(sent.find((entry) => entry.sql === "DELETE FROM public.schema_migration_steps")?.values?.slice(0, 3)).toEqual(["9001", "shared", 0]);
+    expect(sent.find((entry) => entry.sql === "DELETE FROM public.schema_migrations")?.values).toEqual(["9001", "shared", migration.checksum]);
+  });
+
+  it("puts back the deferred record a per-file --apply-deferred replaced", async () => {
+    const migration = definition("9001", "per-file", [INDEX], "SELECT false");
+    const deferred: SchemaMigrationRecord = {
+      id: "9001",
+      variant: "shared",
+      checksum: migration.checksum,
+      status: "deferred",
+      applied_at: new Date("2026-10-01T08:00:00.000Z"),
+      applied_by: "render-api",
+      evidence: { reason: "defer-unless precondition returned false" },
+    };
+    const { client, sent, after } = abortingClient(INDEX, "commit", [deferred]);
+
+    await expect(applyMigrations(client, [migration], { applyDeferred: "9001" })).rejects.toMatchObject({ code: "XXA00" });
+    expect(after("BEGIN").slice(-5)).toEqual([
+      "DELETE FROM public.schema_migration_steps",
+      "UPDATE public.schema_migrations",
+      "UPDATE public.schema_migration_lock",
+      "COMMIT",
+      "UPDATE public.schema_migration_lock",
+    ]);
+    expect(sent.find((entry) => entry.sql === "UPDATE public.schema_migrations")?.values).toEqual([
+      "9001",
+      "deferred",
+      deferred.applied_at,
+      "render-api",
+      JSON.stringify(deferred.evidence),
+    ]);
+    expect(sent.some((entry) => entry.sql === "DELETE FROM public.schema_migrations")).toBe(false);
+  });
+
+  it("removes only the failed step of a per-statement migration and never records the migration", async () => {
+    const migration = definition("9002", "per-statement", [NORMALIZE, INDEX]);
+    const { client, sent } = abortingClient(INDEX, "commit");
+
+    await expect(applyMigrations(client, [migration])).rejects.toMatchObject({ code: "XXA00" });
+    const deletes = sent.filter((entry) => entry.sql.startsWith("DELETE"));
+    expect(deletes).toHaveLength(1);
+    expect(deletes[0]!.sql).toBe("DELETE FROM public.schema_migration_steps");
+    expect(deletes[0]!.values?.slice(0, 3)).toEqual(["9002", "shared", 1]);
+    expect(sent.filter((entry) => entry.sql === "INSERT INTO public.schema_migrations")).toEqual([]);
+  });
+
+  it("says the ledger may be wrong when the rows cannot be removed", async () => {
+    const migration = definition("9001", "per-file", [INDEX]);
+    const { client } = abortingClient(INDEX, "commit", [], { cleanupFails: true });
+
+    const failure = await applyMigrations(client, [migration]).catch((error: unknown) => error);
+    expect((failure as Error).message).toMatch(/^Migration 9001: CockroachDB rolled back its schema change after commit .* removing its ledger rows failed/);
+    expect((failure as Error).message).toMatch(/run verify --schema/);
+    expect((failure as Error).cause).toMatchObject({ message: "connection terminated" });
+  });
+
+  it("leaves the ledger alone when the statement itself fails and its transaction rolls back", async () => {
+    const migration = definition("9001", "per-file", [INDEX]);
+    const { client, after } = abortingClient(INDEX, "statement");
+
+    await expect(applyMigrations(client, [migration])).rejects.toMatchObject({ code: "23505" });
+    expect(after("CREATE UNIQUE INDEX")).toEqual(["CREATE UNIQUE INDEX", "ROLLBACK", "UPDATE public.schema_migration_lock"]);
   });
 });

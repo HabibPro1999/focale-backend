@@ -161,6 +161,43 @@ export async function writeMigrationStepRecord(
   );
 }
 
+/**
+ * Undo ledger rows that a committed transaction wrote for work that did not
+ * take effect (a CockroachDB schema change rolled back after COMMIT): remove
+ * the given step rows, and put the migration row back to `previous` (the
+ * deferred row it replaced) or remove it when there was none.
+ */
+export async function unrecordMigrationWork(
+  client: Client,
+  migration: MigrationDefinition,
+  stepIndexes: number[],
+  record: { written: boolean; previous?: SchemaMigrationRecord },
+): Promise<void> {
+  for (const stepIndex of stepIndexes) {
+    await client.query(
+      `DELETE FROM public.schema_migration_steps
+       WHERE migration_id = $1 AND variant = $2 AND step_index = $3 AND checksum = $4`,
+      [migration.id, migration.variant, stepIndex, statementChecksum(migration.statements[stepIndex])],
+    );
+  }
+  if (!record.written) return;
+  if (!record.previous) {
+    await client.query(
+      `DELETE FROM public.schema_migrations
+       WHERE id = $1 AND variant = $2 AND checksum = $3 AND status = 'applied'`,
+      [migration.id, migration.variant, migration.checksum],
+    );
+    return;
+  }
+  const { previous } = record;
+  await client.query(
+    `UPDATE public.schema_migrations
+     SET status = $2, applied_at = $3, applied_by = $4, evidence = $5::jsonb
+     WHERE id = $1 AND status = 'applied'`,
+    [previous.id, previous.status, previous.applied_at, previous.applied_by, JSON.stringify(previous.evidence)],
+  );
+}
+
 export const migrationLedgerAccess: MigrationLedgerAccess = {
   ensureSchema: createMigrationLedger,
   listMigrations: listMigrationRecords,
