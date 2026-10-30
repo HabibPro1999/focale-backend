@@ -112,8 +112,11 @@ Full sequence: [Shutdown](../README.md#shutdown-shutdown_grace_ms-default-25-s).
 
 ## Health paths
 
-All on the API, unauthenticated, not throttled and not enveloped: 200 when
-healthy, 503 with the same body shape when not. Full table:
+All on the API, unauthenticated and not enveloped: 200 when healthy, 503 with
+the same body shape when not. `/health/live` and `/health/ready` are never
+throttled. The others query the database and keep the default limit, 100
+requests per minute per client IP for each path, with 429 past it, so external
+monitors stay far below it. Full table:
 [Health endpoints](../README.md#health-endpoints-api).
 
 | Path | Use it for | Unhealthy when |

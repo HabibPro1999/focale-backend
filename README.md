@@ -352,8 +352,11 @@ fails the rules would otherwise refuse to boot, listing the same keys.
 
 ## Health endpoints (API)
 
-All `@SkipThrottle`, no auth, and **not** enveloped: each returns its raw body
-with the status code probes rely on (503 when unhealthy, body unchanged).
+No auth, and **not** enveloped: each returns its raw body with the status code
+probes rely on (503 when unhealthy, body unchanged). Only `/health/live` and
+`/health/ready` are `@SkipThrottle`; the probes that query the database keep the
+default limit (100/min per client IP and path in production, 1000 elsewhere)
+and answer 429 past it.
 
 | Path | Purpose |
 |---|---|
