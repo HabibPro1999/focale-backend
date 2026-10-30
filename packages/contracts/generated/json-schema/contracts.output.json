@@ -6060,10 +6060,25 @@
         "matchRate": {
           "type": "number"
         },
+        "interestReciprocityRate": {
+          "type": "number"
+        },
+        "matchedParticipantsRate": {
+          "type": "number"
+        },
+        "messagedParticipantsRate": {
+          "type": "number"
+        },
         "messages": {
           "type": "number"
         },
         "meetings": {
+          "type": "number"
+        },
+        "plannedMeetings": {
+          "type": "number"
+        },
+        "todayMeetings": {
           "type": "number"
         },
         "confirmedMeetings": {
@@ -6083,6 +6098,121 @@
         },
         "tableOccupancyRate": {
           "type": "number"
+        },
+        "tableUsage": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "tableId": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "location": {
+                "type": "string"
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "meetings": {
+                "type": "number"
+              },
+              "availableMinutes": {
+                "type": "number"
+              },
+              "occupiedMinutes": {
+                "type": "number"
+              },
+              "occupancyRate": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "tableId",
+              "name",
+              "location",
+              "active",
+              "meetings",
+              "availableMinutes",
+              "occupiedMinutes",
+              "occupancyRate"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "peakSlots": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "date": {
+                "type": "string"
+              },
+              "time": {
+                "type": "string"
+              },
+              "meetings": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "date",
+              "time",
+              "meetings"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "zones": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "zone": {
+                "type": "string"
+              },
+              "meetings": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "zone",
+              "meetings"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "engagementTenSwipes": {
+          "type": "number"
+        },
+        "engagementTenSwipesRate": {
+          "type": "number"
+        },
+        "punctuality": {
+          "additionalProperties": false,
+          "properties": {
+            "checkins": {
+              "type": "number"
+            },
+            "onTime": {
+              "type": "number"
+            },
+            "onTimeRate": {
+              "type": "number"
+            },
+            "averageDelayMinutes": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "checkins",
+            "onTime",
+            "onTimeRate",
+            "averageDelayMinutes"
+          ],
+          "type": "object"
         },
         "reports": {
           "type": "number"
@@ -6211,14 +6341,25 @@
         "passes",
         "matches",
         "matchRate",
+        "interestReciprocityRate",
+        "matchedParticipantsRate",
+        "messagedParticipantsRate",
         "messages",
         "meetings",
+        "plannedMeetings",
+        "todayMeetings",
         "confirmedMeetings",
         "completedMeetings",
         "cancelledMeetings",
         "noShowMeetings",
         "pendingMeetings",
         "tableOccupancyRate",
+        "tableUsage",
+        "peakSlots",
+        "zones",
+        "engagementTenSwipes",
+        "engagementTenSwipesRate",
+        "punctuality",
         "reports",
         "timeSeries",
         "sectors",

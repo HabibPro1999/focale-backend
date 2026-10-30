@@ -1387,14 +1387,46 @@ export type NetworkingAdminAnalyticsResponse = {
   passes: number;
   matches: number;
   matchRate: number;
+  interestReciprocityRate: number;
+  matchedParticipantsRate: number;
+  messagedParticipantsRate: number;
   messages: number;
   meetings: number;
+  plannedMeetings: number;
+  todayMeetings: number;
   confirmedMeetings: number;
   completedMeetings: number;
   cancelledMeetings: number;
   noShowMeetings: number;
   pendingMeetings: number;
   tableOccupancyRate: number;
+  tableUsage: Array<{
+    tableId: string;
+    name: string;
+    location: string;
+    active: boolean;
+    meetings: number;
+    availableMinutes: number;
+    occupiedMinutes: number;
+    occupancyRate: number;
+  }>;
+  peakSlots: Array<{
+    date: string;
+    time: string;
+    meetings: number;
+  }>;
+  zones: Array<{
+    zone: string;
+    meetings: number;
+  }>;
+  engagementTenSwipes: number;
+  engagementTenSwipesRate: number;
+  punctuality: {
+    checkins: number;
+    onTime: number;
+    onTimeRate: number;
+    averageDelayMinutes: number;
+  };
   reports: number;
   hourlyActivity?: Array<{
     hour: string;
