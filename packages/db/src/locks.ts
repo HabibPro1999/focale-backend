@@ -7,7 +7,7 @@ import { registrations } from "./schema/registrations";
 import { sponsorships } from "./schema/sponsorships";
 import { isTransactionExecutor } from "./txn";
 
-// Row locks for the lock-first pattern (docs/adr/0001-concurrency-control.md).
+// Row locks for the lock-first pattern (packages/db/README.md, "Concurrency control").
 //
 // Take the locks at the start of the transaction (withLockingTxn), then re-read
 // the locked rows and decide from what was read after the lock, never from a

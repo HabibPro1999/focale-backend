@@ -14,6 +14,7 @@ import { ErrorCodes } from "@app/contracts";
 import {
   getEventWithPricing,
   type EventWithPricing,
+  type ScopedClientRow,
   type ScopedEventRow,
 } from "@app/db";
 import { getAvailableVariables, type VariableDefinition } from "@app/integrations";
@@ -21,7 +22,8 @@ import type { PaginatedResult } from "@app/shared";
 import { Auth } from "../../core/auth/auth.decorator";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { AppException, notFound } from "../../core/app-exception";
-import { EmailTemplateScoped, EventScoped, ScopedEvent } from "../tenancy";
+import { assertModuleEnabledForClient } from "../clients/module-gates";
+import { EmailTemplateScoped, EventScoped, ScopedClient, ScopedEvent } from "../tenancy";
 import { EmailTemplateService } from "./email-template.service";
 import { EmailSendService } from "./email-send.service";
 import {
@@ -42,7 +44,8 @@ import {
 
 // Every route requires a valid Bearer token (any role); the tenant check is the
 // route's scope guard (`@EventScoped` / `@EmailTemplateScoped`, plan 5.4):
-// 404 → 403 (canAccessClient) → archived (writes) → emails module gate.
+// 404 → 403 (canAccessClient) → archived (writes) → emails module gate. A bulk
+// send to abstract authors also needs the abstracts module.
 @Controller("api/events")
 @Auth()
 export class EmailController {
@@ -185,6 +188,7 @@ export class EmailController {
   async bulkSend(
     @Param() params: BulkSendParamDto,
     @Body() body: BulkSendEmailDto,
+    @ScopedClient() client: ScopedClientRow,
   ) {
     const event = await this.eventForSend(params.eventId);
     const template = await this.template(params.templateId);
@@ -194,6 +198,10 @@ export class EmailController {
         "Template does not belong to this client",
         403,
       );
+    }
+    // After the template checks, as in legacy.
+    if (body.audience === "abstracts") {
+      assertModuleEnabledForClient(client, "abstracts");
     }
 
     return this.send.bulkSend(event, params.templateId, body);

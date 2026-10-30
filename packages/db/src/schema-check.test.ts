@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   assertSchemaCurrent,
   SchemaNotCurrentError,
+  UnadoptedDatabaseError,
   type SchemaCheckClient,
   type SchemaCheckLogger,
 } from "./schema-check";
@@ -30,6 +31,8 @@ interface FakeSessionOptions {
   zone?: string;
   /** null: the ledger table does not exist. */
   ledger: SchemaMigrationRecord[] | null;
+  /** Whether the schema has tables besides the ledger's (default true). */
+  applicationTables?: boolean;
 }
 
 function fakeSession(options: FakeSessionOptions) {
@@ -49,7 +52,13 @@ function fakeSession(options: FakeSessionOptions) {
           rows: [{ version: options.engine === "cockroach" ? "CockroachDB CCL v26.2.5" : "PostgreSQL 16.15" }],
         };
       }
+      if (/table_name NOT IN \('schema_migrations'/i.test(text)) {
+        return { rows: [{ present: options.applicationTables ?? true }] };
+      }
       if (/information_schema\.tables/i.test(text)) return { rows: [{ present: options.ledger !== null }] };
+      if (/SELECT EXISTS \(SELECT 1 FROM public\.schema_migrations\)/i.test(text)) {
+        return { rows: [{ present: (options.ledger?.length ?? 0) > 0 }] };
+      }
       if (/FROM public\.schema_migrations/i.test(text)) return { rows: options.ledger ?? [] };
       throw new Error(`unexpected query: ${text}`);
     },
@@ -188,5 +197,103 @@ describe("assertSchemaCurrent", () => {
     });
     expect(refused.errors[0]).toContain("postgres://[redacted]@db.internal");
     expect(refused.errors[0]).not.toContain("hunter2");
+  });
+});
+
+describe("assertSchemaCurrent in production (the no-ledger guard)", () => {
+  const modes = ["enforce", "warn", "off"] as const;
+
+  it("refuses a database with tables but no ledger in every mode, off included", async () => {
+    for (const mode of modes) {
+      const session = fakeSession({ ledger: null });
+      const { logger, calls } = recordingLogger();
+      const check = assertSchemaCurrent({ mode, logger, production: true, connect: async () => session.client });
+      await expect(check).rejects.toBeInstanceOf(UnadoptedDatabaseError);
+      await expect(check).rejects.toThrow(/no migration ledger/);
+      expect(session.released).toEqual([true]);
+      expect(calls.at(-1)).toMatchObject({
+        level: "error",
+        details: { migrationsCheck: mode, ledger: "missing" },
+        message: "Database has not been adopted by the migrator; refusing to start",
+      });
+    }
+  });
+
+  it("refuses an empty ledger as well, and says how to adopt", async () => {
+    const { logger } = recordingLogger();
+    const check = assertSchemaCurrent({
+      mode: "warn",
+      logger,
+      production: true,
+      connect: async () => fakeSession({ ledger: [] }).client,
+    });
+    await expect(check).rejects.toMatchObject({ name: "UnadoptedDatabaseError", ledger: "empty" });
+    const message = await check.catch((error: Error) => error.message);
+    expect(message).toContain("an empty migration ledger");
+    expect(message).toContain("RUN_WORKERS=false");
+    expect(message).toContain("node packages/db/dist/migrator/cli.js adopt");
+    expect(message).toContain('"Production rollout" in packages/db/src/migrator/README.md');
+  });
+
+  it("under off, reads only the adoption state of an adopted database", async () => {
+    // An adopted ledger with pending migrations: off does not judge those.
+    const ledger = (await currentLedger("postgres")).filter((record) => record.id <= "0010");
+    const session = fakeSession({ ledger });
+    const { logger, calls } = recordingLogger();
+    const result = await assertSchemaCurrent({ mode: "off", logger, production: true, connect: async () => session.client });
+    expect(result).toEqual({ mode: "off", skipped: true, errors: [], warnings: [] });
+    expect(session.queries).toHaveLength(3);
+    expect(session.queries.some((query) => /SHOW TIME ZONE|SELECT version\(\)/i.test(query))).toBe(false);
+    expect(session.released).toEqual([true]);
+    expect(calls).toEqual([{ level: "info", message: "Database schema check skipped", details: { migrationsCheck: "off" } }]);
+
+    // Under warn the same database is adopted, so only the pending migrations are reported.
+    const warned = await assertSchemaCurrent({
+      mode: "warn",
+      logger,
+      production: true,
+      connect: async () => fakeSession({ ledger }).client,
+    });
+    expect(warned.errors[0]).toBe("Migration 0011 is pending");
+  });
+
+  it("leaves an empty database to the ordinary check", async () => {
+    const { logger } = recordingLogger();
+    const empty = () => fakeSession({ ledger: null, applicationTables: false }).client;
+    await expect(
+      assertSchemaCurrent({ mode: "enforce", logger, production: true, connect: async () => empty() }),
+    ).rejects.toBeInstanceOf(SchemaNotCurrentError);
+    const skipped = await assertSchemaCurrent({ mode: "off", logger, production: true, connect: async () => empty() });
+    expect(skipped.skipped).toBe(true);
+  });
+
+  it("keeps each mode's behavior when the database cannot be reached", async () => {
+    const unreachable = () => Promise.reject(new Error("connect ECONNREFUSED"));
+    const { logger, calls } = recordingLogger();
+    const off = await assertSchemaCurrent({ mode: "off", logger, production: true, connect: unreachable });
+    expect(off).toEqual({ mode: "off", skipped: true, errors: [], warnings: [] });
+    expect(calls[0]).toMatchObject({
+      level: "warn",
+      message:
+        "Database adoption check did not complete (continuing because MIGRATIONS_CHECK=off): Schema check could not complete: connect ECONNREFUSED",
+    });
+    const warned = await assertSchemaCurrent({ mode: "warn", logger, production: true, connect: unreachable });
+    expect(warned.errors).toEqual(["Schema check could not complete: connect ECONNREFUSED"]);
+    await expect(
+      assertSchemaCurrent({ mode: "enforce", logger, production: true, connect: unreachable }),
+    ).rejects.toBeInstanceOf(SchemaNotCurrentError);
+  });
+
+  it("keeps today's behavior outside production", async () => {
+    const { logger } = recordingLogger();
+    const session = fakeSession({ ledger: null });
+    const warned = await assertSchemaCurrent({ mode: "warn", logger, production: false, connect: async () => session.client });
+    expect(warned.errors).toEqual([
+      "Migration ledger is missing; run migrate adopt for an existing database or apply on an empty database",
+    ]);
+    expect(session.queries.some((query) => /table_name NOT IN/.test(query))).toBe(false);
+    const connect = vi.fn();
+    expect(await assertSchemaCurrent({ mode: "off", logger, production: false, connect })).toMatchObject({ skipped: true });
+    expect(connect).not.toHaveBeenCalled();
   });
 });

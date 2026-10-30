@@ -81,7 +81,7 @@ export const envShape = {
   MIGRATIONS_CHECK: envKey(z.enum(["enforce", "warn", "off"]).default("warn"), {
     section: "database",
     description:
-      "Boot-time schema check against the migration ledger: enforce (refuse to start), warn (log), off.\nDefault warn until the production ledger has been adopted (packages/db/src/migrator/README.md).",
+      "Boot-time schema check against the migration ledger: enforce (refuse to start), warn (log), off.\nProduction uses enforce from the first boot. In production, a database with tables but no\nmigration ledger refuses to start in every mode (packages/db/src/migrator/README.md).",
     example: "warn",
   }),
   JSONB_VALIDATION: jsonbValidationKey,

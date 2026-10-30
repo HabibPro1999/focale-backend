@@ -8,15 +8,10 @@
 eslint.config.*
 **/coverage
 .vscode
-src/generated
 scripts
-tests
 **/*.test.ts
 **/*.spec.ts
 firebase/*.json
-src
-prisma
-tsconfig.legacy.json
 backups
 docs
 .progress

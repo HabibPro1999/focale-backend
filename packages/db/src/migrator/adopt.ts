@@ -165,7 +165,8 @@ export async function assessAdoption(
           state: view.state,
           matched: view.matched,
           total: view.total,
-          ...(view.failed.length ? { failed: view.failed.slice(0, 20) } : {}),
+          // Every failed probe: the report prints each one as `missing:`.
+          ...(view.failed.length ? { failed: view.failed } : {}),
           ...(view.superseded.length ? { superseded: view.superseded } : {}),
         },
         ...(legacyDetails ? { legacyNetworking: legacyDetails } : {}),

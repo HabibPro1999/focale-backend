@@ -12,12 +12,14 @@ import {
   deriveEffectiveCatalogProbes,
   inspectCatalogProbes,
 } from "./catalog";
+import { describeProbe } from "./adopt-rules";
 import {
   assertAdoptionRequiredIfNonEmpty,
   createMigrationLedger,
   listMigrationRecords,
   listMigrationStepRecords,
   migrationLedgerExists,
+  unrecordMigrationWork,
   writeMigrationRecord,
   writeMigrationStepRecord,
 } from "./ledger";
@@ -111,6 +113,71 @@ async function assertStepHistory(client: Client, migration: MigrationDefinition)
   return byStep;
 }
 
+/**
+ * CockroachDB answers COMMIT with XXA00 ("transaction committed but schema
+ * change aborted") when a schema change fails after its transaction commits,
+ * for example a unique index build that meets duplicate rows: the schema
+ * change is rolled back, but every other write of the transaction, the ledger
+ * rows included, stays committed. PostgreSQL never returns it.
+ */
+function isAbortedSchemaChange(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "XXA00";
+}
+
+/** The ledger rows the current attempt of a migration transaction has written. */
+interface LedgerWrites {
+  steps: number[];
+  record: boolean;
+}
+
+/**
+ * Run migration SQL with the ledger rows that record it in one lease-fenced
+ * transaction. After an XXA00, a new fenced transaction removes the rows the
+ * committed transaction wrote (and restores the deferred record it replaced),
+ * so the ledger never records a schema change that did not take effect and the
+ * next apply runs the work again.
+ */
+async function runMigrationTransaction(
+  client: Client,
+  migration: MigrationDefinition,
+  owner: string,
+  heartbeat: LeaseHeartbeat | undefined,
+  previous: SchemaMigrationRecord | undefined,
+  work: (writes: LedgerWrites) => Promise<void>,
+): Promise<void> {
+  const writes: LedgerWrites = { steps: [], record: false };
+  try {
+    await runLeaseFencedTransaction(client, owner, heartbeat, async () => {
+      writes.steps = [];
+      writes.record = false;
+      await work(writes);
+    });
+  } catch (error) {
+    if (!isAbortedSchemaChange(error)) throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    try {
+      await runLeaseFencedTransaction(client, owner, heartbeat, async () => {
+        await unrecordMigrationWork(client, migration, writes.steps, { written: writes.record, previous });
+      });
+    } catch (cleanupError) {
+      throw new Error(
+        `Migration ${migration.id}: CockroachDB rolled back its schema change after commit (${reason}), and removing its ledger rows failed. ` +
+          "The ledger may record work that did not take effect: run verify --schema and correct the ledger before applying again.",
+        { cause: cleanupError },
+      );
+    }
+    throw Object.assign(
+      new Error(
+        `Migration ${migration.id} was not applied: CockroachDB committed its transaction but rolled back its schema change (${reason}). ` +
+          "Its ledger rows were removed, so it is not recorded as applied; other statements of that transaction may have committed. " +
+          "Fix the cause (for a unique index, the duplicate rows), then run the same apply again.",
+        { cause: error },
+      ),
+      { code: "XXA00" },
+    );
+  }
+}
+
 async function executeStatement(
   client: Client,
   migration: MigrationDefinition,
@@ -121,11 +188,12 @@ async function executeStatement(
 ): Promise<void> {
   await refreshLease(client, owner, heartbeat);
   // The statement commits with its step record, so a retry re-runs only work that was rolled back.
-  await runLeaseFencedTransaction(client, owner, heartbeat, async () => {
+  await runMigrationTransaction(client, migration, owner, heartbeat, undefined, async (writes) => {
     await assertLeaseAlive(client, owner, heartbeat);
     await client.query(migration.statements[stepIndex]);
     await assertLeaseAlive(client, owner, heartbeat);
     await writeMigrationStepRecord(client, migration, stepIndex, appliedBy);
+    writes.steps.push(stepIndex);
   });
 }
 
@@ -134,6 +202,7 @@ async function executeMigration(
   migration: MigrationDefinition,
   appliedBy: string,
   owner: string,
+  previous: SchemaMigrationRecord | undefined,
   previousSteps: Map<number, string>,
   heartbeat?: LeaseHeartbeat,
 ): Promise<void> {
@@ -143,14 +212,16 @@ async function executeMigration(
     }
     await refreshLease(client, owner, heartbeat);
     // The whole file commits in one transaction, so a retry re-runs only work that was rolled back.
-    await runLeaseFencedTransaction(client, owner, heartbeat, async () => {
+    await runMigrationTransaction(client, migration, owner, heartbeat, previous, async (writes) => {
       for (const [stepIndex, statement] of migration.statements.entries()) {
         await assertLeaseAlive(client, owner, heartbeat);
         await client.query(statement);
         await assertLeaseAlive(client, owner, heartbeat);
         await writeMigrationStepRecord(client, migration, stepIndex, appliedBy);
+        writes.steps.push(stepIndex);
       }
       await writeMigrationRecord(client, migration, "applied", appliedBy, {});
+      writes.record = true;
     });
     return;
   }
@@ -326,7 +397,7 @@ export async function applyMigrations(
         continue;
       }
       const steps = await assertStepHistory(client, migration);
-      await executeMigration(client, migration, appliedBy, owner, steps, heartbeat);
+      await executeMigration(client, migration, appliedBy, owner, previous, steps, heartbeat);
       applied.push(migration.id);
       latestById.set(migration.id, {
         id: migration.id,
@@ -400,7 +471,10 @@ export async function verifyMigrations(
       if (probes.length) {
         const catalog = await inspectCatalogProbes(client, engine, migration, probes);
         if (catalog.state === "partial" || catalog.state === "none") {
-          errors.push(`Migration ${migration.id} final schema probes passed ${catalog.matched}/${catalog.total}`);
+          const missing = catalog.probes.filter(({ passed }) => !passed).map(({ probe }) => describeProbe(probe));
+          errors.push(
+            `Migration ${migration.id} final schema probes passed ${catalog.matched}/${catalog.total}; missing: ${missing.join(", ")}`,
+          );
         }
       } else if (deriveCatalogProbes(migration).length === 0) {
         warnings.push(`Migration ${migration.id} has no catalog probes`);

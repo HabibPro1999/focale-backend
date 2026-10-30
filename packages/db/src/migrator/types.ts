@@ -22,7 +22,7 @@ export interface SchemaMigrationStepRecord {
   applied_by: string;
 }
 
-export type CatalogObjectKind = "table" | "column" | "index" | "constraint" | "type" | "extension";
+export type CatalogObjectKind = "table" | "column" | "index" | "constraint" | "type" | "label" | "extension";
 
 export interface CatalogObjectProbe {
   migrationId: string;
@@ -30,7 +30,10 @@ export interface CatalogObjectProbe {
   statementIndex: number;
   kind: CatalogObjectKind;
   name: string;
+  /** The table an index, column or constraint belongs to; the enum type of a label. */
   table?: string;
+  /** Other names that count as this object: Prisma's default name for a foreign key. */
+  aliases?: string[];
   expectedPresent: boolean;
   source: "ddl" | "manifest" | "directive";
 }

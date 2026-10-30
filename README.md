@@ -4,13 +4,18 @@ Event registration, sponsorship, abstracts and B2B networking platform. The acti
 `develop` code is a Node.js/pnpm workspace with two processes: a NestJS/Fastify
 API and a background worker, using Drizzle on PostgreSQL or CockroachDB.
 The root `Dockerfile` and generated `.env.example` belong to this workspace.
-Legacy `src/`, `prisma/` and `tests/` are read-only reference; the runnable legacy
-application is on `main`.
+The legacy Bun, Fastify and Prisma application that production runs until the
+cutover is kept at git tag `legacy-final` (main `0f86c91d`) for rollback and
+reference. Code comments that name a root `src/`, `prisma/` or `tests/` path
+(for example "ported from legacy `src/modules/...`") refer to that tag.
 
-- [Production rollout checklist](docs/production-rollout-checklist.md)
-- [Render runbook](docs/render-runbook.md), [single-instance constraints](docs/single-instance.md)
-- [Migration authoring](docs/migration-authoring.md)
+- [Production cutover](#production-cutover): the one-time move from the legacy
+  app, Render services, rollback, data repairs
+- [Migrator](packages/db/src/migrator/README.md): ledger, adoption, production
+  rollout, data safety per migration, writing a migration
+- [@app/db](packages/db/README.md): concurrency control
 - [Networking design and operations](docs/networking/README.md)
+- [Continuous integration](#continuous-integration)
 
 ## Workspace layout
 
@@ -60,9 +65,10 @@ pnpm --filter @app/worker backfill-certificate-renders \
   [--apply] [--event <id>] [--template <id>]... [--limit <n>]
 ```
 
-`src/scripts/setup-tshg-abstracts.ts` (legacy) is a **one-time data-seeding
-artifact** for a specific event (TSHG themes + deadlines). It is intentionally
-**not ported** — it was run once against that event and has no ongoing role.
+The legacy `src/scripts/setup-tshg-abstracts.ts` (tag `legacy-final`) was a
+**one-time data-seeding artifact** for a specific event (TSHG themes +
+deadlines). It is intentionally **not ported**: it ran once against that event
+and has no ongoing role.
 
 #### PAID data repair (`repair-paid-settlement`, plan 2.4)
 
@@ -318,7 +324,8 @@ Both processes read the **same** env. Key vars: `DATABASE_URL`, `PORT`,
 
 Production (`NODE_ENV=production`) additionally requires:
 
-- `TRUST_PROXY`: explicit proxy IP/CIDR list, or `false` for direct traffic.
+- `TRUST_PROXY`: explicit proxy IP/CIDR list, or `false` for direct traffic
+  (never behind Render: [Environment for the cutover](#environment-for-the-cutover)).
 - `CORS_ORIGIN`: explicit origins only (no `*`, no paths).
 - `ADMIN_APP_URL` (not the localhost default), `PUBLIC_FORMS_URL`,
   `PUBLIC_LINK_ALLOWED_ORIGINS`.
@@ -328,7 +335,9 @@ Production (`NODE_ENV=production`) additionally requires:
   `NETWORKING_DISABLED=true`.
 
 `FIREBASE_SERVICE_ACCOUNT` accepts raw JSON or base64 JSON;
-`NETWORKING_EMAIL_SENDERS` must be a JSON object.
+`NETWORKING_EMAIL_SENDERS` must be a JSON object. The Firebase token lookup
+fallback is off unless `FIREBASE_AUTH_LOOKUP_FALLBACK=true` and
+`FIREBASE_WEB_API_KEY` are both set; there is no built-in key.
 
 ### Pre-deploy config check (operator, read-only)
 
@@ -352,8 +361,11 @@ fails the rules would otherwise refuse to boot, listing the same keys.
 
 ## Health endpoints (API)
 
-All `@SkipThrottle`, no auth, and **not** enveloped: each returns its raw body
-with the status code probes rely on (503 when unhealthy, body unchanged).
+No auth, and **not** enveloped: each returns its raw body with the status code
+probes rely on (503 when unhealthy, body unchanged). Only `/health/live` and
+`/health/ready` are `@SkipThrottle`; the probes that query the database keep the
+default limit (100/min per client IP and path in production, 1000 elsewhere)
+and answer 429 past it.
 
 | Path | Purpose |
 |---|---|
@@ -546,7 +558,7 @@ every second (batches of 100, draining until a batch comes back short, at most
 5 s per tick) and emits them on in-memory hubs: `/api/stream` serves only that
 process's admin bus, and the participant stream
 (`/api/networking/:slug/stream`, see docs/networking/README.md) only that process's
-participant hub. The SSE
+participant hub ([One API instance, one worker](#one-api-instance-one-worker)). The SSE
 event ids (`Last-Event-ID`) come from a per-process counter and the replay
 history lives in memory: one ring of the last 500 events per tenant
 (`clientId`), so one tenant's burst never evicts another tenant's history. A
@@ -559,7 +571,8 @@ Email status events (`emailLog.statusChanged`) are coalesced per 250 ms in the
 process that changes the status: each email log's latest status in the window
 counts once, and the window becomes one event per (event, status). A single
 log keeps the old payload (`id`, `status`, `registrationId`); several logs are
-listed in `payload.ids` (`id` is the first). See `FRONTEND_FOLLOWUP_3_5.md`.
+listed in `payload.ids` (`id` is the first). Intermediate statuses inside a
+window are not sent, so a client takes the status in the event as the latest.
 
 ### `REALTIME_DISABLED`
 
@@ -634,7 +647,10 @@ What each export reads before its first byte, then page by page:
 Output parity: each streamed file reads back (ExcelJS, cell by cell: values,
 types, styles, merges, filters, views, widths) like the in-memory builder it
 replaced, on the same data (`*.parity.test.ts`, verbatim old builders in
-`__testing__/`). Frontend changes: `FRONTEND_FOLLOWUP_3_7.md`.
+`__testing__/`). For clients: a download is chunked without `Content-Length`
+(show indeterminate progress, read the body to the end, and treat a broken body
+as a failed export, never a partial file), and 503 `EXPORT_BUSY`
+(`Retry-After: 10`) or `SRV_5003` during a deploy means retry.
 
 ## Database migrations
 
@@ -649,13 +665,573 @@ old journal cannot apply `0000_init.sql` a second time.
 - **Existing database:** `apply` refuses a non-empty schema with no migration
   ledger. Run `node packages/db/dist/migrator/cli.js adopt` (a dry run), review
   the report, then `adopt --apply` before `apply`; do not use a Drizzle journal
-  or run baseline SQL directly. The adoption rules, the `MIGRATIONS_CHECK` boot
-  check and the production rollout steps are in
-  `packages/db/src/migrator/README.md`.
+  or run baseline SQL directly. In production the API and a job-running worker
+  refuse to start on such a database whatever `MIGRATIONS_CHECK` says. The
+  adoption rules, the boot check, the production rollout steps and what each
+  migration does to existing data are in the
+  [migrator README](packages/db/src/migrator/README.md).
 
 Migration 0011 repairs saved net totals only when `priceBreakdown` proves the
-old convention; it is safe to rerun. `totalAmount` is gross before sponsorship,
-while `priceBreakdown.total` is net.
+old convention; it is safe to rerun, but on production it changes live totals
+and needs a sign-off (migrator README, rollout step 4). `totalAmount` is gross
+before sponsorship, while `priceBreakdown.total` is net.
+
+## Production cutover
+
+The one-time move of production from the legacy app (main at tag
+`legacy-final`, 0f86c91d: Bun, Fastify and Prisma, background pollers inside
+the web process) to this build: the API on the existing Render web service, a
+new Render worker service, and the same CockroachDB database, adopted into the
+migration ledger and brought forward by 29 migrations. The API wraps every
+response in `{ok, data, requestId}` and legacy answers raw bodies: the admin
+and form builds on `main` today cannot read the new API, while their `develop`
+builds read both. So the frontends go first, and a backend rollback leaves them
+in place. Nothing here is automated; "your decision" marks a production write
+or a sign-off. The database steps are detailed in the
+[migrator README, Production rollout](packages/db/src/migrator/README.md#production-rollout-operator-steps).
+
+### Cutover order
+
+**Before any merge (T-1, no production writes)**
+
+1. Render: Auto-Deploy off on the web service. Vercel: confirm the production
+   branch of admin and form (probably `main`) and control when production
+   deploys. There is no `render.yaml`, so auto-deploy is dashboard state and a
+   merge into `main` can itself be a production deploy.
+2. A verified backup with a tested restore (CockroachDB backup and a restore
+   drill). Rehearse on a restored copy, on the same CockroachDB version: the
+   database steps, then boot the API and the worker of the release image
+   against it (this also proves the image's `linuxmusl` sharp binary loads), and
+   point local admin and form `develop` builds at it for a smoke test.
+3. Render settings of the existing web service, which is redeployed in place
+   (never create a new web service): Docker runtime; Docker Command override
+   empty (a leftover `bun run src/index.ts` fails: the image is
+   `node:24-alpine` without bun or `src/`); no legacy Pre-Deploy Command; no
+   `APP`, `TZ` or `NODE_ENV` set on the service (the image sets
+   `NODE_ENV=production`, which turns on the production config rules and the
+   no-ledger boot guard, and `TZ=UTC`); health check path `/health/live`;
+   exactly 1 instance, no autoscaling; `maxShutdownDelaySeconds` 30.
+4. One Render Environment Group attached to the web service and the worker:
+   every key production uses today (each still exists in the config schema)
+   plus the keys in [Environment for the cutover](#environment-for-the-cutover).
+   Keep `APP` and `RUN_WORKERS` out of the group: they differ per service.
+5. Create the worker: a Render Background Worker on the same repository and
+   `Dockerfile`, built from the branch that holds this build (`develop` until
+   the backend merge, then `main`), Auto-Deploy off, `APP=worker`,
+   `RUN_WORKERS=false`, `maxShutdownDelaySeconds` 30, the environment group.
+   With `RUN_WORKERS=false` it idles: no jobs and no boot check. From its shell,
+   `node packages/contracts/dist/cli/check-config.js` must exit 0.
+6. Read-only checks, from the worker's shell or a built checkout with the
+   production `DATABASE_URL`:
+   - Preflight: `node packages/db/dist/ops/cutover-preflight-cli.js preflight --out <dir>`.
+     In the image, `/app` belongs to root and the process runs as `node`, so
+     give an absolute path under `/tmp` (for example `--out /tmp/preflight-t1`);
+     the same applies to every file an ops script writes or reads below.
+     `<dir>` must be new or empty and receives personal data (`affected/*.json`:
+     registration and abstract ids, sponsorship codes, amounts): keep it on
+     restricted storage (a Render shell's disk does not survive a restart, so
+     copy it out), share it only with the people who sign off, delete it after
+     the cutover is accepted. Review `report.md`: every blocker (exit 1) must be
+     cleared; decide each review item: the 0011 rows (sign-off), 0004 and 0030
+     duplicates, jobs in flight, sponsored `VERIFYING` registrations (reconcile
+     `paid_count` by hand), the form origins for `PUBLIC_LINK_ALLOWED_ORIGINS`
+     and the CockroachDB settings.
+   - CockroachDB, as the `DATABASE_URL` user: `SELECT version();`,
+     `SHOW CLUSTER SETTING version;`, `SHOW CLUSTER SETTING feature.vector_index.enabled;`,
+     `SHOW CLUSTER SETTING sql.txn.read_committed_isolation.enabled;` (`apply`
+     stops at 0017 when the vector setting cannot be read; READ COMMITTED must
+     be enabled, [@app/db](packages/db/README.md#concurrency-control)), plus the
+     `autocommit_before_ddl` and `schema_locked` checks of the migrator README,
+     step 1.
+   - The Firebase certificate fetch, the proxy peers for `TRUST_PROXY` and
+     whether a CDN fronts the API host ([below](#environment-for-the-cutover)).
+   - The SendGrid Event Webhook (`/webhooks/sendgrid`) includes the
+     **Processed** event (Resend: `email.sent`); it moves an `UNCERTAIN`
+     email to `SENT`.
+   - Whatever posts check-ins to `POST /api/events/:eventId/checkin/sync` sends
+     `scannedAt` with seconds: the zod 4.6 update refuses minute precision
+     (`2026-10-30T10:15Z`) with 400; legacy accepted it. Browser
+     `toISOString()` always has seconds. That client must also send at most
+     500 `checkIns` per request (more is a 400 `VAL_2001` and nothing syncs),
+     and read a concurrent duplicate scan under `alreadyCheckedIn` and a
+     payment that stopped being settled under `errors`. No repository here
+     calls this route, so confirm whether such a client exists.
+   - `node apps/api/dist/scripts/form-condition-report.js` (read-only) lists
+     the form fields whose conditions the public form evaluates differently
+     from their configuration: an uppercase `conditionLogic`, non-string
+     values, unknown operators or fields. Decide each listed form before the
+     window (your decision): legacy's server compared the logic without regard
+     to case, this build follows the form app, which treats anything but
+     `'and'` as OR, so a field with an uppercase `AND` and two or more
+     conditions changes visibility and required checks at the switch.
+   - Optional: `node apps/api/dist/scripts/email-template-style-preflight.js`
+     reports, per email template, the text-align, font-size and line-height
+     attributes it would remove or normalize and the templates that need a
+     manual review (dry run by default; `--apply` rewrites them, your
+     decision).
+
+**Frontends first (the same day as the backend window)**
+
+7. Merge form `develop` into `main` and wait for the Vercel production deploy.
+   `develop` must already hold the form `release/prod-alignment` branch (it
+   adds the localized refusal for an origin missing from
+   `PUBLIC_LINK_ALLOWED_ORIGINS`); the same applies to admin in step 8.
+   Against the live legacy API: load a public form, open an existing payment
+   link, edit link and abstract link, and submit one test registration.
+8. Merge admin `develop` into `main` and deploy, with
+   `VITE_REALTIME_ENABLED=true` in the Vercel production environment (without
+   it, capacity changes, email statuses and reconnects after a deploy show
+   only after a manual refresh). Log in as a super admin and
+   as a client admin; open registrations. From now until the API switch,
+   freeze what admin `develop` cannot do on the legacy API: saving email
+   templates and certificate templates and sending abstract presenter
+   certificates answer 400, and the networking pages 404. The abstract bulk
+   send works on both APIs. Once the API is switched, never promote the old
+   frontend builds again (form `307fcf3`, admin `fa67663`).
+
+**Backend window (maintenance, off-peak)**
+
+9. Pause public registrations if you can: a registration the legacy API writes
+   after `apply` keeps the old net total (step 15).
+10. Stop the legacy background work: `RUN_WORKERS=false` on the legacy web
+    service (legacy honors it, `src/worker-runtime.ts:45` at `legacy-final`)
+    and suspend any separate legacy worker. Then repeat this drain query until
+    every count is 0 (the preflight's queue section reports the same):
+
+    ```sql
+    SELECT 'email_logs SENDING' AS queue, count(*) FROM email_logs WHERE status::text = 'SENDING'
+    UNION ALL SELECT 'outbox_events PROCESSING', count(*) FROM outbox_events WHERE status::text = 'PROCESSING'
+    UNION ALL SELECT 'abstract_book_jobs RUNNING', count(*) FROM abstract_book_jobs WHERE status::text = 'RUNNING';
+    ```
+
+    A row left claimed is recovered by the Nest worker once its lease expires:
+    the outbox row or book job runs again, and a `SENDING` email is requeued
+    and sent again (legacy never set `provider_attempted_at`, so it is not
+    parked as `UNCERTAIN`). Check the provider's activity for such an email and
+    decide it before the Nest worker starts (your decision).
+11. Take a CockroachDB backup now that the queues are drained (or confirm a
+    managed backup newer than the drain), check that it completed, and record
+    its id: it, not the T-1 backup, is the restore point of the window, and
+    restoring the T-1 backup would lose a day of registrations and payments.
+    Then the migrations, before any Nest code serves, from the idle worker's
+    shell (or a built checkout with the production `DATABASE_URL`), as the
+    migrator README describes: preflight again into a new directory (the postflight baseline);
+    `adopt` (dry run: 0000 `baseline`, no `ABORT` verdict, no `error:` line);
+    `adopt --apply`; the 0011 sign-off from `affected/0011.json` and the
+    over-quote query; the 0004 and 0030 prechecks; `apply --dry-run`;
+    `apply --yes`; `verify --schema` (no errors; a deferred 0017 or 0030 is a
+    warning); `postflight --baseline <dir>/table-counts.json`. Then
+    `node apps/api/dist/scripts/stored-json-report.js` (read-only, keep
+    `JSONB_VALIDATION=warn`): it should end with "Every typed JSON document
+    matches its schema". Review any invalid document before the API serves:
+    response projection drops undeclared pricing and breakdown fields even
+    under `warn`. Turn on `enforce` only once the report is clean.
+12. On both services: `MIGRATIONS_CHECK=enforce` (in the group) and the
+    Pre-Deploy Command
+    `node packages/contracts/dist/cli/check-config.js && node packages/db/dist/migrator/cli.js apply --yes`.
+13. Merge backend `develop` into `main` (develop already contains main, so
+    there is nothing to resolve) and point the worker at `main`. Unset
+    `RUN_WORKERS` on the worker and deploy it; its log shows `worker started`.
+    Then deploy the API by hand. The worker goes first so that the API's first
+    outbox rows and emails are handled at once; on every later deploy too, the
+    worker must know a new job type before the API enqueues it (an older
+    worker retries an unknown `networking.registration.sync` for about 1¾
+    hours, then dead-letters it).
+14. Smoke tests: `/health/live`, `/health/ready`, `/health/worker`,
+    `/health/outbox` and `/health/email-queue` answer 200 (watch
+    `uncertainCount`); a test registration, a payment link, an abstract
+    submission, one email delivered, one abstract bulk send to a test template,
+    and one certificate preview per active template with a date zone (dates
+    change language, below). Ask staff to hard-reload every open admin tab.
+15. Re-run the 0011 predicate (migrator README, step 4). A row it returns was
+    written by the legacy API after `apply` in the old net convention: put it
+    on the same sign-off list and repair it by hand (0011 does not run again).
+16. Afterwards: [After the cutover](#after-the-cutover), the
+    [data repairs](#data-repairs), and Auto-Deploy back on.
+
+Behavior that changes for users at the switch:
+
+- Certificate dates follow the primary language of the registration form (or
+  of the abstract config), French by default, Arabic printed in French
+  (`packages/integrations/src/certificates-pdf.ts:120-121`); legacy always
+  printed them in English (`src/modules/certificates/certificate-pdf.service.ts:53`
+  at `legacy-final`). Abstract bulk-send dates follow the abstract config's
+  language the same way.
+- Registrations repaired by 0011 now show the net amount they were quoted
+  instead of 0 due; the over-quote rows show more (migrator README, step 4).
+- Form fields with an uppercase `AND` and two or more conditions are evaluated
+  as OR on the server too, as the form app already does (the form-condition
+  report in step 6 lists them).
+- Certificate PDFs are drawn from a JPEG background capped at 3508 px
+  (quality 88, CMYK converted to sRGB, transparency printed white): compare
+  one certificate per real template with legacy's output in the rehearsal
+  (step 2).
+
+### Environment for the cutover
+
+`node packages/contracts/dist/cli/check-config.js` validates a service's
+environment with the production rules and prints only failing key names. An
+environment that boots legacy fails three of them: `TRUST_PROXY`,
+`PUBLIC_LINK_ALLOWED_ORIGINS`, and `NETWORKING_TOKEN_SECRET` /
+`NETWORKING_KEYS` unless `NETWORKING_DISABLED=true`. Production also needs
+`ADMIN_APP_URL` (not the localhost default), `PUBLIC_FORMS_URL`, the email
+provider key and a sender (`EMAIL_FROM_EMAIL` or `SENDGRID_FROM_EMAIL`),
+`FIREBASE_STORAGE_BUCKET` with Firebase storage, and a `CORS_ORIGIN` listing the
+real admin and form origins. The worker parses the same configuration whatever
+its `APP`, hence the shared group. Also set:
+
+- **`MIGRATIONS_CHECK=enforce`**, `JSONB_VALIDATION=warn` (the default) until
+  the stored-JSON report is clean, and `REALTIME_DISABLED` with one value for
+  both services.
+- **`FIREBASE_AUTH_LOOKUP_FALLBACK=true` and `FIREBASE_WEB_API_KEY`.** When the
+  Admin SDK cannot fetch Google's x509 keys (Google has blocked that fetch from
+  the Render egress before), admin and committee sign-in fails unless the
+  fallback is on; it then verifies tokens through Identity Toolkit
+  `accounts:lookup`. Legacy always fell back, with a built-in key; this build
+  falls back only with both keys set, refuses to boot with the flag and no key,
+  and has no built-in key. `FIREBASE_WEB_API_KEY` is the project's Web API key,
+  the public identifier the admin app's Firebase config also ships. The
+  fallback runs only when the fetch fails; on that path a revoked token stays
+  accepted for up to 5 minutes (lookup cache). To see whether the block still
+  applies, run
+  `bun -e "fetch('https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com').then(r=>console.log(r.status))"`
+  in the current web service's Render shell (`node -e` with the same script in
+  the new worker's shell): 200 means not blocked, 403 means the keys are
+  mandatory. Legacy logs nothing when its fallback succeeds, so its logs prove
+  nothing.
+- **`PUBLIC_LINK_ALLOWED_ORIGINS`**: comma-separated exact origins,
+  `scheme://host[:port]`, no path, query or wildcard (a trailing `/` is
+  dropped; a default port is left out). Public registrations and abstract
+  submissions whose `linkBaseUrl` origin is not listed are refused with 422
+  `VAL_2001` "linkBaseUrl origin is not allowed". `www` and the apex, or a
+  custom domain and its `*.vercel.app` address, are different origins. Start
+  from the form's production domains, then add every origin in the preflight
+  report's link origins (the `link_base_url` of registrations and abstracts,
+  with counts and last use) that is still in use, for example
+  `https://forms.example.com,https://www.forms.example.com`.
+- **`TRUST_PROXY`**: comma-separated IPv4 or IPv6 addresses or CIDRs of the
+  proxies that connect to the API (prefix 1 to 32 or 128). `true`, `*`, a hop
+  count, a hostname, an empty entry and `/0` are refused. `false` means
+  clients connect directly: never set it behind Render, or every client gets
+  the proxy's address, shares one rate-limit bucket per route (100/min by
+  default, less on public registration and edit routes) and is recorded in
+  `audit_logs.ip_address` as the proxy. Find the peers in the current web
+  service's Render shell with `netstat -tn | grep ":$PORT "` (the foreign
+  addresses) and list their range; add the ranges of any CDN or proxied custom
+  domain in front of the API, or that hop becomes the client address. Check it
+  24 hours after the cutover:
+  `SELECT ip_address, count(*) FROM audit_logs WHERE performed_at > now() - interval '24 hours' GROUP BY 1 ORDER BY 2 DESC LIMIT 20;`
+  one dominant address means the value is wrong.
+- **`NETWORKING_TOKEN_SECRET`** (at least 32 characters,
+  `openssl rand -hex 32`; never replace it once used, rotate with
+  `NETWORKING_KEYS` as in [Key rotation](docs/networking/README.md#key-rotation)),
+  or `NETWORKING_DISABLED=true` where no event uses networking (participant
+  authentication then answers 503).
+- `NETWORKING_EMAIL_RATE_PER_SECOND` (default 5, per worker process) below the
+  email provider account's limit, with room for the other emails; Resend's
+  default of 2 per second per team is below it.
+
+Keys added by the remediation batches (`.env.example` describes every key):
+
+| Key | Service | Default | What it does |
+|---|---|---|---|
+| `SHUTDOWN_GRACE_MS` | both | 25000 | shutdown budget per process ([Shutdown](#shutdown-shutdown_grace_ms-default-25-s)) |
+| `WORKER_HEARTBEAT_FILE` | worker | `<os tmpdir>/focale-worker.heartbeat` | liveness file read by the image HEALTHCHECK |
+| `NETWORKING_DISABLED` | both | `false` | `true` where no event uses networking |
+| `NETWORKING_KEYS`, `NETWORKING_KEYRING_WRITE_V1` | both | unset, `false` | networking keyring and its v1 write format |
+| `NETWORKING_WITHDRAWAL_ERASE_DAYS` | worker | 30 | days after a withdrawal before maintenance erases the rest |
+| `NETWORKING_DELIVERY_BATCH_SIZE`, `NETWORKING_DELIVERY_CONCURRENCY`, `NETWORKING_DELIVERY_OTP_LANES` | worker | 10, 6, 2 | networking delivery lanes |
+| `NETWORKING_EMAIL_RATE_PER_SECOND` | worker | 5 | networking emails per second per worker process |
+| `EXPORT_MAX_CONCURRENCY`, `EXPORT_MAX_QUEUED` | api | 2, 4 | report and abstracts exports running and waiting (30 s), then 503 `EXPORT_BUSY` |
+| `RENDER_SERVICE_NAME` | worker | set by Render | names the worker's `worker_heartbeats` row |
+
+The API also needs a writable temp directory for the check-in ZIP export
+(`os.tmpdir()`, about 0.2 MB per 10,000 registrations per workbook; the
+image's `/tmp` is writable by `node`).
+
+### If networking launches
+
+Networking has never been deployed. Production gets its tables (empty) from the
+cutover's `apply` either way. Before a first event uses it:
+
+- A new Vercel project for the participant PWA, with an absolute `VITE_API_URL`
+  (its build refuses without one) and security headers in its `vercel.json`;
+  its origin in `CORS_ORIGIN`; `PUBLIC_NETWORKING_URL` on both services;
+  `VITE_NETWORKING_URL` in the form and `VITE_NETWORKING_BASE_URL` in the admin.
+- `NETWORKING_TOKEN_SECRET` (not `NETWORKING_DISABLED=true`), the email rate
+  above, and optionally `NETWORKING_EMBEDDING_API_KEY` (rules-based fallback
+  without it) and the `NETWORKING_VAPID_*` push keys
+  ([services and configuration](docs/networking/README.md#services-and-configuration)).
+- On CockroachDB, 0017 builds the vector index when `feature.vector_index.enabled`
+  is on; when it was deferred, build it in a maintenance window
+  ([vector index runbook](docs/networking/README.md#vector-index-health-and-runbook-cockroachdb)).
+- Activate the event as in [Event activation](docs/networking/README.md#event-activation),
+  then check that a registration or payment update reaches its networking
+  profile, that a full-event sync runs to completion and that no sync dead
+  letter remains; smoke-test incoming-interest pagination, organizer lists and
+  calendar, CSV and XLSX exports, OTP and MFA sign-in, recommendations, chat,
+  meetings and participant privacy.
+
+### Rollback (backend only)
+
+There are no down migrations: a rollback runs the legacy app on the migrated
+schema. Every column legacy Prisma reads or writes is still there (the added
+ones are nullable or defaulted, and no migration drops a legacy column), and
+0033 does not block it: main declares `abstract_code_sequences` only as a Prisma model
+(`prisma/schema.prisma:914-921` at `legacy-final`) and no legacy source file
+queries it. No database restore is needed.
+
+1. Suspend the Nest worker.
+2. `SELECT status, count(*) FROM email_logs GROUP BY 1;` Decide each `UNCERTAIN`
+   row as `SENT` or `FAILED` (your decision): legacy Prisma throws on that enum
+   value (0028), so the admin email-log pages that hold one answer 500.
+3. Remove the Pre-Deploy Command and `MIGRATIONS_CHECK` from the web service:
+   the legacy image has no migrator.
+4. Render rollback of the web service to the last legacy deploy; unset
+   `RUN_WORKERS` there so legacy runs its pollers again. They throw
+   `Unknown outbox event type` on outbox rows only this build writes (legacy
+   handles `email.triggered`, `email.abstract` and `email.sponsorship`,
+   `src/core/outbox/handlers.ts:24-49` at `legacy-final`).
+5. Keep the frontends: their `develop` builds work on legacy, with the freeze of
+   step 8 again.
+
+### Render services and every deploy
+
+Both services run the image built from `Dockerfile` (`node:24-alpine`,
+`TZ=UTC`, `NODE_ENV=production`, user `node`, CMD `node start-runtime.mjs`)
+and read the same environment. `APP=all` runs both processes in one container;
+it is not the Render layout.
+
+| | API | Worker |
+|---|---|---|
+| Render service type | web service | background worker |
+| `APP` | `api` (the default) | `worker` |
+| Instances | exactly 1 ([one API instance](#one-api-instance-one-worker)) | 1 |
+| Health check path | `/health/live` | none; watch `GET /health/worker` on the API |
+| `maxShutdownDelaySeconds` | 30, set explicitly | 30, set explicitly |
+| Pre-Deploy Command | config check + `apply --yes` | the same |
+
+Every deploy, worker first and then the API: the image is built; the Pre-Deploy Command validates the
+service's environment and applies pending migrations under the migration lease
+(the two services' pre-deploys run one after the other), recording a
+deferrable migration whose `defer-unless` check is false as `deferred`; a
+failure stops the deploy before any instance switches and the previous release
+keeps serving. Each process then runs the boot check before it listens (API)
+or starts its jobs (worker). Render switches traffic once `/health/live`
+answers and sends the old instance SIGTERM. The previous release is still
+serving while the Pre-Deploy Command runs, and a rollback runs old code on the
+new schema (ledger rows newer than the build only warn at boot), so every
+migration must work with the code before and after it
+([expand and contract](packages/db/src/migrator/README.md#expand-and-contract)).
+
+Deferred migrations block nothing: the boot check and `verify` only warn, and
+`/health/ready` stays 200. **0017** (CockroachDB vector index) is deferred while
+`networking_embeddings` has rows or `feature.vector_index.enabled` is off;
+**0030** (one registration per event and sponsorship code) while two
+registrations of an event store the same normalized code (finish it in
+[Data repairs](#data-repairs)). The migrator commands are listed in the
+[migrator README](packages/db/src/migrator/README.md); in the image they run
+from `/app` as `node packages/db/dist/migrator/cli.js <command>`, and the
+ledger records `MIGRATIONS_APPLIED_BY`, else `RENDER_SERVICE_NAME`.
+
+Keep `/health/live` the only Render health check: the other probes fail on
+database, queue or worker trouble that replacing the API does not fix. Point
+monitors at them instead ([Health endpoints](#health-endpoints-api)), well
+under their limit of 100 requests per minute per client IP and path (every 30
+to 60 s); a wrong `TRUST_PROXY` puts every monitor in the proxy's bucket.
+
+The worker is required: the API runs no background work. While the worker is
+stopped, crash-looping or idle (`RUN_WORKERS=false`, `/health/worker` 503):
+
+| Job | Every | Stops working |
+|---|---|---|
+| `outbox` | 5 s | automatic emails are never queued (registration, sponsorship and abstract triggers); capacity drops; networking projections; networking photo deletions |
+| `email-queue` | 5 s | no queued email is sent |
+| `lease-recovery` | 30 s | rows leased by a worker that died stay leased; only the worker recovers them |
+| `retention` | 1 h, and at boot | `realtime.emit` rows, finished outbox rows and old email snapshots are never cleaned up |
+| `abstract-book` | 30 s | Abstract Books are not generated |
+| `networking-delivery` | 1 s, in lanes | sign-in codes, notices and digests are not delivered |
+| `networking-maintenance` | 60 s | retention purges and withdrawal erasure do not run |
+| `networking-embeddings` | 15 s | new and changed profiles are not embedded |
+
+### One API instance, one worker
+
+Run exactly one API instance and one worker instance. Realtime fan-out, rate
+limits and a few caches live in the API process; keeping them there and
+documenting the limit was a deliberate decision of the remediation plan. With
+two API instances:
+
+| State | Code | With two instances |
+|---|---|---|
+| Admin realtime bus and replay rings (500 events per tenant), SSE ids from a per-process counter | `apps/api/src/modules/realtime/bus.ts` | each instance's pump claims part of the realtime rows and emits them only to its own `/api/stream` clients; a `Last-Event-ID` from one means nothing to the other |
+| Realtime pump (`realtime.emit`, `networking.notify`, every second) | `apps/api/src/modules/realtime/realtime.pump.ts` | the same split |
+| Networking notification hub | `apps/api/src/core/networking-notification-hub.ts` | a participant on the other instance waits for the 60 s resync |
+| Participant stream limit (3 per session) | `apps/api/src/modules/networking/networking.stream.ts` | applies per instance |
+| Throttler storage (global per-IP limit, venue buckets, session quotas) | `apps/api/src/core/core.module.ts`, `networking-throttler.guard.ts` | limits up to N times higher, each counting from zero |
+| Networking verified-bearer cache and invalid-bearer lockout | `apps/api/src/core/networking-identity-cache.ts` | lockouts and evictions reach one instance (rate limiting only; sessions are checked on every request; OTP failure sums are in the database) |
+| Export limiter | `apps/api/src/core/exports/stream-download.ts` | N times as many exports at once |
+| Admin user cache (60 s) | `apps/api/src/core/auth/user-cache.ts` | a role change or deactivation reaches the other instance only after up to 60 s |
+
+Safe to duplicate (memory or short staleness only): the certificate image LRU
+(64 MB per worker), the networking recommendation cache (30 s), the networking
+sender verification (5 min), the vector index presence check (60 s) and the
+Firebase lookup fallback cache (5 min). During a deploy two API instances run
+for a few seconds; clients reconnecting to the new one get
+`event: replay-gap` and refetch, which is accepted. A second worker would not
+process a queue row twice (leases and `FOR UPDATE SKIP LOCKED`), but it doubles
+the networking email rate and the certificate cache, and retention,
+maintenance and lease recovery were not reviewed for running in parallel.
+Scaling out needs, at least, a shared realtime bus with shared ids and replay,
+shared throttler storage, cross-instance user-cache invalidation and a
+cluster-wide export limit; none is planned.
+
+### After the cutover
+
+- `/health/worker`, `/health/outbox` and `/health/email-queue` stay 200; watch
+  `uncertainCount`.
+- Certificate render images for templates uploaded before 0032:
+  `backfill-certificate-renders` dry run, then `--apply`, then look at real
+  certificates from those templates.
+- Smoke-test capacity edits against current paid counts and prerequisite
+  changes: concurrent writes re-read locked rows and a losing invalid change is
+  refused.
+- Check the admin's tenant and module refusals: a disabled module answers 403
+  `CLT_20002`, an inactive client 403 `CLT_20001` (admin `develop` translates
+  both).
+- The first retention run clears the context snapshot of finished emails
+  queued more than 90 days ago and compacts finished outbox rows older than 30
+  days; nothing visible in the product.
+- `TRUST_PROXY` audit-log query after 24 hours (above).
+- On CockroachDB with 0017 deferred, build the vector index in a maintenance
+  window if networking needs it.
+
+### Data repairs
+
+Each is a dry run, then the user's sign-off, then the apply, after a verified
+backup. In the image: `node apps/worker/dist/scripts/<name>.js`; from a
+checkout: `pnpm --filter @app/worker <name>`.
+
+- **Sponsorship codes (2.7).** `repair-sponsorship-code-usages` dry run
+  (planned links and a decision list); the user decides each decision-list row
+  and clears the losing or unknown codes with
+  `--clear-code --registration <id>... --apply`; a new dry run; then
+  `--apply --all` (or `--registration <id>...`) for the links. Once no event
+  stores a code twice, run 0030's `defer-unless` query by hand (it must return
+  true; `--apply-deferred` skips it):
+  `SELECT NOT EXISTS (SELECT 1 FROM registrations WHERE NULLIF(upper(trim(sponsorship_code)), '') IS NOT NULL GROUP BY event_id, NULLIF(upper(trim(sponsorship_code)), '') HAVING count(*) > 1);`,
+  then `node packages/db/dist/migrator/cli.js apply --apply-deferred=0030 --yes`.
+- **PAID settlement (2.4).** `repair-paid-settlement --since <cutover time, ISO> --out /tmp/repair-manifest.json`
+  dry run writes the manifest (in the image only `/tmp` is writable); copy it
+  out, the user sets each row's action in `approved.json`, copy that back to
+  `/tmp`; `--apply --manifest /tmp/approved.json`; then
+  `repair-paid-settlement invariants` ([PAID data repair](#paid-data-repair-repair-paid-settlement-plan-24)).
+  On legacy data the invariants do **not** end empty after these repairs:
+  every registration an admin linked to a sponsorship on legacy keeps a price
+  breakdown without that sponsorship (`SPONSORSHIP_TOTAL_MISMATCH`; legacy's
+  link never wrote it), and each over-quote row of the 0011 sign-off reports
+  `SPONSORED_NOT_COVERED`. Their money columns are right. One settlement write
+  per row clears them, but no script does it and it changes what a sponsor's
+  usage records. Rows of finished or archived events stay as they are, as known
+  rows (decision of 2026-10-30); run `invariants --event <id>` for each live
+  event and decide its rows (your decision).
+- Sponsored `VERIFYING` registrations (the preflight counts them): while one is
+  under review its sponsorship-covered seats stay reserved, and confirmation
+  adds only the uncovered seats. If the preflight reports any, reconcile their
+  access items' `paid_count` by hand before relying on capacity figures.
+
+### When needed
+
+- Networking key rotation (`NETWORKING_KEYS`, `NETWORKING_KEYRING_WRITE_V1`,
+  the `networking-keyring` script): [Key rotation](docs/networking/README.md#key-rotation).
+- Networking retention leftovers (`networking-retention purge-leftovers |
+  erase-withdrawn | orphan-photos`; `--apply` needs `--backup-verified`):
+  [Retention operator scripts](docs/networking/README.md#retention-operator-scripts).
+- Dead-lettered outbox rows: `requeue-dead-letters` ([Worker jobs and heartbeat](#worker-jobs-and-heartbeat)).
+
+### Main's features on this build
+
+Main's commits up to `8cdbd52` were reviewed and their behavior ported into
+the Nest workspace (a semantic port, not a merge of the legacy app). Main
+itself, at `0f86c91d`, was then merged into develop (`91377a6c`), which put
+main's legacy application changes (including the Prisma migrations
+`20260806000000_add_multilanguage_forms` and
+`20260814000000_add_committee_invite_tokens`) into the tree as reference, now
+kept only at `legacy-final`,
+and the one feature main had added since, the abstracts bulk send of
+`0f86c91d`, was ported too.
+
+| Main commits | On this build |
+|---|---|
+| `9c1adde`, `f221245` | Auth verification failures logged; the Identity Toolkit fallback when the public-key fetch fails, keeping the disabled-user and revocation checks, with a 10 s timeout. **Opt-in here**: `FIREBASE_AUTH_LOOKUP_FALLBACK=true` plus `FIREBASE_WEB_API_KEY`, with no built-in key ([Environment for the cutover](#environment-for-the-cutover)). |
+| `73be63e` | Author affiliation up to 500 characters, co-author names up to 200, co-author affiliation up to 500; validation failures logged without request bodies. |
+| `5041fde`, `24a1a04` | `in` conditions, contradiction detection, option-id validation on pricing and access saves; unchanged legacy pricing conditions are grandfathered. |
+| `e27a103`, `e5ad53d` | French, English and Arabic translations for form fields, options, steps, sponsor summaries, success text, abstract themes and language settings; editable multilingual registration-fee label (0007). |
+| `1706f6d` | Check-in columns as timestamptz (0010; production's TIMESTAMPTZ(6) columns are adopted as they are). |
+| `25bf7fd`, `3043a84` | Hashed committee invite tokens with a configurable lifetime (`COMMITTEE_INVITE_TOKEN_TTL_DAYS`, default 7), single-use claims, public verify, set-password and resend routes; `ADMIN_APP_URL` is the base of the `/committee/set-password` link (0008, 0009). |
+| `660c87f` | Effective presentation-type filter (final decision, else requested type) and the unpaginated abstracts XLSX export. |
+| `30dcc52`, `8cdbd52` | Undated access and every ADDON use `addonGroup.slots` (the options response changes from `addonGroup.items`); same-type exclusivity; optional required-selection enforcement. |
+| `0f86c91d` | Template bulk send to abstract authors (audience `abstracts`, `abstractIds` or `abstractFilters`, `dedupeByEmail` default true, `skipped` in every audience's response), behind the abstracts module gate, one queued log per author with its abstract id and a context snapshot. Snapshot dates follow the abstract config's language; legacy used English. |
+
+Develop-only behavior kept alongside: Tunisia-local access date buckets,
+committee account eligibility and cross-client password-reset restrictions,
+abstract deadline and theme validation, configured invite templates and email
+logs.
+
+### Open frontend follow-ups
+
+The 38 frontend follow-up notes the backend work left at the repository root
+were checked item by item against the release branches (backend, admin and
+form `release/prod-alignment`, networking `develop`), then removed; their text
+stays in git history. Of 274 items, 147 were done, 96 were information only, 2
+were obsolete and 29 were open. The open items:
+
+**Operations (all in the cutover steps above)**
+
+| Item | Severity | Where |
+|---|---|---|
+| `PUBLIC_LINK_ALLOWED_ORIGINS` lists every public form origin; an incomplete list still boots, then refuses each registration and abstract submission from a missing origin with 422 `VAL_2001` | blocker | [step 6](#cutover-order), [Environment for the cutover](#environment-for-the-cutover) |
+| `CORS_ORIGIN` lists the exact admin and form origins; `*` or a wildcard host stops boot | blocker | [Environment for the cutover](#environment-for-the-cutover), `check-config` in steps 5 and 12 |
+| Sponsorship code repair, then `apply --apply-deferred=0030` | high | [Data repairs](#data-repairs) |
+| The worker knows `networking.event.sync` and `networking.registration.sync` before the API enqueues them | high | step 13 |
+| `stored-json-report` before the API serves; `JSONB_VALIDATION=warn` until it is clean | high, medium | step 11 |
+| `form-condition-report` and a per-form decision | medium | step 6 |
+| Certificate PDFs from real templates compared with legacy | medium | step 2, step 14 |
+| `VITE_REALTIME_ENABLED=true` in the admin production build | medium | step 8 |
+| Networking smoke tests | medium | [If networking launches](#if-networking-launches) |
+| Form and admin ship from their `release/prod-alignment` branches | low | step 7 |
+| SendGrid **Processed** event (Resend `email.sent`) | low | step 6 |
+| `uncertainCount` watched; `UNCERTAIN` rows decided before a rollback | low | step 14, [Rollback](#rollback-backend-only) |
+| `backfill-certificate-renders` for templates uploaded before 0032 | low | [After the cutover](#after-the-cutover) |
+| A check-in client outside these repositories, if one exists | info | step 6 |
+
+**Admin**
+
+Done on admin `release/prod-alignment` (`23c8f32`): a refused create places
+the `FRM_9001` field errors under their inputs as the edit does; a refused
+manual check-in shows the reason (`CHK_17003` to `CHK_17006` in fr and en);
+the audit panel labels `POST_EVENT_REPORT` and `POST_EVENT_REPORT_REGENERATE`;
+a certificate template whose image is gone (`RES_3001`) says so. Still open:
+the certificate preview shows its generic state when that image is missing.
+
+**Form, backend and admin together**
+
+- The condition evaluator has three quirks: an uppercase `conditionLogic`
+  `AND` is evaluated as OR, a non-string condition value throws on
+  `.toLowerCase()`, and the form's `FieldRenderer` defaults an empty logic to
+  `'and'` while validation does not. The backend
+  (`packages/shared/src/field-visibility.ts`) and the admin
+  (`utils/conditions.ts`) mirror the form on purpose, so the cutover adds no
+  divergence between them. A fix changes form `src/lib/conditions.ts`, those
+  two copies and the shared parity fixtures in one release; lowercasing stored
+  forms is a per-form decision driven by the form-condition report.
+- Optional: a self-edit of a `PAID` registration in the form could compare a
+  fresh quote with the current total before it sends; the up-front notice and
+  the `REG_8014` recovery cover it today.
+- Optional: admin, form and networking can replace hand-written request and
+  response types with `packages/contracts/generated/types/contracts.input.ts`
+  and `contracts.output.ts` when those files are next touched.
+- Done on form `release/prod-alignment` (`653163f`): the retired `CHK_17002`
+  mapping is gone.
 
 ## Testing and environment safety
 
@@ -679,14 +1255,40 @@ ALLOW_DB_TESTS=1 TEST_DB_ADMIN_URL='postgresql://postgres:...@127.0.0.1:5432/foc
 
 Use `.env.test.example` only for unit-safe overrides and `.env.test.db.example` for all DB tiers. The tests do not load `.env` or `.env.test.db`; set variables explicitly or source the example in your shell. Keep values local/disposable; never use production or shared development credentials.
 
+## Continuous integration
 
-CI selects checks from the complete PR diff or push range. Documentation-only
-changes run a lightweight planner and required gate; application/query changes
-run static checks plus database/concurrency suites on both engines. Migrations,
-shared layers, dependencies, CI infrastructure and unknown paths run the full
-12-check suite. A manual Actions run always requests the full suite.
+The `CI` workflow runs on PRs into `develop`, pushes to `develop` and manual
+dispatch; it never runs on `main`. Its planner reads the full PR diff (merge
+base to head) or the complete push range, without GitHub's path-filter limits;
+deleted files and both sides of a rename count, and missing history or an
+unknown path selects every check.
 
-`CI / required` fails if any selected check fails, is cancelled or unexpectedly
-skips, including CockroachDB. New PR commits cancel their superseded runs; push
-runs remain independent. Test-database isolation and safety guards are unchanged.
-See [CI selection and maintenance](docs/ci.md) for the path rules and commands.
+| Change | Checks selected |
+|---|---|
+| Root Markdown, or Markdown and images under `docs/`, only | planner tests and the required gate; no install, build or database |
+| Workspace unit tests or ESLint rules and config only | static checks |
+| Database, concurrency or migration test files only | static checks plus that tier on both engines |
+| API, worker or integration source; DB queries, settlement, policy, outbox, lease queue or operational code | static checks plus the database and concurrency tiers on both engines |
+| Migrations, schema, DB connection or test infrastructure, shared and contracts packages, dependencies, launchers and container, CI, any other path | all 12 checks, the planner and the gate |
+| Manual run | all checks |
+
+Mixed changes take the union. The static job keeps typecheck, lint, build, the
+generated-artifact checks, unit and runtime tests and the dependency audit
+(`pnpm audit --prod --audit-level=high`); the DB tiers keep both engines, their
+shards, one database per test file and the safety guards. `CI / required` is
+the stable aggregate: it runs even after another job fails and accepts only
+success from selected jobs, CockroachDB included. New commits cancel older runs
+of the same PR; push and manual runs stay independent. Timeouts: planner and
+gate 5 minutes, static and image 20, DB tiers 45. The `CI / plan` job writes a
+"CI selection" summary with a run or skip decision per tier; skipped jobs
+install, build and start nothing.
+
+```bash
+node --test scripts/ci-plan.test.mjs
+actionlint .github/workflows/ci.yml
+gh workflow run ci.yml --ref develop # full suite, explicitly requested
+```
+
+New runtime directories get full coverage until a narrower, tested rule exists.
+Skipping is done per job: a workflow-level `paths-ignore` would leave required
+checks pending.

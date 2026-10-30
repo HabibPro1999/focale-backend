@@ -10,6 +10,7 @@ import {
   getRegistrationFormLanguage,
   getRegistrationsByIds,
   getRegistrationsByFilters,
+  listAbstractsForBulkEmail,
   listSponsorshipBatchesForBulk,
   getClientById,
   insertEmailLogsSkippingConflicts,
@@ -25,6 +26,7 @@ import {
   resolveEmailParts,
   buildEmailContextWithAccess,
   buildBatchEmailContext,
+  buildAbstractBulkEmailContext,
   resendUncertainEmail,
   sendEmailNow,
 } from "@app/integrations";
@@ -39,6 +41,14 @@ export interface SendEventContext {
   startDate: Date;
   location: string | null;
   pricing: { currency: string } | null;
+}
+
+/** POST .../email-templates/:templateId/send: `skipped` is 0 outside the abstracts audience. */
+export interface BulkSendResult {
+  success: true;
+  queued: number;
+  skipped: number;
+  message: string;
 }
 
 @Injectable()
@@ -97,11 +107,14 @@ export class EmailSendService {
     event: SendEventContext,
     templateId: string,
     body: BulkSendEmailInput,
-  ): Promise<{ success: true; queued: number; message: string }> {
+  ): Promise<BulkSendResult> {
     const { audience, registrationIds, filters } = body;
 
     if (audience === "sponsors") {
       return this.bulkSendSponsors(event, templateId);
+    }
+    if (audience === "abstracts") {
+      return this.bulkSendAbstracts(event, templateId, body);
     }
 
     let registrations: BulkRegistrationRow[];
@@ -120,6 +133,7 @@ export class EmailSendService {
       return {
         success: true,
         queued: 0,
+        skipped: 0,
         message: "No recipients matched the criteria",
       };
     }
@@ -138,6 +152,7 @@ export class EmailSendService {
     return {
       success: true,
       queued,
+      skipped: 0,
       message: `${queued} emails queued for sending`,
     };
   }
@@ -145,7 +160,7 @@ export class EmailSendService {
   private async bulkSendSponsors(
     event: SendEventContext,
     templateId: string,
-  ): Promise<{ success: true; queued: number; message: string }> {
+  ): Promise<BulkSendResult> {
     const [batches, client] = await Promise.all([
       listSponsorshipBatchesForBulk(event.id),
       getClientById(event.clientId),
@@ -195,6 +210,7 @@ export class EmailSendService {
       return {
         success: true,
         queued: 0,
+        skipped: 0,
         message: "No sponsors found for this event",
       };
     }
@@ -213,6 +229,53 @@ export class EmailSendService {
     return {
       success: true,
       queued,
+      skipped: 0,
+      message: `${queued} emails queued for sending`,
+    };
+  }
+
+  /**
+   * Abstract authors (backend 0f86c91d); the controller has checked the
+   * abstracts module. Each row carries its abstract and a context snapshot
+   * the worker renders the template from. `skipped` counts the abstracts left
+   * out: a blank author email, or (dedupeByEmail) an author's later abstract.
+   */
+  private async bulkSendAbstracts(
+    event: SendEventContext,
+    templateId: string,
+    { abstractIds, abstractFilters, dedupeByEmail }: BulkSendEmailInput,
+  ): Promise<BulkSendResult> {
+    const { recipients, skipped } = await listAbstractsForBulkEmail(event.id, {
+      abstractIds,
+      filters: abstractFilters,
+      dedupeByEmail,
+    });
+
+    if (recipients.length === 0) {
+      return {
+        success: true,
+        queued: 0,
+        skipped,
+        message: "No abstract submitters matched the criteria",
+      };
+    }
+
+    const values: EmailLogInsert[] = recipients.map((abstract) =>
+      queuedEmailLogValues({
+        templateId,
+        abstractId: abstract.id,
+        recipientEmail: abstract.authorEmail,
+        recipientName:
+          `${abstract.authorFirstName} ${abstract.authorLastName}`.trim() || null,
+        contextSnapshot: buildAbstractBulkEmailContext(abstract),
+      }),
+    );
+    const queued = (await withTxn((tx) => insertEmailLogsSkippingConflicts(values, tx))).size;
+
+    return {
+      success: true,
+      queued,
+      skipped,
       message: `${queued} emails queued for sending`,
     };
   }

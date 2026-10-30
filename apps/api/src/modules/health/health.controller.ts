@@ -16,9 +16,11 @@ import { ReadinessService } from "./readiness.service";
 // Health probes are machine-consumed (load balancers, k8s, Render). They return
 // the RAW legacy bodies with legacy status codes and are @SkipEnvelope: the
 // success envelope wrapped 503 responses as { ok: true, ... } which broke the
-// probe's unhealthy signal. @SkipThrottle so probes are never rate-limited.
+// probe's unhealthy signal. Only live and ready (no query, or a cached ping)
+// skip throttling, so the platform probe is never rate-limited. The probes
+// that query the database keep the default per-IP limit (100/min per route in
+// production), as legacy's global rate limit capped them.
 @Controller()
-@SkipThrottle()
 export class HealthController {
   constructor(private readonly readiness: ReadinessService) {}
 
@@ -39,6 +41,7 @@ export class HealthController {
   // Liveness (k8s-style) — pure "am I running", zero I/O, never fails.
   @Get("health/live")
   @SkipEnvelope()
+  @SkipThrottle()
   live() {
     return { status: "ok" };
   }
@@ -47,6 +50,7 @@ export class HealthController {
   // the reasons when not ready, and 503 "draining" once shutdown starts.
   @Get("health/ready")
   @SkipEnvelope()
+  @SkipThrottle()
   async ready(@Res({ passthrough: true }) reply: FastifyReply) {
     const readiness = await this.readiness.check();
     if (readiness.ready) return { status: "ready" };

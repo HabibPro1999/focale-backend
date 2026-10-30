@@ -143,7 +143,10 @@ export {
 export {
   findSkippedAbstractEmails,
   getAbstractForEmailContext,
+  listAbstractsForBulkEmail,
   type AbstractEmailTrigger,
+  type AbstractForBulkEmail,
   type AbstractForEmailContext,
+  type ListAbstractsForBulkEmailOptions,
   type SkippedAbstractEmailRow,
 } from "./abstracts/email";

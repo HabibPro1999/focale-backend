@@ -20,12 +20,14 @@ import {
 } from "../../src/migrator";
 import { assertSchemaCurrent, type SchemaCheckLogger } from "../../src/schema-check";
 import { dbTestSetupTimeoutMs } from "../../../vitest.shared";
+import { writeLegacyPrismaLedger } from "../helpers/legacy-prisma";
 
 // Adoption fixtures. Each database is built by the unified runner, then its
 // ledger is removed and the legacy evidence an existing production database
 // carries is written by hand: `networking_migrations` rows exactly as the old
 // migrate-networking.mjs recorded them (file checksums; CockroachDB 0018 step
-// rows) and a Prisma `_prisma_migrations` table.
+// rows) and main's `_prisma_migrations`. The production schema itself, built
+// by Prisma, is adopted in legacy-prisma-adopt.migration.test.ts.
 
 const LEDGER_TABLES = ["schema_migration_steps", "schema_migrations", "schema_migration_lock"];
 
@@ -60,29 +62,6 @@ async function writeOldScriptLedger(
       tracking.name,
       tracking.checksum,
     ]);
-  }
-}
-
-async function writePrismaLedger(client: Client): Promise<void> {
-  // Prisma's own migration table shape (legacy src/ app).
-  await client.query(`
-    CREATE TABLE "_prisma_migrations" (
-      id varchar(36) PRIMARY KEY,
-      checksum varchar(64) NOT NULL,
-      finished_at timestamptz,
-      migration_name varchar(255) NOT NULL,
-      logs text,
-      rolled_back_at timestamptz,
-      started_at timestamptz NOT NULL DEFAULT now(),
-      applied_steps_count integer NOT NULL DEFAULT 0
-    )`);
-  const names = ["20250101000000_init", "20260301000000_abstracts", "20260514000000_tshg_abstract_requirements"];
-  for (const [index, name] of names.entries()) {
-    await client.query(
-      `INSERT INTO "_prisma_migrations" (id, checksum, finished_at, migration_name, applied_steps_count)
-       VALUES ($1, $2, now(), $3, 1)`,
-      [`00000000-0000-0000-0000-00000000000${index}`, String(index).repeat(64), name],
-    );
   }
 }
 
@@ -197,11 +176,13 @@ describe.runIf(dbTestsEnabled())("migrate adopt on existing databases", () => {
     });
   });
 
-  describe("Prisma-shaped database (0000 only, _prisma_migrations present)", () => {
+  // Drizzle's foreign key names (*_fk), not Prisma's: a database the runner
+  // built still adopts as baseline.
+  describe("runner-built 0000 with main's _prisma_migrations", () => {
     let database: ScratchDatabase;
     beforeAll(async () => {
       database = await scratch("adopt_prisma", "0000");
-      await writePrismaLedger(database.client);
+      await writeLegacyPrismaLedger(database.client);
     }, dbTestSetupTimeoutMs());
 
     it("records 0000 as baseline and leaves later migrations pending for apply", async () => {
@@ -210,8 +191,8 @@ describe.runIf(dbTestsEnabled())("migrate adopt on existing databases", () => {
       const verdicts = classifications(report);
       expect(verdicts["0000"]).toBe("baseline");
       expect(report.assessments[0]!.evidence.prisma).toMatchObject({
-        finished: 3,
-        latest: "20260514000000_tshg_abstract_requirements",
+        finished: 31,
+        latest: "20260814000000_add_committee_invite_tokens",
       });
       // 0002 only drops an index Prisma had already removed, so it is already in effect.
       expect(verdicts["0002"]).toBe("applied");

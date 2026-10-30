@@ -500,14 +500,43 @@ export interface NetworkingAnalytics {
   passes: number;
   matches: number;
   matchRate: number;
+  interestReciprocityRate: number;
+  matchedParticipantsRate: number;
+  messagedParticipantsRate: number;
   messages: number;
   meetings: number;
+  /** Booked meetings (confirmed, completed or no-show). */
+  plannedMeetings: number;
+  todayMeetings: number;
   confirmedMeetings: number;
   completedMeetings: number;
   cancelledMeetings: number;
   noShowMeetings: number;
   pendingMeetings: number;
   tableOccupancyRate: number;
+  /** Meeting-station minutes per table over the opening slots. */
+  tableUsage: Array<{
+    tableId: string;
+    name: string;
+    location: string;
+    active: boolean;
+    meetings: number;
+    availableMinutes: number;
+    occupiedMinutes: number;
+    occupancyRate: number;
+  }>;
+  /** Booked meetings per start slot (event timezone), busiest first. */
+  peakSlots: Array<{ date: string; time: string; meetings: number }>;
+  /** Booked meetings per zone (space, else location), busiest first. */
+  zones: Array<{ zone: string; meetings: number }>;
+  engagementTenSwipes: number;
+  engagementTenSwipesRate: number;
+  punctuality: {
+    checkins: number;
+    onTime: number;
+    onTimeRate: number;
+    averageDelayMinutes: number;
+  };
   reports: number;
   hourlyActivity?: Array<{ hour: string; activity: number }>;
   timeSeries: Array<{

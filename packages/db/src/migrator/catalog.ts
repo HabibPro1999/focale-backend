@@ -27,7 +27,12 @@ function findProbe(
   statementIndex: number,
   kind: CatalogObjectKind,
   name: string,
-  options: { table?: string; expectedPresent?: boolean; source?: CatalogObjectProbe["source"] } = {},
+  options: {
+    table?: string;
+    aliases?: string[];
+    expectedPresent?: boolean;
+    source?: CatalogObjectProbe["source"];
+  } = {},
 ): CatalogObjectProbe {
   return {
     migrationId: migration.id,
@@ -36,9 +41,94 @@ function findProbe(
     kind,
     name,
     ...(options.table ? { table: options.table } : {}),
+    ...(options.aliases?.length ? { aliases: options.aliases } : {}),
     expectedPresent: options.expectedPresent ?? true,
     source: options.source ?? "ddl",
   };
+}
+
+/** Prisma's identifier limit on PostgreSQL and CockroachDB, in bytes. */
+const PRISMA_MAX_IDENTIFIER_BYTES = 63;
+
+/**
+ * The name Prisma gives a foreign key its schema does not name (no `map:`):
+ * `<table>_<column>[_<column>...]_fkey`, with the part before `_fkey` cut to
+ * at most 58 bytes, at a character boundary, so the name fits in 63. Every
+ * foreign key in the legacy prisma/migrations follows it, and so does Prisma
+ * 7.2.0's own output for multi-column keys and for names at and past the limit.
+ */
+export function prismaForeignKeyName(table: string, columns: readonly string[]): string {
+  const suffix = "_fkey";
+  const prefix = Buffer.from(`${table}_${columns.join("_")}`, "utf8");
+  let end = Math.min(prefix.length, PRISMA_MAX_IDENTIFIER_BYTES - suffix.length);
+  // Back off a cut that would split a multi-byte character (continuation bytes are 10xxxxxx).
+  while (end < prefix.length && end > 0 && (prefix[end] & 0xc0) === 0x80) end -= 1;
+  return `${prefix.subarray(0, end).toString("utf8")}${suffix}`;
+}
+
+/**
+ * The comma-separated items of the parenthesized list that `opener` (a pattern
+ * ending in "(") finds at `offset`, ignoring commas inside nested parentheses
+ * and quotes. Undefined when the list is not there or never closes.
+ */
+function listAt(sql: string, offset: number, opener: RegExp): string[] | undefined {
+  const found = opener.exec(sql.slice(offset));
+  if (!found) return undefined;
+  const items: string[] = [];
+  let depth = 0;
+  let quote: string | undefined;
+  let start = offset + found[0].length;
+  for (let index = start - 1; index < sql.length; index += 1) {
+    const char = sql[index];
+    if (quote) {
+      if (char === quote) {
+        if (sql[index + 1] === quote) index += 1;
+        else quote = undefined;
+      }
+    } else if (char === "'" || char === '"') {
+      quote = char;
+    } else if (char === "(") {
+      depth += 1;
+    } else if (char === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        items.push(sql.slice(start, index));
+        return items.map((item) => item.trim()).filter(Boolean);
+      }
+    } else if (char === "," && depth === 1) {
+      items.push(sql.slice(start, index));
+      start = index + 1;
+    }
+  }
+  return undefined;
+}
+
+/** Table-level elements of a CREATE TABLE body, as opposed to column definitions. */
+const TABLE_ELEMENT = /^(?:CONSTRAINT|PRIMARY\s+KEY|UNIQUE|CHECK|FOREIGN\s+KEY|EXCLUDE|LIKE|(?:INVERTED\s+|VECTOR\s+)?INDEX|FAMILY)\b/i;
+
+/** Column names declared in a CREATE TABLE body (types and defaults are not read). */
+function declaredColumns(items: string[]): string[] {
+  return items.flatMap((item) => {
+    if (TABLE_ELEMENT.test(item)) return [];
+    const match = new RegExp(`^${IDENTIFIER}`).exec(item);
+    return match ? [identifierValue(match, 1)] : [];
+  });
+}
+
+/** Labels of a CREATE TYPE ... AS ENUM list. */
+function declaredLabels(items: string[]): string[] {
+  return items.flatMap((item) => {
+    const match = /^'((?:[^']|'')*)'$/.exec(item);
+    return match ? [match[1].replace(/''/g, "'")] : [];
+  });
+}
+
+/** Column names of a column list such as FOREIGN KEY ("a", "b"). */
+function columnList(items: string[]): string[] {
+  return items.map((item) => {
+    const match = new RegExp(`^${IDENTIFIER}$`).exec(item);
+    return match ? identifierValue(match, 1) : item;
+  });
 }
 
 /**
@@ -120,6 +210,15 @@ export function catalogObjectKey(probe: CatalogObjectProbe): string {
   return `${probe.kind}:${probe.table ?? ""}:${probe.name}`;
 }
 
+/**
+ * The table a probe declares dropped (0033). Its columns go with it, so a
+ * dropped table also replaces every earlier probe of its columns; its indexes
+ * keep their own probes unless the file also drops them by name.
+ */
+export function droppedTable(probe: CatalogObjectProbe): string | undefined {
+  return probe.kind === "table" && !probe.expectedPresent ? probe.name : undefined;
+}
+
 function probesForStatement(
   migration: MigrationDefinition,
   statement: string,
@@ -129,15 +228,27 @@ function probesForStatement(
   const probes: CatalogObjectProbe[] = [];
   let match: RegExpExecArray | null;
 
+  // A created table, and each column its body declares (existence only: the
+  // legacy Prisma types, such as STRING or INT8, differ from Drizzle's).
   match = new RegExp(`^CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?${QUALIFIED_IDENTIFIER}`, "i").exec(sql);
   if (match) {
-    probes.push(findProbe(migration, statementIndex, "table", objectName(match, 1)));
+    const table = objectName(match, 1);
+    probes.push(findProbe(migration, statementIndex, "table", table));
+    for (const column of declaredColumns(listAt(sql, match[0].length, /^\s*\(/) ?? [])) {
+      probes.push(findProbe(migration, statementIndex, "column", column, { table }));
+    }
     return probes;
   }
 
+  // A created type, and each label of an enum. Labels that later files add
+  // (0028) belong to those files, not to this one.
   match = new RegExp(`^CREATE\\s+TYPE\\s+${QUALIFIED_IDENTIFIER}`, "i").exec(sql);
   if (match) {
-    probes.push(findProbe(migration, statementIndex, "type", objectName(match, 1)));
+    const type = objectName(match, 1);
+    probes.push(findProbe(migration, statementIndex, "type", type));
+    for (const label of declaredLabels(listAt(sql, match[0].length, /^\s+AS\s+ENUM\s*\(/i) ?? [])) {
+      probes.push(findProbe(migration, statementIndex, "label", label, { table: type }));
+    }
     return probes;
   }
 
@@ -176,9 +287,20 @@ function probesForStatement(
     return probes;
   }
 
+  // A named constraint. A foreign key also matches under Prisma's default
+  // name: the legacy Prisma schema named none of its keys, so a database it
+  // built (production) has `users_client_id_fkey` where 0000 declares
+  // `users_client_id_clients_id_fk`. No code reads foreign key names.
   match = new RegExp(`^ALTER\\s+TABLE\\s+${QUALIFIED_IDENTIFIER}\\s+ADD\\s+CONSTRAINT\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?${IDENTIFIER}`, "i").exec(sql);
   if (match) {
-    probes.push(findProbe(migration, statementIndex, "constraint", identifierValue(match, 5), { table: objectName(match, 1) }));
+    const table = objectName(match, 1);
+    const columns = columnList(listAt(sql, match[0].length, /^\s+FOREIGN\s+KEY\s*\(/i) ?? []);
+    const name = identifierValue(match, 5);
+    const prismaName = columns.length ? prismaForeignKeyName(table, columns) : undefined;
+    probes.push(findProbe(migration, statementIndex, "constraint", name, {
+      table,
+      ...(prismaName && prismaName !== name ? { aliases: [prismaName] } : {}),
+    }));
   }
   return probes;
 }
@@ -215,9 +337,9 @@ export function deriveCatalogProbes(migration: MigrationDefinition): Array<Catal
 
 /**
  * Final schema verification checks the last declared state of each object.
- * A later migration may intentionally remove an index introduced earlier.
- * Per-migration probe sets remain available to adoption through
- * deriveCatalogProbes/inspectMigrationCatalog.
+ * A later migration may intentionally remove an index introduced earlier, or
+ * a table with its columns. Per-migration probe sets remain available to
+ * adoption through deriveCatalogProbes/inspectMigrationCatalog.
  */
 export function deriveEffectiveCatalogProbes(
   migrations: MigrationDefinition[],
@@ -231,6 +353,12 @@ export function deriveEffectiveCatalogProbes(
         current.push(probe);
         sqlByMigration.set(migration.id, current);
       } else {
+        const dropped = droppedTable(probe);
+        if (dropped) {
+          for (const [key, earlier] of finalObjects) {
+            if (earlier.kind === "column" && earlier.table === dropped) finalObjects.delete(key);
+          }
+        }
         finalObjects.set(catalogObjectKey(probe), probe);
       }
     }
@@ -250,12 +378,45 @@ export function deriveEffectiveCatalogProbes(
   return grouped;
 }
 
-async function objectExists(
-  client: Client,
-  engine: DatabaseEngine,
-  probe: CatalogObjectProbe,
-): Promise<boolean> {
-  if (probe.kind === "extension" && engine === "cockroach") return true;
+/**
+ * The columns of a table and the labels of an enum type, each read once per
+ * inspection: 0000 alone declares 385 columns and 88 labels, and CockroachDB
+ * builds information_schema on every query.
+ */
+class CatalogMembers {
+  private readonly lists = new Map<string, Promise<Set<string>>>();
+
+  constructor(private readonly client: Client) {}
+
+  of(kind: "column" | "label", owner: string): Promise<Set<string>> {
+    const key = `${kind}:${owner}`;
+    let list = this.lists.get(key);
+    if (!list) {
+      list = this.read(kind, owner);
+      this.lists.set(key, list);
+    }
+    return list;
+  }
+
+  private async read(kind: "column" | "label", owner: string): Promise<Set<string>> {
+    const result = kind === "column"
+      ? await this.client.query<{ name: string }>(
+          `SELECT column_name AS name FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = $1`,
+          [owner],
+        )
+      : await this.client.query<{ name: string }>(
+          `SELECT e.enumlabel AS name FROM pg_catalog.pg_enum e
+           JOIN pg_catalog.pg_type t ON t.oid = e.enumtypid
+           JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
+           WHERE n.nspname = 'public' AND t.typname = $1`,
+          [owner],
+        );
+    return new Set(result.rows.map((row) => row.name));
+  }
+}
+
+async function objectPresent(client: Client, probe: CatalogObjectProbe, members: CatalogMembers): Promise<boolean> {
   let result: { rows: Array<{ present: boolean }> };
   switch (probe.kind) {
     case "table":
@@ -268,14 +429,10 @@ async function objectExists(
       );
       break;
     case "column":
-      result = await client.query<{ present: boolean }>(
-        `SELECT EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2
-        ) AS present`,
-        [probe.table, probe.name],
-      );
-      break;
+    case "label":
+      // Existence only: never types, which differ between the legacy Prisma
+      // schema (STRING, INT8) and this one. Extra columns and labels are fine.
+      return (await members.of(probe.kind, probe.table ?? "")).has(probe.name);
     case "index":
       result = await client.query<{ present: boolean }>(
         `SELECT EXISTS (
@@ -286,15 +443,18 @@ async function objectExists(
         [probe.name, probe.table ?? null],
       );
       break;
-    case "constraint":
+    case "constraint": {
+      const names = [probe.name, ...(probe.aliases ?? [])];
       result = await client.query<{ present: boolean }>(
         `SELECT EXISTS (
           SELECT 1 FROM information_schema.table_constraints
-          WHERE constraint_schema = 'public' AND table_name = $1 AND constraint_name = $2
+          WHERE constraint_schema = 'public' AND table_name = $1
+            AND constraint_name IN (${names.map((_, index) => `$${index + 2}`).join(", ")})
         ) AS present`,
-        [probe.table, probe.name],
+        [probe.table, ...names],
       );
       break;
+    }
     case "type":
       result = await client.query<{ present: boolean }>(
         `SELECT EXISTS (
@@ -312,7 +472,17 @@ async function objectExists(
       );
       break;
   }
-  const present = Boolean(result.rows[0]?.present);
+  return Boolean(result.rows[0]?.present);
+}
+
+async function objectExists(
+  client: Client,
+  engine: DatabaseEngine,
+  probe: CatalogObjectProbe,
+  members: CatalogMembers,
+): Promise<boolean> {
+  if (probe.kind === "extension" && engine === "cockroach") return true;
+  const present = await objectPresent(client, probe, members);
   return probe.expectedPresent ? present : !present;
 }
 
@@ -339,10 +509,11 @@ export async function inspectCatalogProbes(
   probes: Array<CatalogObjectProbe | CatalogSqlProbe>,
 ): Promise<MigrationCatalogReport> {
   const results: Array<{ probe: CatalogObjectProbe | CatalogSqlProbe; passed: boolean }> = [];
+  const members = new CatalogMembers(client);
   for (const probe of probes) {
     const passed = "query" in probe
       ? await sqlProbe(client, probe)
-      : await objectExists(client, engine, probe);
+      : await objectExists(client, engine, probe, members);
     results.push({ probe, passed });
   }
   const matched = results.filter((result) => result.passed).length;

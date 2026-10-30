@@ -18,8 +18,13 @@ async function bootstrap() {
   const emailStatus = configureRuntime(config, "focale-api");
 
   // MIGRATIONS_CHECK: enforce refuses to start on a stale schema; warn logs
-  // (and /health/ready reports it).
-  const schemaCheck = await assertSchemaCurrent({ mode: config.MIGRATIONS_CHECK, logger });
+  // (and /health/ready reports it). In production a database that was never
+  // adopted (tables, no migration ledger) refuses to start in every mode.
+  const schemaCheck = await assertSchemaCurrent({
+    mode: config.MIGRATIONS_CHECK,
+    logger,
+    production: config.isProduction,
+  });
 
   const app = await buildApp(config);
   app.get(ReadinessService).recordSchemaCheck(schemaCheck);

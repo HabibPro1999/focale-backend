@@ -65,15 +65,27 @@ export async function createMigrationLedger(client: Client): Promise<void> {
   );
 }
 
-export async function assertAdoptionRequiredIfNonEmpty(client: Client): Promise<void> {
-  if (!(await schemaHasApplicationObjects(client))) return;
-  if (!(await tableExists(client, "schema_migrations"))) {
-    throw new Error("Refusing to apply migrations to a non-empty schema without a ledger; run migrate adopt first");
-  }
+/**
+ * Whether the schema still needs `migrate adopt`: it has application tables but
+ * no ledger table (`missing`) or a ledger without rows (`empty`). Null for an
+ * empty schema or one with ledger rows. apply and the production boot check
+ * both refuse such a schema.
+ */
+export async function adoptionRequired(client: Client): Promise<"missing" | "empty" | null> {
+  if (!(await schemaHasApplicationObjects(client))) return null;
+  if (!(await tableExists(client, "schema_migrations"))) return "missing";
   const ledger = await client.query<{ present: boolean }>(
     "SELECT EXISTS (SELECT 1 FROM public.schema_migrations) AS present",
   );
-  if (!ledger.rows[0]?.present) {
+  return ledger.rows[0]?.present ? null : "empty";
+}
+
+export async function assertAdoptionRequiredIfNonEmpty(client: Client): Promise<void> {
+  const required = await adoptionRequired(client);
+  if (required === "missing") {
+    throw new Error("Refusing to apply migrations to a non-empty schema without a ledger; run migrate adopt first");
+  }
+  if (required === "empty") {
     throw new Error("Refusing to apply migrations to a non-empty schema with an empty ledger; run migrate adopt first");
   }
 }
@@ -146,6 +158,43 @@ export async function writeMigrationStepRecord(
     `INSERT INTO public.schema_migration_steps (migration_id, variant, step_index, checksum, applied_at, applied_by)
      VALUES ($1, $2, $3, $4, now(), $5)`,
     [migration.id, migration.variant, stepIndex, statementChecksum(migration.statements[stepIndex]), appliedBy],
+  );
+}
+
+/**
+ * Undo ledger rows that a committed transaction wrote for work that did not
+ * take effect (a CockroachDB schema change rolled back after COMMIT): remove
+ * the given step rows, and put the migration row back to `previous` (the
+ * deferred row it replaced) or remove it when there was none.
+ */
+export async function unrecordMigrationWork(
+  client: Client,
+  migration: MigrationDefinition,
+  stepIndexes: number[],
+  record: { written: boolean; previous?: SchemaMigrationRecord },
+): Promise<void> {
+  for (const stepIndex of stepIndexes) {
+    await client.query(
+      `DELETE FROM public.schema_migration_steps
+       WHERE migration_id = $1 AND variant = $2 AND step_index = $3 AND checksum = $4`,
+      [migration.id, migration.variant, stepIndex, statementChecksum(migration.statements[stepIndex])],
+    );
+  }
+  if (!record.written) return;
+  if (!record.previous) {
+    await client.query(
+      `DELETE FROM public.schema_migrations
+       WHERE id = $1 AND variant = $2 AND checksum = $3 AND status = 'applied'`,
+      [migration.id, migration.variant, migration.checksum],
+    );
+    return;
+  }
+  const { previous } = record;
+  await client.query(
+    `UPDATE public.schema_migrations
+     SET status = $2, applied_at = $3, applied_by = $4, evidence = $5::jsonb
+     WHERE id = $1 AND status = 'applied'`,
+    [previous.id, previous.status, previous.applied_at, previous.applied_by, JSON.stringify(previous.evidence)],
   );
 }
 

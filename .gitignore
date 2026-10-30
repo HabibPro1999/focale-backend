@@ -41,22 +41,10 @@ coverage/
 firebase/
 .firebaserc
 
-# Prisma
-prisma/*.db
-prisma/*.db-journal
-prisma/seed.ts
-src/generated/
-# Local docs stay untracked; architecture decision records and the guides
-# below are committed.
+# Local docs stay untracked; only the networking README is committed (every
+# other doc lives in a README.md next to its code).
 docs/*
-!docs/adr/
-!docs/render-runbook.md
-!docs/migration-authoring.md
-!docs/single-instance.md
-!docs/production-rollout-checklist.md
-!docs/ci.md
 !docs/networking/
-!docs/history/
 load-env.fish
 
 # Database backups
@@ -66,4 +54,3 @@ Action items.md
 # Local one-off schema and data-repair artifacts
 _schema_full.sql
 abstract-html-repair-backup-*.json
-src/scripts/repair-abstract-html.ts
