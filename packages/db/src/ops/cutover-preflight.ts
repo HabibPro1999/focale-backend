@@ -372,9 +372,13 @@ export function modifiedTables(migration: Pick<MigrationDefinition, "source">): 
   return [...tables];
 }
 
-/** Ledger state of one migration: its recorded status, pending, or no-ledger. */
+/**
+ * Ledger state of one migration: its recorded status, pending, or no-ledger.
+ * An empty ledger (an `adopt --apply` that stopped after creating the tables)
+ * counts as no ledger, as it does for adopt and apply (adoptionRequired).
+ */
 function ledgerState(ledger: CutoverPreflightReport["ledger"], id: string): string {
-  if (!ledger.present) return "no-ledger";
+  if (!ledger.present || ledger.records.length === 0) return "no-ledger";
   return ledger.records.find((record) => record.id === id)?.status ?? "pending";
 }
 
@@ -405,7 +409,7 @@ async function runDataChecks(
     }
     // Without a ledger, adopt --apply records these verdicts, so apply never
     // runs the file (for example 0010 on production's timestamptz(6) columns).
-    if (!ledger.present && (verdict === "applied" || verdict === "baseline")) {
+    if (state === "no-ledger" && (verdict === "applied" || verdict === "baseline")) {
       entries.push({ ...base, status: "skipped", summary: `adopt records it as ${verdict}; apply will not run it`, affectedRows: 0 });
       continue;
     }

@@ -17,6 +17,7 @@ import {
   type CutoverPreflightResult,
   type DataCheckEntry,
 } from "../../src/ops/cutover-preflight";
+import { migrationWillRun } from "../../src/ops/cutover-preflight-report";
 import { dbTestSetupTimeoutMs } from "../../../vitest.shared";
 
 // The cutover preflight on databases built by the runner through 0003 (before
@@ -273,6 +274,33 @@ describe.runIf(dbTestsEnabled())("cutover preflight and postflight", () => {
       expect(json).not.toContain(new URL(database.url).host);
       expect(JSON.parse(await readFile(join(directory, "affected", "0011.json"), "utf8"))).toMatchObject({ notice: expect.stringContaining("personal data") });
       await expect(writeCutoverPreflight(directory, run.result)).rejects.toThrow("not empty");
+    });
+  });
+
+  describe("legacy database whose adopt --apply stopped after creating the ledger", () => {
+    let database: ScratchDatabase;
+    let result: CutoverPreflightResult;
+
+    beforeAll(async () => {
+      database = await seeded("preflight_empty_ledger");
+      // adopt creates the ledger tables before it takes the lease; a failure
+      // after that leaves them empty, and adopt and apply still treat the
+      // database as not adopted.
+      for (const table of LEDGER_TABLES) await database.client.query(`DELETE FROM public.${table}`);
+      ({ result } = await preflight(database, "empty-ledger"));
+    }, dbTestSetupTimeoutMs());
+
+    it("reads an empty ledger as no ledger, like adopt and apply", () => {
+      const { report } = result;
+      expect(report.ledger).toMatchObject({ present: true, records: [] });
+      expect(report.adopt.ran).toBe(true);
+      expect(report.migrations.find((migration) => migration.id === "0010")).toMatchObject({ ledger: "no-ledger", adopt: "applied" });
+      expect(migrationWillRun(report, "0010")).toBe(false);
+      expect(migrationWillRun(report, "0011")).toBe(true);
+      expect(check(report, "0010")).toMatchObject({ status: "skipped", ledger: "no-ledger", adopt: "applied", affectedRows: 0 });
+      expect(check(report, "0010").export).toBeUndefined();
+      expect(check(report, "0011")).toMatchObject({ status: "changes-rows", affectedRows: 1 });
+      expect(result.affected.map((file) => file.migrationId)).not.toContain("0010");
     });
   });
 

@@ -724,6 +724,9 @@ or a sign-off. The database steps are detailed in the
 6. Read-only checks, from the worker's shell or a built checkout with the
    production `DATABASE_URL`:
    - Preflight: `node packages/db/dist/ops/cutover-preflight-cli.js preflight --out <dir>`.
+     In the image, `/app` belongs to root and the process runs as `node`, so
+     give an absolute path under `/tmp` (for example `--out /tmp/preflight-t1`);
+     the same applies to every file an ops script writes or reads below.
      `<dir>` must be new or empty and receives personal data (`affected/*.json`:
      registration and abstract ids, sponsorship codes, amounts): keep it on
      restricted storage (a Render shell's disk does not survive a restart, so
@@ -806,9 +809,13 @@ or a sign-off. The database steps are detailed in the
     and sent again (legacy never set `provider_attempted_at`, so it is not
     parked as `UNCERTAIN`). Check the provider's activity for such an email and
     decide it before the Nest worker starts (your decision).
-11. Migrations, before any Nest code serves, from the idle worker's shell (or a
-    built checkout with the production `DATABASE_URL`), as the migrator README
-    describes: preflight again into a new directory (the postflight baseline);
+11. Take a CockroachDB backup now that the queues are drained (or confirm a
+    managed backup newer than the drain), check that it completed, and record
+    its id: it, not the T-1 backup, is the restore point of the window, and
+    restoring the T-1 backup would lose a day of registrations and payments.
+    Then the migrations, before any Nest code serves, from the idle worker's
+    shell (or a built checkout with the production `DATABASE_URL`), as the
+    migrator README describes: preflight again into a new directory (the postflight baseline);
     `adopt` (dry run: 0000 `baseline`, no `ABORT` verdict, no `error:` line);
     `adopt --apply`; the 0011 sign-off from `affected/0011.json` and the
     over-quote query; the 0004 and 0030 prechecks; `apply --dry-run`;
@@ -1113,9 +1120,10 @@ checkout: `pnpm --filter @app/worker <name>`.
   true; `--apply-deferred` skips it):
   `SELECT NOT EXISTS (SELECT 1 FROM registrations WHERE NULLIF(upper(trim(sponsorship_code)), '') IS NOT NULL GROUP BY event_id, NULLIF(upper(trim(sponsorship_code)), '') HAVING count(*) > 1);`,
   then `node packages/db/dist/migrator/cli.js apply --apply-deferred=0030 --yes`.
-- **PAID settlement (2.4).** `repair-paid-settlement --since <cutover time, ISO>`
-  dry run writes `repair-manifest.json`; the user sets each row's action in
-  `approved.json`; `--apply --manifest approved.json`; then
+- **PAID settlement (2.4).** `repair-paid-settlement --since <cutover time, ISO> --out /tmp/repair-manifest.json`
+  dry run writes the manifest (in the image only `/tmp` is writable); copy it
+  out, the user sets each row's action in `approved.json`, copy that back to
+  `/tmp`; `--apply --manifest /tmp/approved.json`; then
   `repair-paid-settlement invariants` ([PAID data repair](#paid-data-repair-repair-paid-settlement-plan-24)).
   On legacy data the invariants do **not** end empty after these repairs:
   every registration an admin linked to a sponsorship on legacy keeps a price
@@ -1123,7 +1131,9 @@ checkout: `pnpm --filter @app/worker <name>`.
   link never wrote it), and each over-quote row of the 0011 sign-off reports
   `SPONSORED_NOT_COVERED`. Their money columns are right. One settlement write
   per row clears them, but no script does it and it changes what a sponsor's
-  usage records: decide per row (your decision) or keep them as known rows.
+  usage records. Rows of finished or archived events stay as they are, as known
+  rows (decision of 2026-10-30); run `invariants --event <id>` for each live
+  event and decide its rows (your decision).
 - Sponsored `VERIFYING` registrations (the preflight counts them): while one is
   under review its sponsorship-covered seats stay reserved, and confirmation
   adds only the uncovered seats. If the preflight reports any, reconcile their

@@ -179,7 +179,8 @@ against it.
 1. **Preflight (read-only).**
    `node packages/db/dist/ops/cutover-preflight-cli.js preflight --out <dir>`
    (from `packages/db`: `pnpm cutover:preflight preflight --out <dir>`;
-   `--out=<dir>` also works). It runs every query in one READ ONLY transaction
+   `--out=<dir>` also works). In the image only `/tmp` is writable by the
+   `node` user: use an absolute `<dir>` under it and copy it out. It runs every query in one READ ONLY transaction
    on a read-only session, proves a write is refused (SQLSTATE 25006) and ends
    with ROLLBACK. `<dir>` must be new or empty; it is created 0700 with 0600
    files: `report.md`, `report.json`, `table-counts.json` (the postflight
@@ -252,7 +253,9 @@ against it.
    Drizzle nor the Prisma name: inspect it before renaming anything.
 3. **Adopt.** `node packages/db/dist/migrator/cli.js adopt --apply`. It assesses
    again under the migration lease and writes the same verdicts, or aborts
-   without writing if the evidence changed. Expected: the same lines under
+   without writing a ledger row if the evidence changed (the empty ledger
+   tables it created first stay; adopt, apply and the preflight read an empty
+   ledger as no ledger, so run `adopt --apply` again once the cause is fixed). Expected: the same lines under
    `Migration adoption (cockroach; apply):`, ending
    `Wrote 7 migration record(s) and 0 step record(s).` It writes ledger rows
    only (0000 baseline; 0001, 0002 and 0007-0010 applied), creates exactly
@@ -284,23 +287,28 @@ against it.
    query:
 
    ```sql
-   SELECT id, total_amount, sponsorship_amount, (price_breakdown->>'sponsorshipTotal')::integer AS quoted_sponsorship
-   FROM registrations
-   WHERE sponsorship_amount > 0
-     AND jsonb_typeof(price_breakdown->'subtotal') = 'number'
-     AND jsonb_typeof(price_breakdown->'total') = 'number'
-     AND jsonb_typeof(price_breakdown->'sponsorshipTotal') = 'number'
-     AND total_amount = (price_breakdown->>'total')::integer
-     AND (price_breakdown->>'subtotal')::integer > total_amount
-     AND sponsorship_amount < (price_breakdown->>'sponsorshipTotal')::integer;
+   SELECT r.id, r.event_id, r.total_amount, r.sponsorship_amount, (r.price_breakdown->>'sponsorshipTotal')::integer AS quoted_sponsorship
+   FROM registrations r
+   JOIN events e ON e.id = r.event_id
+   WHERE r.sponsorship_amount > 0
+     AND e.status <> 'ARCHIVED'
+     AND e.end_date >= now()
+     AND jsonb_typeof(r.price_breakdown->'subtotal') = 'number'
+     AND jsonb_typeof(r.price_breakdown->'total') = 'number'
+     AND jsonb_typeof(r.price_breakdown->'sponsorshipTotal') = 'number'
+     AND r.total_amount = (r.price_breakdown->>'total')::integer
+     AND (r.price_breakdown->>'subtotal')::integer > r.total_amount
+     AND r.sponsorship_amount < (r.price_breakdown->>'sponsorshipTotal')::integer;
    ```
 
    Each row it returns signed up with a sponsorship code that an admin linked
    afterwards; main capped the usage at the net total. After 0011 it owes
    `subtotal − sponsorship_amount`, more than it was quoted, and stays
    SPONSORED until a settlement write recomputes the usage against the gross
-   total. No script repairs these rows: carry them on the sign-off list, each
-   with a decision.
+   total. No script repairs these rows. The query lists only live events (not
+   archived, end date not passed): a row of a finished or archived event keeps
+   0011's result as it is (decision of 2026-10-30), because nobody collects a
+   balance there. Carry each listed row on the sign-off list, with a decision.
 5. **Prechecks, then apply.** `apply --dry-run` evaluates only `defer-unless`
    conditions, so it lists 0004 as "would apply" even when 0004 will fail.
    - 0004 (required). Expect no rows:
