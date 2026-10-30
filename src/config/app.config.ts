@@ -13,6 +13,12 @@ const envSchema = z
     FIREBASE_STORAGE_BUCKET: z.string().optional(),
     // Firebase service account JSON (for cloud deployments)
     FIREBASE_SERVICE_ACCOUNT: z.string().optional(),
+    // Firebase web API key — a public identifier (same one shipped in the
+    // frontend bundle), used for the identitytoolkit token-verification
+    // fallback when Google blocks the x509 cert endpoint for our egress IP.
+    FIREBASE_WEB_API_KEY: z
+      .string()
+      .default("AIzaSyBiQGgDgPf9IAoo8y2zwHCS-EZ57N6KCus"),
     // Email provider selection
     EMAIL_PROVIDER: z.enum(["sendgrid", "resend"]).default("sendgrid"),
     // Shared sender identity (falls back to SENDGRID_FROM_* for back-compat)
@@ -30,9 +36,10 @@ const envSchema = z
     STORAGE_PROVIDER: z.enum(["firebase", "r2"]).default("firebase"),
     // Public URL for forms (used in email links)
     PUBLIC_FORMS_URL: z.string().url().optional(),
-    // Admin app base URL — used as the in-app target for Firebase password
-    // reset / action handler links. The Firebase Console "Customize action URL"
-    // setting should point at `${ADMIN_APP_URL}/auth/action`.
+    // Admin app base URL — used as the base for emailed in-app links. Committee
+    // invites point at `${ADMIN_APP_URL}/committee/set-password`. The legacy
+    // Firebase Console "Customize action URL" (`${ADMIN_APP_URL}/auth/action`)
+    // is only still used by console-initiated password resets.
     ADMIN_APP_URL: z.string().url().default("http://localhost:8080"),
     // Cloudflare R2
     R2_ACCOUNT_ID: z.string().optional(),
@@ -52,6 +59,9 @@ const envSchema = z
     ABSTRACTS_EDIT_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
     ABSTRACTS_READ_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),
     ABSTRACTS_RATE_LIMIT_WINDOW: z.string().default("1 minute"),
+    // Lifetime of an app-managed committee invite token (single-use link
+    // emailed to scientific-committee members to set their password).
+    COMMITTEE_INVITE_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(7),
   })
   .refine(
     (data) => {
@@ -190,11 +200,15 @@ export function parseConfig(source: NodeJS.ProcessEnv) {
         readMax: env.ABSTRACTS_READ_RATE_LIMIT_MAX,
         timeWindow: env.ABSTRACTS_RATE_LIMIT_WINDOW,
       },
+      committeeInvite: {
+        tokenTtlDays: env.COMMITTEE_INVITE_TOKEN_TTL_DAYS,
+      },
     },
     firebase: {
       projectId: env.FIREBASE_PROJECT_ID,
       storageBucket: env.FIREBASE_STORAGE_BUCKET,
       serviceAccount: env.FIREBASE_SERVICE_ACCOUNT,
+      webApiKey: env.FIREBASE_WEB_API_KEY,
     },
     storage: {
       provider: env.STORAGE_PROVIDER,

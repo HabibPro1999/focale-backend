@@ -142,7 +142,14 @@ async function assertSponsorshipModeChangeUnlocked(
  * If no schema is provided, uses default fields (Prénom, Nom, Email, Téléphone, Lieu de travail).
  */
 export async function createForm(input: CreateFormInput): Promise<Form> {
-  const { eventId, name, schema, successTitle, successMessage } = input;
+  const {
+    eventId,
+    name,
+    schema,
+    successTitle,
+    successMessage,
+    successTranslations,
+  } = input;
 
   // Validate that event exists
   const isValidEvent = await eventExists(eventId);
@@ -175,6 +182,7 @@ export async function createForm(input: CreateFormInput): Promise<Form> {
       schema: formSchema as Prisma.InputJsonValue,
       successTitle: successTitle ?? null,
       successMessage: successMessage ?? null,
+      successTranslations: successTranslations ?? Prisma.JsonNull,
     },
   });
 }
@@ -247,8 +255,8 @@ export async function getFormByEventSlug(
           access: {
             where: { active: true },
             orderBy: [
-              { startsAt: "asc" },
               { sortOrder: "asc" },
+              { startsAt: "asc" },
               { createdAt: "asc" },
             ],
           },
@@ -309,6 +317,11 @@ export async function updateForm(
     updateData.successTitle = input.successTitle;
   if (input.successMessage !== undefined)
     updateData.successMessage = input.successMessage;
+  if (input.successTranslations !== undefined)
+    updateData.successTranslations =
+      input.successTranslations === null
+        ? Prisma.JsonNull
+        : input.successTranslations;
 
   let nextSchema: FormSchemaJson | SponsorFormSchemaJson | undefined;
   if (input.schema !== undefined) {

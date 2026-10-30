@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { prismaMock } from "../../../tests/mocks/prisma.js";
 import { faker } from "@faker-js/faker";
-import type { AbstractConfig, AbstractTheme } from "@/generated/prisma/client.js";
+import {
+  Prisma,
+  type AbstractConfig,
+  type AbstractTheme,
+} from "@/generated/prisma/client.js";
 import {
   getOrCreateConfig,
   updateConfig,
@@ -53,6 +57,7 @@ function makeConfig(overrides: Partial<AbstractConfig> = {}): AbstractConfig {
     bookOrder: "BY_CODE",
     bookIncludeAuthorNames: true,
     additionalFieldsSchema: [],
+    languages: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,
@@ -65,6 +70,7 @@ function makeTheme(overrides: Partial<AbstractTheme> = {}): AbstractTheme {
     configId,
     label: "Theme A",
     description: null,
+    translations: null,
     sortOrder: 0,
     active: true,
     createdAt: new Date(),
@@ -173,6 +179,24 @@ describe("updateConfig", () => {
     );
   });
 
+  it("persists the enabled languages list", async () => {
+    const languages = ["fr", "en", "ar"] as const;
+    const updated = makeConfig({ languages: [...languages] });
+    prismaMock.abstractConfig.update.mockResolvedValue(updated);
+
+    const result = await updateConfig(
+      eventId,
+      { languages: [...languages] },
+      userId,
+    );
+
+    expect(result.languages).toEqual([...languages]);
+    expect(prismaMock.abstractConfig.update).toHaveBeenCalledWith({
+      where: { id: configId },
+      data: { languages: [...languages] },
+    });
+  });
+
   it("accepts deadlines in the past without error", async () => {
     const pastDate = "2020-01-01T00:00:00.000Z";
     const updated = makeConfig({
@@ -262,9 +286,27 @@ describe("createTheme", () => {
         configId,
         label: "New Theme",
         description: null,
+        translations: Prisma.JsonNull,
         sortOrder: 0,
         active: true,
       },
+    });
+  });
+
+  it("persists theme translations", async () => {
+    prismaMock.abstractConfig.findUnique.mockResolvedValue(makeConfig());
+    const translations = {
+      en: { label: "Cardiology", description: "Heart" },
+      ar: { label: "أمراض القلب" },
+    };
+    prismaMock.abstractTheme.create.mockResolvedValue(
+      makeTheme({ label: "Cardiologie", translations }),
+    );
+
+    await createTheme(eventId, { label: "Cardiologie", translations });
+
+    expect(prismaMock.abstractTheme.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ label: "Cardiologie", translations }),
     });
   });
 });
@@ -299,6 +341,67 @@ describe("updateTheme", () => {
     await expect(
       updateTheme(eventId, themeId, { label: "X" }),
     ).rejects.toThrow(/Theme not found/);
+  });
+
+  it("persists theme translations on update", async () => {
+    const themeId = faker.string.uuid();
+    const translations = { en: { label: "Neurology" } };
+
+    prismaMock.abstractTheme.findUnique.mockResolvedValue({
+      ...makeTheme({ id: themeId }),
+      config: { eventId },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    prismaMock.abstractTheme.update.mockResolvedValue(
+      makeTheme({ id: themeId, translations }),
+    );
+
+    await updateTheme(eventId, themeId, { translations });
+
+    expect(prismaMock.abstractTheme.update).toHaveBeenCalledWith({
+      where: { id: themeId },
+      data: { translations },
+    });
+  });
+
+  it("clears theme translations when null is sent", async () => {
+    const themeId = faker.string.uuid();
+
+    prismaMock.abstractTheme.findUnique.mockResolvedValue({
+      ...makeTheme({ id: themeId, translations: { en: { label: "Old" } } }),
+      config: { eventId },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    prismaMock.abstractTheme.update.mockResolvedValue(
+      makeTheme({ id: themeId }),
+    );
+
+    await updateTheme(eventId, themeId, { translations: null });
+
+    expect(prismaMock.abstractTheme.update).toHaveBeenCalledWith({
+      where: { id: themeId },
+      data: { translations: Prisma.JsonNull },
+    });
+  });
+
+  it("leaves theme translations untouched when omitted", async () => {
+    const themeId = faker.string.uuid();
+
+    prismaMock.abstractTheme.findUnique.mockResolvedValue({
+      ...makeTheme({ id: themeId, translations: { en: { label: "Kept" } } }),
+      config: { eventId },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    prismaMock.abstractTheme.update.mockResolvedValue(
+      makeTheme({ id: themeId, label: "Renamed" }),
+    );
+
+    await updateTheme(eventId, themeId, { label: "Renamed" });
+
+    expect(prismaMock.abstractTheme.update).toHaveBeenCalledWith({
+      where: { id: themeId },
+      data: { label: "Renamed" },
+    });
   });
 });
 

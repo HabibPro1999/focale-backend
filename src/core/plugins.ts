@@ -86,4 +86,6 @@ export const publicRateLimits = {
     timeWindow: config.security.publicAbstracts.timeWindow,
   },
   passwordReset: { max: 5, timeWindow: "1 minute" },
+  committeeInviteVerify: { max: 10, timeWindow: "1 minute" },
+  committeeInviteResend: { max: 3, timeWindow: "1 minute" },
 };

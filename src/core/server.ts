@@ -37,6 +37,7 @@ import {
   abstractsCommitteeRoutes,
   abstractsPublicRoutes,
   abstractsRoutes,
+  committeeInvitePublicRoutes,
   getAbstractBookQueueHealth,
 } from "@abstracts";
 import { realtimeRoutes, drainRealtimeConnections } from "@realtime";
@@ -55,6 +56,9 @@ async function getDatabaseHealth(): Promise<"healthy" | "unhealthy"> {
 export async function buildServer(): Promise<AppInstance> {
   const app = Fastify({
     loggerInstance: logger,
+    // Behind the TLS-terminating proxy every socket shows the proxy's IP, so
+    // per-IP rate limiting only isolates real callers with X-Forwarded-For.
+    trustProxy: true,
   }).withTypeProvider<ZodTypeProvider>();
 
   app.setValidatorCompiler(validatorCompiler);
@@ -205,6 +209,9 @@ export async function buildServer(): Promise<AppInstance> {
   await app.register(abstractsCommitteeAdminRoutes, { prefix: "/api" });
   await app.register(abstractsCommitteeRoutes, { prefix: "/api" });
   await app.register(abstractsPublicRoutes, { prefix: "/api/public" });
+
+  // Committee invite links (public, single-use token — never 401s)
+  await app.register(committeeInvitePublicRoutes, { prefix: "/api/public" });
 
   app.addHook("onClose", async () => {
     drainRealtimeConnections();

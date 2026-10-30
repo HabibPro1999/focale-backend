@@ -128,6 +128,9 @@ export async function requireAuth(
     if (error instanceof AppError) {
       throw error;
     }
+    // Surface the real firebase-admin failure — collapsing everything into
+    // AUTH_1002 hides infra errors (cert fetch, egress) behind "invalid token".
+    request.log.warn({ err: error }, "Token verification failed");
     throw new AppError(
       "Invalid or expired token",
       401,

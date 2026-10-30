@@ -7,6 +7,7 @@ import {
   AbstractBookOrder,
   AbstractStatus,
   type AbstractBookJob,
+  type AbstractFinalType,
   type Prisma,
 } from "@/generated/prisma/client.js";
 import { getStorageProvider } from "@shared/services/storage/index.js";
@@ -14,7 +15,11 @@ import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { auditLog } from "@shared/utils/audit.js";
 import { logger } from "@shared/utils/logger.js";
-import { FINAL_STATUSES, FINAL_TYPE_SORT_ORDER } from "./abstracts.constants.js";
+import {
+  ABSTRACT_TYPE_LABELS_FR,
+  FINAL_STATUSES,
+  FINAL_TYPE_SORT_ORDER,
+} from "./abstracts.constants.js";
 import { abstractHtmlToText } from "./abstracts.html.js";
 
 const A4: [number, number] = [595.28, 841.89];
@@ -127,7 +132,14 @@ function withAffiliation(name: string, affiliation: string | undefined): string 
   return trimmed ? `${name} (${trimmed})` : name;
 }
 
-function getAuthorLine(abstract: BookAbstract): string {
+export interface AuthorLineAbstract {
+  authorFirstName: string;
+  authorLastName: string;
+  authorAffiliation: string | null;
+  coAuthors: unknown;
+}
+
+export function getAuthorLine(abstract: AuthorLineAbstract): string {
   const primaryName = `${abstract.authorFirstName} ${abstract.authorLastName}`.trim();
   const names = [
     withAffiliation(primaryName, abstract.authorAffiliation ?? undefined),
@@ -146,11 +158,9 @@ function getAuthorLine(abstract: BookAbstract): string {
   return names.filter(Boolean).join(", ");
 }
 
-function typeLabel(value: string | null): string {
-  if (value === "CONFERENCE") return "Conférence";
-  if (value === "ORAL_COMMUNICATION") return "Communication orale";
-  if (value === "POSTER") return "Communication affichée";
-  return "—";
+function typeLabel(value: AbstractFinalType | null): string {
+  if (!value) return "—";
+  return ABSTRACT_TYPE_LABELS_FR[value] ?? "—";
 }
 
 function themeLabel(abstract: BookAbstract): string {

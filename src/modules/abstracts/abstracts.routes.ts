@@ -14,6 +14,7 @@ import {
   AdditionalFieldsSchema,
   AbstractAdminParamSchema,
   ListAbstractsQuerySchema,
+  ExportAbstractsQuerySchema,
   FinalizeAbstractSchema,
   MarkAbstractPresentedSchema,
   AbstractBookJobParamSchema,
@@ -22,6 +23,7 @@ import {
   type UpdateThemeInput,
   type AdditionalFieldsInput,
   type ListAbstractsQuery,
+  type ExportAbstractsQuery,
   type FinalizeAbstractInput,
   type MarkAbstractPresentedInput,
 } from "./abstracts.schema.js";
@@ -42,6 +44,7 @@ import {
   markAbstractPresented,
   reopenAbstract,
 } from "./abstracts.admin.service.js";
+import { exportAbstractsWorkbook } from "./abstracts.export.service.js";
 import {
   enqueueAbstractBookJob,
   getAbstractBookJob,
@@ -219,6 +222,33 @@ export async function abstractsRoutes(app: AppInstance): Promise<void> {
       await resolveEvent(request);
       const result = await listAdminAbstracts(request.params.eventId, request.query);
       return reply.send(result);
+    },
+  );
+
+  // GET /api/events/:eventId/abstracts/export
+  app.get<{ Params: { eventId: string }; Querystring: ExportAbstractsQuery }>(
+    "/events/:eventId/abstracts/export",
+    {
+      schema: {
+        params: AbstractsEventIdParamSchema,
+        querystring: ExportAbstractsQuerySchema,
+      },
+    },
+    async (request, reply) => {
+      const event = await resolveEvent(request);
+      const result = await exportAbstractsWorkbook(
+        request.params.eventId,
+        request.query,
+        event.slug,
+      );
+      const safeFilename = result.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+      return reply
+        .header(
+          "Content-Type",
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        .header("Content-Disposition", `attachment; filename="${safeFilename}"`)
+        .send(result.data);
     },
   );
 

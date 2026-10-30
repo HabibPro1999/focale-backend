@@ -3,6 +3,7 @@ import { prismaMock } from "../../../tests/mocks/prisma.js";
 import {
   createMockEventAccess,
   createMockEvent,
+  createMockForm,
 } from "../../../tests/helpers/factories.js";
 import {
   createEventAccess,
@@ -52,6 +53,22 @@ function getScheduledItems(
   );
 }
 
+function getOptionItems(
+  result: Awaited<ReturnType<typeof getGroupedAccess>>,
+): GroupedAccessItem[] {
+  return (
+    result.addonGroup?.slots.flatMap(
+      (slot) => slot.items as GroupedAccessItem[],
+    ) ?? []
+  );
+}
+
+function getAllItems(
+  result: Awaited<ReturnType<typeof getGroupedAccess>>,
+): GroupedAccessItem[] {
+  return [...getScheduledItems(result), ...getOptionItems(result)];
+}
+
 describe("Access Service", () => {
   const eventId = "event-123";
   const clientId = "client-123";
@@ -64,6 +81,31 @@ describe("Access Service", () => {
     clientId,
     startDate: eventStartDate,
     endDate: eventEndDate,
+  });
+
+  // Registration form with one option-bearing field, used by the
+  // condition option-id validation tests below.
+  const mockFormWithCountryField = createMockForm({
+    eventId,
+    schema: {
+      steps: [
+        {
+          id: "step-1",
+          title: "Registrant Info",
+          fields: [
+            {
+              id: "country_x",
+              type: "country",
+              label: "Country",
+              options: [
+                { id: "TN", label: "Tunisie" },
+                { id: "FR", label: "France" },
+              ],
+            },
+          ],
+        },
+      ],
+    },
   });
 
   // ============================================================================
@@ -211,6 +253,55 @@ describe("Access Service", () => {
           }),
         }),
       );
+    });
+
+    it("should create an access item when a condition value is a real option id", async () => {
+      const input = {
+        eventId,
+        name: "VIP Workshop",
+        conditions: [
+          { fieldId: "country_x", operator: "equals" as const, value: "TN" },
+        ],
+      } as CreateEventAccessInput;
+
+      const createdAccess = createEventAccessWithRelations({
+        id: "access-vip",
+        eventId,
+        name: "VIP Workshop",
+        conditions: input.conditions,
+      });
+
+      prismaMock.event.findUnique.mockResolvedValue(mockEvent);
+      prismaMock.form.findUnique.mockResolvedValue(mockFormWithCountryField);
+      prismaMock.eventAccess.create.mockResolvedValue(createdAccess as never);
+
+      const result = await createEventAccess(input);
+
+      expect(result.name).toBe("VIP Workshop");
+      expect(prismaMock.eventAccess.create).toHaveBeenCalled();
+    });
+
+    it("should reject a condition value that is an option label instead of an id", async () => {
+      const input = {
+        eventId,
+        name: "VIP Workshop",
+        conditions: [
+          {
+            fieldId: "country_x",
+            operator: "equals" as const,
+            value: "Tunisie",
+          },
+        ],
+      } as CreateEventAccessInput;
+
+      prismaMock.event.findUnique.mockResolvedValue(mockEvent);
+      prismaMock.form.findUnique.mockResolvedValue(mockFormWithCountryField);
+
+      await expect(createEventAccess(input)).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.ACCESS_CONDITION_INVALID_OPTION,
+      });
+      expect(prismaMock.eventAccess.create).not.toHaveBeenCalled();
     });
   });
 
@@ -813,7 +904,7 @@ describe("Access Service", () => {
       const result = await getGroupedAccess(eventId, {}, []);
 
       // Only the 'available' item should be visible (no date restrictions)
-      const allItems = getScheduledItems(result);
+      const allItems = getAllItems(result);
       expect(allItems).toHaveLength(1);
       expect(allItems[0].id).toBe("available");
     });
@@ -846,7 +937,7 @@ describe("Access Service", () => {
         { profession: "doctor" },
         [],
       );
-      const doctorItems = getScheduledItems(resultDoctor);
+      const doctorItems = getAllItems(resultDoctor);
       expect(doctorItems).toHaveLength(2);
 
       // Non-doctors only see the second one
@@ -855,7 +946,7 @@ describe("Access Service", () => {
         { profession: "nurse" },
         [],
       );
-      const nonDoctorItems = getScheduledItems(resultNonDoctor);
+      const nonDoctorItems = getAllItems(resultNonDoctor);
       expect(nonDoctorItems).toHaveLength(1);
     });
 
@@ -875,7 +966,7 @@ describe("Access Service", () => {
 
       const result = await getGroupedAccess(eventId, {}, []);
 
-      expect(getScheduledItems(result).map((item) => item.id)).toEqual([
+      expect(getAllItems(result).map((item) => item.id)).toEqual([
         "condition-free",
       ]);
     });
@@ -903,7 +994,7 @@ describe("Access Service", () => {
 
       // Without prerequisite selected - should only show SESSION (no prereq required)
       const resultWithoutPrereq = await getGroupedAccess(eventId, {}, []);
-      const itemsNoPrereq = getScheduledItems(resultWithoutPrereq);
+      const itemsNoPrereq = getAllItems(resultWithoutPrereq);
       const workshopItemsNoPrereq = itemsNoPrereq.filter(
         (i) => i.type === "WORKSHOP",
       );
@@ -913,7 +1004,7 @@ describe("Access Service", () => {
       const resultWithPrereq = await getGroupedAccess(eventId, {}, [
         prerequisiteId,
       ]);
-      const itemsWithPrereq = getScheduledItems(resultWithPrereq);
+      const itemsWithPrereq = getAllItems(resultWithPrereq);
       const workshopItemsWithPrereq = itemsWithPrereq.filter(
         (i) => i.type === "WORKSHOP",
       );
@@ -954,7 +1045,7 @@ describe("Access Service", () => {
 
       const result = await getGroupedAccess(eventId, {}, []);
 
-      const items = getScheduledItems(result);
+      const items = getAllItems(result);
 
       // Full item should be present but marked as full
       const fullItem = items.find((i) => i.id === "full-workshop");
@@ -1017,8 +1108,10 @@ describe("Access Service", () => {
       const fullItem = scheduledItems.find((i) => i.id === "full-1");
       expect(fullItem).toBeDefined();
 
-      // Full addon should appear in addonGroup
+      // Full addon should appear in the options group
       expect(result.addonGroup).not.toBeNull();
+      expect(getOptionItems(result).map((i) => i.id)).toEqual(["full-2"]);
+      expect(result.addonGroup!.slots[0].selectionType).toBe("multiple");
 
       // Available item should still appear
       expect(scheduledItems.find((i) => i.id === "available-1")).toBeDefined();
@@ -1047,6 +1140,259 @@ describe("Access Service", () => {
       expect(items).toHaveLength(1);
       expect(items[0].type).toBe("OTHER");
       expect(items[0].name).toBe("City Tour");
+      expect(result.addonGroup).toBeNull();
+    });
+
+    it("should put undated OTHER items sharing a group label in one single-choice slot", async () => {
+      const accessItems = [
+        createEventAccessWithRelations({
+          id: "pack-1",
+          eventId,
+          type: "OTHER",
+          name: "Pack A",
+          groupLabel: "Packs",
+          startsAt: null,
+          createdAt: new Date("2025-01-01T00:00:00Z"),
+          active: true,
+        }),
+        createEventAccessWithRelations({
+          id: "pack-2",
+          eventId,
+          type: "OTHER",
+          name: "Pack B",
+          groupLabel: "Packs",
+          startsAt: null,
+          createdAt: new Date("2025-01-02T00:00:00Z"),
+          active: true,
+        }),
+      ];
+
+      prismaMock.eventAccess.findMany.mockResolvedValue(accessItems as never);
+
+      const result = await getGroupedAccess(eventId, {}, []);
+
+      expect(result.groups).toHaveLength(0);
+      expect(result.addonGroup!.slots).toHaveLength(1);
+      expect(result.addonGroup!.slots[0].selectionType).toBe("single");
+      expect(getOptionItems(result).map((i) => i.id)).toEqual([
+        "pack-1",
+        "pack-2",
+      ]);
+    });
+
+    it("should put undated OTHER items with different group labels in separate slots", async () => {
+      const accessItems = [
+        createEventAccessWithRelations({
+          id: "pack-1",
+          eventId,
+          type: "OTHER",
+          name: "Pack A",
+          groupLabel: "Packs",
+          startsAt: null,
+          active: true,
+        }),
+        createEventAccessWithRelations({
+          id: "tour-1",
+          eventId,
+          type: "OTHER",
+          name: "Tour",
+          groupLabel: "Excursions",
+          startsAt: null,
+          active: true,
+        }),
+      ];
+
+      prismaMock.eventAccess.findMany.mockResolvedValue(accessItems as never);
+
+      const result = await getGroupedAccess(eventId, {}, []);
+
+      expect(result.addonGroup!.slots).toHaveLength(2);
+      expect(
+        result.addonGroup!.slots.every((s) => s.selectionType === "multiple"),
+      ).toBe(true);
+    });
+
+    it("should put all ADDON items in a single multiple-choice slot", async () => {
+      const accessItems = [
+        createEventAccessWithRelations({
+          id: "addon-1",
+          eventId,
+          type: "ADDON",
+          name: "T-shirt",
+          startsAt: null,
+          active: true,
+        }),
+        createEventAccessWithRelations({
+          id: "addon-2",
+          eventId,
+          type: "ADDON",
+          name: "Parking",
+          startsAt: null,
+          active: true,
+        }),
+      ];
+
+      prismaMock.eventAccess.findMany.mockResolvedValue(accessItems as never);
+
+      const result = await getGroupedAccess(eventId, {}, []);
+
+      expect(result.addonGroup!.slots).toHaveLength(1);
+      expect(result.addonGroup!.slots[0].selectionType).toBe("multiple");
+      expect(result.addonGroup!.slots[0].items).toHaveLength(2);
+    });
+
+    it("should give an undated includedInBase item its own slot", async () => {
+      const accessItems = [
+        createEventAccessWithRelations({
+          id: "pack-included",
+          eventId,
+          type: "OTHER",
+          name: "Base Pack",
+          groupLabel: "Packs",
+          includedInBase: true,
+          startsAt: null,
+          sortOrder: 0,
+          active: true,
+        }),
+        createEventAccessWithRelations({
+          id: "pack-1",
+          eventId,
+          type: "OTHER",
+          name: "Pack A",
+          groupLabel: "Packs",
+          startsAt: null,
+          sortOrder: 1,
+          active: true,
+        }),
+        createEventAccessWithRelations({
+          id: "pack-2",
+          eventId,
+          type: "OTHER",
+          name: "Pack B",
+          groupLabel: "Packs",
+          startsAt: null,
+          sortOrder: 2,
+          active: true,
+        }),
+      ];
+
+      prismaMock.eventAccess.findMany.mockResolvedValue(accessItems as never);
+
+      const result = await getGroupedAccess(eventId, {}, []);
+
+      expect(result.addonGroup!.slots).toHaveLength(2);
+      const [includedSlot, exclusiveSlot] = result.addonGroup!.slots;
+      expect(includedSlot.selectionType).toBe("multiple");
+      expect((includedSlot.items as { id: string }[])[0].id).toBe(
+        "pack-included",
+      );
+      expect(exclusiveSlot.selectionType).toBe("single");
+      expect(
+        (exclusiveSlot.items as { id: string }[]).map((i) => i.id),
+      ).toEqual(["pack-1", "pack-2"]);
+    });
+
+    it("should never emit a no-date group when dated and undated items are mixed", async () => {
+      const accessItems = [
+        createEventAccessWithRelations({
+          id: "ws-1",
+          eventId,
+          type: "WORKSHOP",
+          name: "Workshop",
+          startsAt: new Date("2025-06-01T09:00:00"),
+          active: true,
+        }),
+        createEventAccessWithRelations({
+          id: "pack-1",
+          eventId,
+          type: "OTHER",
+          name: "Pack A",
+          groupLabel: "Packs",
+          startsAt: null,
+          active: true,
+        }),
+      ];
+
+      prismaMock.eventAccess.findMany.mockResolvedValue(accessItems as never);
+
+      const result = await getGroupedAccess(eventId, {}, []);
+
+      expect(result.groups).toHaveLength(1);
+      expect(result.groups.some((g) => g.dateKey === "no-date")).toBe(false);
+      expect(result.groups[0].dateKey).toBe("2025-06-01");
+      expect(getOptionItems(result).map((i) => i.id)).toEqual(["pack-1"]);
+    });
+
+    it("should order items with equal sortOrder by createdAt", async () => {
+      const accessItems = [
+        createEventAccessWithRelations({
+          id: "pack-late",
+          eventId,
+          type: "OTHER",
+          name: "Pack Late",
+          groupLabel: "Packs",
+          startsAt: null,
+          sortOrder: 0,
+          createdAt: new Date("2025-01-02T00:00:00Z"),
+          active: true,
+        }),
+        createEventAccessWithRelations({
+          id: "pack-early",
+          eventId,
+          type: "OTHER",
+          name: "Pack Early",
+          groupLabel: "Packs",
+          startsAt: null,
+          sortOrder: 0,
+          createdAt: new Date("2025-01-01T00:00:00Z"),
+          active: true,
+        }),
+      ];
+
+      prismaMock.eventAccess.findMany.mockResolvedValue(accessItems as never);
+
+      const result = await getGroupedAccess(eventId, {}, []);
+
+      expect(getOptionItems(result).map((i) => i.id)).toEqual([
+        "pack-early",
+        "pack-late",
+      ]);
+    });
+
+    it("should order option slots by sortOrder then createdAt of their first item", async () => {
+      const accessItems = [
+        createEventAccessWithRelations({
+          id: "addon-1",
+          eventId,
+          type: "ADDON",
+          name: "T-shirt",
+          startsAt: null,
+          sortOrder: 5,
+          createdAt: new Date("2025-01-01T00:00:00Z"),
+          active: true,
+        }),
+        createEventAccessWithRelations({
+          id: "pack-1",
+          eventId,
+          type: "OTHER",
+          name: "Pack A",
+          groupLabel: "Packs",
+          startsAt: null,
+          sortOrder: 1,
+          createdAt: new Date("2025-01-01T00:00:00Z"),
+          active: true,
+        }),
+      ];
+
+      prismaMock.eventAccess.findMany.mockResolvedValue(accessItems as never);
+
+      const result = await getGroupedAccess(eventId, {}, []);
+
+      expect(
+        result.addonGroup!.slots.map(
+          (s) => (s.items as { id: string }[])[0].id,
+        ),
+      ).toEqual(["pack-1", "addon-1"]);
     });
   });
 
@@ -1447,6 +1793,122 @@ describe("Access Service", () => {
       expect(result.valid).toBe(true);
     });
 
+    it("should reject two undated items sharing an exclusivity key", async () => {
+      const accessItems = [
+        createEventAccessWithRelations({
+          id: "pack-1",
+          eventId,
+          type: "OTHER",
+          name: "Pack A",
+          groupLabel: "Packs",
+          startsAt: null,
+          active: true,
+        }),
+        createEventAccessWithRelations({
+          id: "pack-2",
+          eventId,
+          type: "OTHER",
+          name: "Pack B",
+          groupLabel: "Packs",
+          startsAt: null,
+          active: true,
+        }),
+      ];
+
+      prismaMock.eventAccess.findMany
+        .mockResolvedValueOnce(accessItems as never)
+        .mockResolvedValueOnce([] as never);
+
+      const result = await validateAccessSelections(
+        eventId,
+        [
+          { accessId: "pack-1", quantity: 1 },
+          { accessId: "pack-2", quantity: 1 },
+        ],
+        {},
+      );
+
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain(
+        'Only one of "Pack A" and "Pack B" can be selected',
+      );
+    });
+
+    it("should grandfather two undated exclusive items already held by the registration", async () => {
+      const accessItems = [
+        createEventAccessWithRelations({
+          id: "pack-1",
+          eventId,
+          type: "OTHER",
+          name: "Pack A",
+          groupLabel: "Packs",
+          startsAt: null,
+          active: true,
+        }),
+        createEventAccessWithRelations({
+          id: "pack-2",
+          eventId,
+          type: "OTHER",
+          name: "Pack B",
+          groupLabel: "Packs",
+          startsAt: null,
+          active: true,
+        }),
+      ];
+
+      prismaMock.eventAccess.findMany
+        .mockResolvedValueOnce(accessItems as never)
+        .mockResolvedValueOnce([] as never);
+
+      const result = await validateAccessSelections(
+        eventId,
+        [
+          { accessId: "pack-1", quantity: 1 },
+          { accessId: "pack-2", quantity: 1 },
+        ],
+        {},
+        new Set(["pack-1", "pack-2"]),
+      );
+
+      expect(result.valid).toBe(true);
+    });
+
+    it("should allow selecting several undated ADDON items", async () => {
+      const accessItems = [
+        createEventAccessWithRelations({
+          id: "addon-1",
+          eventId,
+          type: "ADDON",
+          name: "T-shirt",
+          startsAt: null,
+          active: true,
+        }),
+        createEventAccessWithRelations({
+          id: "addon-2",
+          eventId,
+          type: "ADDON",
+          name: "Parking",
+          startsAt: null,
+          active: true,
+        }),
+      ];
+
+      prismaMock.eventAccess.findMany
+        .mockResolvedValueOnce(accessItems as never)
+        .mockResolvedValueOnce([] as never);
+
+      const result = await validateAccessSelections(
+        eventId,
+        [
+          { accessId: "addon-1", quantity: 1 },
+          { accessId: "addon-2", quantity: 1 },
+        ],
+        {},
+      );
+
+      expect(result.valid).toBe(true);
+    });
+
     it("should validate prerequisites are selected", async () => {
       const accessItems = [
         createEventAccessWithRelations({
@@ -1486,12 +1948,16 @@ describe("Access Service", () => {
           id: "basic",
           eventId,
           name: "Basic Workshop",
+          startsAt: new Date("2025-06-01T09:00:00"),
+          endsAt: new Date("2025-06-01T10:00:00"),
           active: true,
         }),
         createEventAccessWithRelations({
           id: "advanced",
           eventId,
           name: "Advanced Workshop",
+          startsAt: new Date("2025-06-01T11:00:00"),
+          endsAt: new Date("2025-06-01T12:00:00"),
           active: true,
           requiredAccess: [{ id: "basic" }] as never,
         }),

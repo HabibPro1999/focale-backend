@@ -5,11 +5,16 @@ import type { TxClient } from "@shared/types/prisma.js";
 import type {
   CreateEventAccessInput,
   UpdateEventAccessInput,
+  AccessCondition,
 } from "./access.schema.js";
 import { Prisma, PaymentStatus } from "@/generated/prisma/client.js";
 import type { EventAccess } from "@/generated/prisma/client.js";
 import type { PriceBreakdown } from "@pricing";
 import { enqueueTriggeredEmailOutboxEvent } from "@core/outbox";
+import {
+  buildFieldOptionIndex,
+  findInvalidOptionConditions,
+} from "@shared/utils/condition-option-validation.js";
 
 // ============================================================================
 // Types
@@ -156,6 +161,56 @@ async function detectCircularPrerequisites(
 }
 
 // ============================================================================
+// Condition Option-ID Validation
+// ============================================================================
+
+/**
+ * Guard against access-item conditions whose `value` is a form field's
+ * option LABEL instead of its option ID (e.g. "Tunisie" instead of "TN") —
+ * see `condition-option-validation.ts` for why this matters.
+ *
+ * A no-op (and no DB call) when `conditions` is `undefined` (untouched —
+ * natural grandfathering on update), `null` (explicitly cleared), or `[]`
+ * (nothing to check). Never throws for a missing registration form —
+ * without a form there is no option schema to validate against.
+ */
+async function assertValidOptionConditions(params: {
+  eventId: string;
+  accessId?: string;
+  accessName: string;
+  conditions: AccessCondition[] | null | undefined;
+}): Promise<void> {
+  const { eventId, accessId, accessName, conditions } = params;
+  if (!conditions || conditions.length === 0) return;
+
+  const form = await prisma.form.findUnique({
+    where: { eventId_type: { eventId, type: "REGISTRATION" } },
+    select: { schema: true },
+  });
+  if (!form) return;
+
+  const optionIndex = buildFieldOptionIndex(form.schema);
+  const bad = findInvalidOptionConditions(conditions, optionIndex);
+  if (bad.length === 0) return;
+
+  const f = bad[0];
+  throw new AppError(
+    `Access item "${accessName}": value "${String(f.value)}" for field "${f.fieldLabel}" is not one of the field's option ids (e.g. ${f.exampleOptionIds.map((optionId) => `"${optionId}"`).join(", ")}). Pick the option in the rule editor.`,
+    400,
+    ErrorCodes.ACCESS_CONDITION_INVALID_OPTION,
+    {
+      accessId,
+      accessName,
+      fieldId: f.fieldId,
+      fieldLabel: f.fieldLabel,
+      operator: f.operator,
+      value: f.value,
+      exampleOptionIds: f.exampleOptionIds,
+    },
+  );
+}
+
+// ============================================================================
 // CRUD Operations
 // ============================================================================
 
@@ -204,6 +259,13 @@ export async function createEventAccess(
       );
     }
   }
+
+  // Validate that condition values reference real option ids, not labels.
+  await assertValidOptionConditions({
+    eventId,
+    accessName: data.name,
+    conditions: data.conditions,
+  });
 
   return prisma.eventAccess.create({
     data: {
@@ -327,6 +389,16 @@ export async function updateEventAccess(
     updateData.includedInBase = data.includedInBase;
   if (data.companionPrice !== undefined)
     updateData.companionPrice = data.companionPrice;
+
+  // Validate that condition values reference real option ids, not labels.
+  // `data.conditions === undefined` means conditions weren't touched by this
+  // update, so it's a no-op here (natural grandfathering).
+  await assertValidOptionConditions({
+    eventId: access.eventId,
+    accessId: id,
+    accessName: data.name ?? access.name,
+    conditions: data.conditions,
+  });
 
   // Handle prerequisites update
   if (requiredAccessIds !== undefined) {

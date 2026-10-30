@@ -266,6 +266,62 @@ describe("getPublicConfig", () => {
     expect(result).toHaveProperty("submissionMode", "FREE_TEXT");
   });
 
+  it("exposes theme translations and the enabled languages list", async () => {
+    const themes = [
+      {
+        id: faker.string.uuid(),
+        label: "Cardiologie",
+        description: null,
+        translations: { en: { label: "Cardiology" }, ar: { label: "قلب" } },
+      },
+    ];
+    prismaMock.event.findUnique.mockResolvedValue({
+      id: eventId,
+      name: "Test Congress",
+      clientId,
+      abstractConfig: {
+        ...makeConfig({ languages: ["fr", "en", "ar"] }),
+        themes,
+      },
+    } as any);
+
+    const result = await getPublicConfig(slug);
+
+    expect(result).toHaveProperty("themes", themes);
+    expect(result).toHaveProperty("languages", ["fr", "en", "ar"]);
+    expect(prismaMock.event.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({
+          abstractConfig: {
+            include: {
+              themes: expect.objectContaining({
+                select: {
+                  id: true,
+                  label: true,
+                  description: true,
+                  translations: true,
+                },
+              }),
+            },
+          },
+        }),
+      }),
+    );
+  });
+
+  it("returns languages as null when the config has none", async () => {
+    prismaMock.event.findUnique.mockResolvedValue({
+      id: eventId,
+      name: "Test Congress",
+      clientId,
+      abstractConfig: { ...makeConfig(), themes: [] },
+    } as any);
+
+    const result = await getPublicConfig(slug);
+
+    expect(result).toHaveProperty("languages", null);
+  });
+
   it("keeps public submissions open when mode is locked", async () => {
     prismaMock.event.findUnique.mockResolvedValue({
       id: eventId,

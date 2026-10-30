@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { FastifyRequest, FastifyReply } from "fastify";
 import { prismaMock } from "../../../tests/mocks/prisma.js";
 import {
@@ -45,8 +45,10 @@ function createMockRequest(
   return {
     headers: {},
     user: undefined,
+    // requireAuth logs the underlying verification error via request.log.
+    log: { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() },
     ...overrides,
-  } as FastifyRequest;
+  } as unknown as FastifyRequest;
 }
 
 /**

@@ -15,8 +15,6 @@ const sendEmailMock = vi.fn();
 const createFirebaseUserMock = firebaseAuthMock.createUser;
 const setCustomClaimsMock = firebaseAuthMock.setCustomUserClaims;
 const deleteFirebaseUserMock = firebaseAuthMock.deleteUser;
-const generatePasswordResetLinkMock =
-  firebaseAuthMock.generatePasswordResetLink;
 const updateFirebaseUserPasswordMock =
   firebaseAuthMock.updateFirebaseUserPassword;
 const revokeFirebaseRefreshTokensMock =
@@ -31,6 +29,7 @@ vi.mock("@clients", () => ({
 }));
 
 import { auditLog } from "@shared/utils/audit.js";
+import { hashCommitteeInviteToken } from "./committee-invite-token.js";
 import {
   addCommitteeMember,
   assignReviewers,
@@ -151,6 +150,25 @@ function mockCommitteeListResult(user: ReturnType<typeof makeCommitteeUser>) {
   prismaMock.abstractReviewerTheme.findMany.mockResolvedValue([]);
   prismaMock.abstract.count.mockResolvedValue(0);
   (prismaMock.abstractReview.groupBy as any).mockResolvedValueOnce([]);
+}
+
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Pull the raw invite token back out of the link embedded in the last email we
+ * "sent" — the only place the raw value ever appears (the DB stores its hash).
+ */
+function inviteTokenFromLastEmail(): string {
+  const call = sendEmailMock.mock.calls.at(-1)?.[0] as
+    | { html?: string }
+    | undefined;
+  const match = /\/committee\/set-password\?token=([0-9a-f]{64})/.exec(
+    call?.html ?? "",
+  );
+  if (!match) {
+    throw new Error("No committee invite link found in the sent email");
+  }
+  return match[1];
 }
 
 describe("abstracts committee service", () => {
@@ -519,7 +537,6 @@ describe("abstracts committee service", () => {
       createFirebaseUserMock.mockReset();
       setCustomClaimsMock.mockReset();
       deleteFirebaseUserMock.mockReset();
-      generatePasswordResetLinkMock.mockReset();
       sendEmailMock.mockReset();
       (auditLog as any).mockReset?.();
     });
@@ -537,9 +554,6 @@ describe("abstracts committee service", () => {
         prismaMock.event.findUnique.mockResolvedValue({
           name: "Big Event",
         } as any);
-        generatePasswordResetLinkMock.mockResolvedValue(
-          "https://admin.example/auth/action?oobCode=abc",
-        );
         sendEmailMock.mockResolvedValue({ success: true });
         mockCommitteeListResult(user);
 
@@ -556,12 +570,19 @@ describe("abstracts committee service", () => {
           inviteEmailSent: true,
         });
         expect(createFirebaseUserMock).not.toHaveBeenCalled();
-        expect(generatePasswordResetLinkMock).toHaveBeenCalledWith(
-          user.email,
-          expect.objectContaining({
-            url: expect.stringContaining("/committee"),
-          }),
+        expect(prismaMock.committeeInviteToken.deleteMany).toHaveBeenCalledWith(
+          {
+            where: { userId: user.id, eventId, usedAt: null },
+          },
         );
+        expect(prismaMock.committeeInviteToken.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({
+            tokenHash: hashCommitteeInviteToken(inviteTokenFromLastEmail()),
+            userId: user.id,
+            eventId,
+            createdBy: performedBy,
+          }),
+        });
         expect(sendEmailMock).toHaveBeenCalledWith(
           expect.objectContaining({
             to: user.email,
@@ -659,9 +680,6 @@ describe("abstracts committee service", () => {
       prismaMock.event.findUnique.mockResolvedValue({
         name: "Big Event",
       } as any);
-      generatePasswordResetLinkMock.mockResolvedValue(
-        "https://admin.example/auth/action?oobCode=abc",
-      );
       sendEmailMock.mockResolvedValue({ success: true });
       mockCommitteeListResult(user);
 
@@ -693,12 +711,22 @@ describe("abstracts committee service", () => {
           clientId: null,
         },
       });
-      expect(generatePasswordResetLinkMock).toHaveBeenCalledWith(
-        user.email,
-        expect.objectContaining({
-          url: expect.stringContaining("/committee"),
-        }),
-      );
+      const createArgs = (
+        prismaMock.committeeInviteToken.create as any
+      ).mock.calls.at(-1)?.[0];
+      expect(createArgs.data).toMatchObject({
+        tokenHash: hashCommitteeInviteToken(inviteTokenFromLastEmail()),
+        userId: user.id,
+        eventId,
+        createdBy: performedBy,
+      });
+      // Default TTL is 7 days (COMMITTEE_INVITE_TOKEN_TTL_DAYS).
+      expect(
+        Math.abs(
+          (createArgs.data.expiresAt as Date).getTime() -
+            (Date.now() + SEVEN_DAYS_MS),
+        ),
+      ).toBeLessThan(10_000);
       expect(sendEmailMock).toHaveBeenCalledWith(
         expect.objectContaining({
           to: user.email,
@@ -706,6 +734,33 @@ describe("abstracts committee service", () => {
           categories: ["committee-invite"],
         }),
       );
+      const inviteHtml = (sendEmailMock.mock.calls.at(-1)?.[0] as any).html;
+      expect(inviteHtml).toContain("/committee/set-password?token=");
+      expect(inviteHtml).toContain("lang=fr");
+      expect(inviteHtml).toContain("Ce lien est valable 7 jour(s)");
+    });
+
+    it("reports inviteEmailSent=false when minting the invite token throws", async () => {
+      const user = makeCommitteeUser();
+      prismaMock.user.findUnique.mockResolvedValue(user as any);
+      prismaMock.event.findUnique.mockResolvedValue({
+        name: "Big Event",
+      } as any);
+      (prismaMock.committeeInviteToken.create as any).mockRejectedValue(
+        new Error("db down"),
+      );
+      mockCommitteeListResult(user);
+
+      const result = await addCommitteeMember(
+        eventId,
+        { email: user.email, name: user.name },
+        performedBy,
+      );
+
+      expect(result).toMatchObject({ inviteEmailSent: false });
+      expect(sendEmailMock).not.toHaveBeenCalled();
+      // Membership still upserted — invite delivery is best-effort.
+      expect(prismaMock.abstractCommitteeMembership.upsert).toHaveBeenCalled();
     });
   });
 
@@ -718,12 +773,13 @@ describe("abstracts committee service", () => {
       user: {
         email: "reviewer9@example.com",
         name: "Reviewer Nine",
+        active: true,
+        role: UserRole.SCIENTIFIC_COMMITTEE,
       },
       event: { name: "Big Event" },
     };
 
     beforeEach(() => {
-      generatePasswordResetLinkMock.mockReset();
       sendEmailMock.mockReset();
       (auditLog as any).mockReset?.();
     });
@@ -735,7 +791,7 @@ describe("abstracts committee service", () => {
         resendCommitteeInvite(eventId, targetUserId, performedBy),
       ).rejects.toMatchObject({ statusCode: 404 });
 
-      expect(generatePasswordResetLinkMock).not.toHaveBeenCalled();
+      expect(prismaMock.committeeInviteToken.create).not.toHaveBeenCalled();
       expect(sendEmailMock).not.toHaveBeenCalled();
     });
 
@@ -750,15 +806,35 @@ describe("abstracts committee service", () => {
         resendCommitteeInvite(eventId, targetUserId, performedBy),
       ).rejects.toMatchObject({ statusCode: 404 });
 
-      expect(generatePasswordResetLinkMock).not.toHaveBeenCalled();
+      expect(prismaMock.committeeInviteToken.create).not.toHaveBeenCalled();
     });
 
-    it("generates a reset link, sends the email, and audit-logs on success", async () => {
+    it.each([
+      [
+        "the account was deactivated",
+        { ...activeCommitteeMember.user, active: false },
+      ],
+      [
+        "the account no longer holds the committee role",
+        { ...activeCommitteeMember.user, role: UserRole.CLIENT_ADMIN },
+      ],
+    ])("returns 404 without emailing when %s", async (_label, user) => {
+      prismaMock.abstractCommitteeMembership.findUnique.mockResolvedValue({
+        ...activeCommitteeMember,
+        user,
+      } as any);
+
+      await expect(
+        resendCommitteeInvite(eventId, targetUserId, performedBy),
+      ).rejects.toMatchObject({ statusCode: 404 });
+
+      expect(prismaMock.committeeInviteToken.create).not.toHaveBeenCalled();
+      expect(sendEmailMock).not.toHaveBeenCalled();
+    });
+
+    it("mints a fresh invite token, sends the email, and audit-logs on success", async () => {
       prismaMock.abstractCommitteeMembership.findUnique.mockResolvedValue(
         activeCommitteeMember as any,
-      );
-      generatePasswordResetLinkMock.mockResolvedValue(
-        "https://admin.example/auth/action?oobCode=abc",
       );
       sendEmailMock.mockResolvedValue({ success: true });
 
@@ -769,26 +845,40 @@ describe("abstracts committee service", () => {
       );
 
       expect(result).toEqual({ inviteEmailSent: true });
-      expect(generatePasswordResetLinkMock).toHaveBeenCalledWith(
-        "reviewer9@example.com",
-        expect.objectContaining({
-          url: expect.stringContaining("/committee"),
+      // Superseding delete first, so the previously emailed link stops working.
+      expect(prismaMock.committeeInviteToken.deleteMany).toHaveBeenCalledWith({
+        where: { userId: targetUserId, eventId, usedAt: null },
+      });
+      expect(prismaMock.committeeInviteToken.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          tokenHash: hashCommitteeInviteToken(inviteTokenFromLastEmail()),
+          userId: targetUserId,
+          eventId,
+          createdBy: performedBy,
         }),
-      );
+      });
       expect(sendEmailMock).toHaveBeenCalledWith(
         expect.objectContaining({
           to: "reviewer9@example.com",
-          subject: "Réinitialisation du mot de passe comité",
+          subject: "Nouveau lien d'accès - comité scientifique",
           categories: ["committee-password-reset"],
         }),
       );
+      // The link opens the same set-password page, so the copy must not
+      // promise a "reset" or tell the member to ignore the email.
+      const resendHtml = (sendEmailMock.mock.calls.at(-1)?.[0] as any).html;
+      expect(resendHtml).toContain("Définir votre mot de passe");
+      expect(resendHtml).toContain("Un nouveau lien sécurisé a été généré");
+      expect(resendHtml).toContain("attendiez pas cet email");
+      expect(resendHtml).not.toContain("ignorer cet email");
+      expect(resendHtml).not.toContain("Réinitialis");
       expect(auditLog).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
           entityType: "User",
           entityId: targetUserId,
           action: "admin_reset_password",
-          changes: { method: { old: null, new: "email_link" } },
+          changes: { method: { old: null, new: "invite_token" } },
           performedBy,
         }),
       );
@@ -797,9 +887,6 @@ describe("abstracts committee service", () => {
     it("reports inviteEmailSent=false when SendGrid fails (still audit-logs the admin action)", async () => {
       prismaMock.abstractCommitteeMembership.findUnique.mockResolvedValue(
         activeCommitteeMember as any,
-      );
-      generatePasswordResetLinkMock.mockResolvedValue(
-        "https://admin.example/auth/action?oobCode=abc",
       );
       sendEmailMock.mockResolvedValue({
         success: false,
@@ -817,17 +904,17 @@ describe("abstracts committee service", () => {
         expect.anything(),
         expect.objectContaining({
           action: "admin_reset_password",
-          changes: { method: { old: null, new: "email_link" } },
+          changes: { method: { old: null, new: "invite_token" } },
         }),
       );
     });
 
-    it("reports inviteEmailSent=false when generatePasswordResetLink throws", async () => {
+    it("reports inviteEmailSent=false when minting the invite token throws", async () => {
       prismaMock.abstractCommitteeMembership.findUnique.mockResolvedValue(
         activeCommitteeMember as any,
       );
-      generatePasswordResetLinkMock.mockRejectedValue(
-        new Error("firebase down"),
+      (prismaMock.committeeInviteToken.create as any).mockRejectedValue(
+        new Error("db down"),
       );
 
       const result = await resendCommitteeInvite(
@@ -905,6 +992,52 @@ describe("abstracts committee service", () => {
       // Sanity check: the audit changes payload must not leak the password.
       const auditCall = (auditLog as any).mock.calls.at(-1)?.[1];
       expect(JSON.stringify(auditCall ?? {})).not.toContain(newPassword);
+    });
+
+    it("purges every outstanding invite token once the admin sets a password", async () => {
+      prismaMock.abstractCommitteeMembership.findUnique.mockResolvedValue({
+        userId: targetUserId,
+        eventId,
+        active: true,
+      } as any);
+      updateFirebaseUserPasswordMock.mockResolvedValue(undefined);
+      revokeFirebaseRefreshTokensMock.mockResolvedValue(undefined);
+
+      await setCommitteeMemberPassword(
+        eventId,
+        targetUserId,
+        newPassword,
+        performedBy,
+      );
+
+      // Account-wide, not just this event: no live link may overwrite the
+      // password the admin just set.
+      expect(prismaMock.committeeInviteToken.deleteMany).toHaveBeenCalledWith({
+        where: { userId: targetUserId, usedAt: null },
+      });
+    });
+
+    it("still succeeds when purging the invite tokens fails", async () => {
+      prismaMock.abstractCommitteeMembership.findUnique.mockResolvedValue({
+        userId: targetUserId,
+        eventId,
+        active: true,
+      } as any);
+      updateFirebaseUserPasswordMock.mockResolvedValue(undefined);
+      revokeFirebaseRefreshTokensMock.mockResolvedValue(undefined);
+      (prismaMock.committeeInviteToken.deleteMany as any).mockRejectedValue(
+        new Error("db down"),
+      );
+
+      await expect(
+        setCommitteeMemberPassword(
+          eventId,
+          targetUserId,
+          newPassword,
+          performedBy,
+        ),
+      ).resolves.toEqual({ ok: true });
+      expect(auditLog).toHaveBeenCalled();
     });
   });
 });

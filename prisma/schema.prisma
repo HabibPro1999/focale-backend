@@ -49,6 +49,7 @@ model User {
   abstractCommitteeMemberships AbstractCommitteeMembership[] @relation("AbstractCommitteeMember")
   abstractReviews              AbstractReview[]              @relation("AbstractReviewerReviews")
   abstractReviewerThemes       AbstractReviewerTheme[]       @relation("AbstractReviewerThemes")
+  committeeInviteTokens        CommitteeInviteToken[]
 
   @@index([clientId])
   @@index([active, role])
@@ -93,6 +94,7 @@ model Event {
   abstractCommitteeMemberships AbstractCommitteeMembership[]
   abstractReviews              AbstractReview[]
   abstractReviewerThemes       AbstractReviewerTheme[]
+  committeeInviteTokens        CommitteeInviteToken[]
 
   @@index([clientId, status])
   @@map("events")
@@ -124,17 +126,18 @@ enum SponsorshipStatus {
 // ============================================================================
 
 model Form {
-  id             String   @id @default(uuid())
-  eventId        String   @map("event_id")
-  type           FormType @default(REGISTRATION)
-  name           String
-  schema         Json
-  schemaVersion  Int      @default(1) @map("schema_version")
-  successTitle   String?  @map("success_title")
-  successMessage String?  @map("success_message")
-  active         Boolean  @default(true)
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  id                  String   @id @default(uuid())
+  eventId             String   @map("event_id")
+  type                FormType @default(REGISTRATION)
+  name                String
+  schema              Json
+  schemaVersion       Int      @default(1) @map("schema_version")
+  successTitle        String?  @map("success_title")
+  successMessage      String?  @map("success_message")
+  successTranslations Json?    @map("success_translations")
+  active              Boolean  @default(true)
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
 
   event              Event              @relation(fields: [eventId], references: [id], onDelete: Cascade)
   registrations      Registration[]
@@ -261,7 +264,7 @@ model AccessCheckIn {
   id             String   @id @default(uuid())
   registrationId String   @map("registration_id")
   accessId       String   @map("access_id")
-  checkedInAt    DateTime @default(now()) @map("checked_in_at")
+  checkedInAt    DateTime @default(now()) @db.Timestamptz(6) @map("checked_in_at")
   checkedInBy    String   @map("checked_in_by")
 
   registration Registration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
@@ -502,7 +505,7 @@ model Registration {
   droppedAccessIds String[] @default([]) @map("dropped_access_ids")
 
   // Check-in (event-level attendance)
-  checkedInAt DateTime? @map("checked_in_at")
+  checkedInAt DateTime? @db.Timestamptz(6) @map("checked_in_at")
   checkedInBy String?   @map("checked_in_by")
 
   // Relations
@@ -812,6 +815,7 @@ model AbstractConfig {
   bookOrder              AbstractBookOrder      @default(BY_CODE) @map("book_order")
   bookIncludeAuthorNames Boolean                @default(true) @map("book_include_author_names")
   additionalFieldsSchema Json                   @default("[]") @map("additional_fields_schema")
+  languages              Json?
   createdAt              DateTime               @default(now()) @map("created_at")
   updatedAt              DateTime               @updatedAt @map("updated_at")
 
@@ -822,14 +826,15 @@ model AbstractConfig {
 }
 
 model AbstractTheme {
-  id          String   @id @default(uuid())
-  configId    String   @map("config_id")
-  label       String
-  description String?
-  sortOrder   Int      @default(0) @map("sort_order")
-  active      Boolean  @default(true)
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  id           String   @id @default(uuid())
+  configId     String   @map("config_id")
+  label        String
+  description  String?
+  translations Json?
+  sortOrder    Int      @default(0) @map("sort_order")
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
   config         AbstractConfig            @relation(fields: [configId], references: [id], onDelete: Cascade)
   abstracts      AbstractThemeOnAbstract[]
@@ -1037,6 +1042,26 @@ model AbstractCommitteeMembership {
   @@index([eventId, active])
   @@index([userId, active])
   @@map("abstract_committee_memberships")
+}
+
+/// Single-use, app-managed invite tokens for scientific-committee members.
+/// The raw token is emailed once and only its sha256 hash is stored here;
+/// `usedAt` means "consumed" (superseded-but-unused tokens are deleted on mint).
+model CommitteeInviteToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique @map("token_hash")
+  userId    String    @map("user_id")
+  eventId   String    @map("event_id")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  createdBy String?   @map("created_by") // admin UID; null = self-service resend
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([userId, eventId])
+  @@map("committee_invite_tokens")
 }
 
 model AbstractReview {

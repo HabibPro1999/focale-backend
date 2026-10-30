@@ -288,7 +288,12 @@ export async function getPublicConfig(slug: string) {
           themes: {
             where: { active: true },
             orderBy: { sortOrder: "asc" },
-            select: { id: true, label: true, description: true },
+            select: {
+              id: true,
+              label: true,
+              description: true,
+              translations: true,
+            },
           },
         },
       },
@@ -325,6 +330,7 @@ export async function getPublicConfig(slug: string) {
     submissionMode: config.submissionMode,
     globalWordLimit: config.globalWordLimit,
     maxThemesPerAbstract: config.maxThemesPerAbstract,
+    languages: config.languages ?? null,
     sectionWordLimits: {
       introduction: sectionLimits.introduction ?? null,
       objective: sectionLimits.objective ?? null,

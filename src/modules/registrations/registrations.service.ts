@@ -16,6 +16,7 @@ import {
 } from "@clients";
 import {
   validateAccessSelections,
+  assertAccessSelectionRequirement,
   incrementAccessRegisteredCountTx,
   decrementAccessRegisteredCountTx,
   getAlreadyCoveredAccessIds,
@@ -50,6 +51,12 @@ import {
   queueRegistrationCreatedEmail,
   type RegistrationPostCommitEvent,
 } from "./registration-side-effects.js";
+
+// The persisted form schema JSONB also carries admin-authored settings, which
+// the shared `FormSchema` validation type intentionally does not model.
+type FormSchemaWithSettings = {
+  settings?: { accessSelectionRequired?: boolean };
+};
 
 // ============================================================================
 // Re-exports — routes and barrel consume these from this file
@@ -339,7 +346,7 @@ export async function createRegistration(
   // Get form and event info (including schemaVersion)
   const form = await prisma.form.findUnique({
     where: { id: formId },
-    select: { id: true, eventId: true, schemaVersion: true },
+    select: { id: true, eventId: true, schemaVersion: true, schema: true },
   });
   if (!form) {
     throw new AppError("Form not found", 404, ErrorCodes.NOT_FOUND);
@@ -376,6 +383,14 @@ export async function createRegistration(
       );
     }
   }
+
+  // Enforce the optional "at least one access option" form setting
+  await assertAccessSelectionRequirement(
+    eventId,
+    formData,
+    accessSelections ?? [],
+    (form.schema as unknown as FormSchemaWithSettings | null)?.settings,
+  );
 
   // Create registration with access selections in a transaction
   const pending: RegistrationPostCommitEvent[] = [];
@@ -1956,6 +1971,20 @@ export async function editRegistrationPublic(
           { errors: validation.errors },
         );
       }
+    }
+
+    if (isAccessEdit) {
+      // Enforce the optional "at least one access option" form setting
+      await assertAccessSelectionRequirement(
+        currentRegistration.eventId,
+        newFormData,
+        newAccessSelections,
+        (
+          currentRegistration.form
+            .schema as unknown as FormSchemaWithSettings | null
+        )?.settings,
+        tx,
+      );
     }
 
     newPriceBreakdown = await calculatePrice(

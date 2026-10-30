@@ -199,6 +199,7 @@ export function createMockForm(overrides: Partial<Form> = {}): Form {
     schemaVersion: 1,
     successTitle: null,
     successMessage: null,
+    successTranslations: null,
     active: true,
     createdAt: faker.date.past(),
     updatedAt: faker.date.recent(),

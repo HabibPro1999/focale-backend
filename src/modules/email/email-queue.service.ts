@@ -435,6 +435,39 @@ export async function queueBulkSponsorEmails(
 }
 
 // =============================================================================
+// QUEUE BULK ABSTRACT EMAILS (For Manual Sends to Abstract Submitters)
+// =============================================================================
+
+export async function queueBulkAbstractEmails(
+  templateId: string,
+  abstracts: Array<{
+    abstractId: string;
+    email: string;
+    recipientName: string;
+    contextSnapshot: Record<string, unknown>;
+  }>,
+): Promise<number> {
+  const valid = abstracts.filter((a) => a.email.trim().length > 0);
+  if (valid.length === 0) return 0;
+
+  const emailLogs = valid.map((a) => ({
+    templateId,
+    abstractId: a.abstractId,
+    recipientEmail: a.email,
+    recipientName: a.recipientName || null,
+    subject: "",
+    status: "QUEUED" as EmailStatus,
+    contextSnapshot: a.contextSnapshot as Prisma.InputJsonValue,
+  }));
+
+  const result = await prisma.emailLog.createMany({
+    data: emailLogs,
+  });
+
+  return result.count;
+}
+
+// =============================================================================
 // QUEUE CERTIFICATE EMAILS (With Attachments)
 // =============================================================================
 

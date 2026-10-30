@@ -8,12 +8,14 @@
  *   fail closed instead of silently comparing as zero or NaN.
  * - Unknown operators and logic values return `false` (fail closed).
  * - Empty condition arrays with AND logic return `true`; with OR logic return `false`.
+ * - `in` is the only operator that looks inside an array field value —
+ *   every other operator treats an array field value as opaque.
  */
 
 export interface Condition {
   fieldId: string;
   operator: string;
-  value?: string | number | boolean | null;
+  value?: string | number | boolean | null | string[];
 }
 
 function toFiniteNumber(value: unknown): number | null {
@@ -57,6 +59,22 @@ function isEqualValue(actual: unknown, expected: unknown): boolean {
 }
 
 /**
+ * `in` — "is one of", an any-of intersection.
+ * - Non-array condition value degrades to `equals` (never matches MORE than intent).
+ * - Array field value is exploded, so a checkbox matches when ANY option is in the list.
+ * - Reuses isEqualValue, so null/undefined and "1"==1 coercion match `equals` exactly.
+ */
+function isInValue(actual: unknown, expected: unknown): boolean {
+  // Guard: without this, candidates = [undefined] and
+  // isEqualValue(undefined, undefined) === true would match a missing field.
+  if (expected === null || expected === undefined) return false;
+  const candidates = Array.isArray(expected) ? expected : [expected];
+  if (candidates.length === 0) return false;
+  const actuals = Array.isArray(actual) ? actual : [actual];
+  return actuals.some((a) => candidates.some((c) => isEqualValue(a, c)));
+}
+
+/**
  * Evaluate a single condition against form data.
  */
 export function evaluateSingleCondition(
@@ -70,6 +88,8 @@ export function evaluateSingleCondition(
       return isEqualValue(value, condition.value);
     case "not_equals":
       return !isEqualValue(value, condition.value);
+    case "in":
+      return isInValue(value, condition.value);
     case "contains":
       return (
         typeof value === "string" &&

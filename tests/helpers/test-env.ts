@@ -47,6 +47,7 @@ function applyCommonSafeDefaults(): void {
   process.env.ABSTRACTS_EDIT_RATE_LIMIT_MAX ??= "1000";
   process.env.ABSTRACTS_READ_RATE_LIMIT_MAX ??= "1000";
   process.env.ABSTRACTS_RATE_LIMIT_WINDOW ??= "1 minute";
+  process.env.COMMITTEE_INVITE_TOKEN_TTL_DAYS ??= "7";
 }
 
 function failTestEnv(message: string): never {

@@ -4,6 +4,7 @@ export {
   abstractsCommitteeRoutes,
 } from "./abstracts.committee.routes.js";
 export { abstractsPublicRoutes } from "./abstracts.public.routes.js";
+export { committeeInvitePublicRoutes } from "./abstracts.committee-invite.public.routes.js";
 export { ABSTRACT_EMAIL_VARIABLES } from "./abstracts.email-variables.js";
 export {
   getAbstractBookQueueHealth,

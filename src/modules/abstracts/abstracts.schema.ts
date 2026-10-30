@@ -1,5 +1,9 @@
 import { z } from "zod";
 import { FormFieldSchema } from "@modules/forms/forms.schema.js";
+import {
+  FormLanguagesSchema,
+  translationsMapOf,
+} from "@shared/schemas/i18n.schema.js";
 import { StrongPasswordSchema } from "@modules/identity/users.schema.js";
 
 // ============================================================================
@@ -66,6 +70,7 @@ export const PatchConfigSchema = z.strictObject({
     .enum(["BY_CODE", "BY_THEME", "BY_SUBMISSION_ORDER"])
     .optional(),
   bookIncludeAuthorNames: z.boolean().optional(),
+  languages: FormLanguagesSchema.optional(),
   force: z.boolean().optional(),
 });
 
@@ -73,9 +78,17 @@ export const PatchConfigSchema = z.strictObject({
 // Theme Schemas
 // ============================================================================
 
+export const ThemeTranslationsSchema = translationsMapOf(
+  z.strictObject({
+    label: z.string().min(1).max(120).optional(),
+    description: z.string().trim().max(500).optional(),
+  }),
+);
+
 export const CreateThemeSchema = z.strictObject({
   label: z.string().min(1).max(120),
   description: z.string().trim().max(500).nullish(),
+  translations: ThemeTranslationsSchema.nullish(),
   sortOrder: z.number().int().optional(),
   active: z.boolean().optional(),
 });
@@ -83,6 +96,7 @@ export const CreateThemeSchema = z.strictObject({
 export const UpdateThemeSchema = z.strictObject({
   label: z.string().min(1).max(120).optional(),
   description: z.string().trim().max(500).nullish(),
+  translations: ThemeTranslationsSchema.nullish(),
   sortOrder: z.number().int().optional(),
   active: z.boolean().optional(),
 });
@@ -100,6 +114,7 @@ export const AdditionalFieldsSchema = z.strictObject({
 // ============================================================================
 
 export type PatchConfigInput = z.infer<typeof PatchConfigSchema>;
+export type ThemeTranslations = z.infer<typeof ThemeTranslationsSchema>;
 export type CreateThemeInput = z.infer<typeof CreateThemeSchema>;
 export type UpdateThemeInput = z.infer<typeof UpdateThemeSchema>;
 export type AdditionalFieldsInput = z.infer<typeof AdditionalFieldsSchema>;
@@ -122,9 +137,9 @@ export const AbstractTokenQuerySchema = z.strictObject({
 });
 
 const CoAuthorSchema = z.strictObject({
-  firstName: z.string().min(1).max(80),
-  lastName: z.string().min(1).max(80),
-  affiliation: z.string().max(200).optional(),
+  firstName: z.string().min(1).max(200),
+  lastName: z.string().min(1).max(200),
+  affiliation: z.string().max(500).optional(),
 });
 
 const FreeTextContentSchema = z.strictObject({
@@ -149,7 +164,7 @@ export const SubmitAbstractSchema = z.strictObject({
   // Required on both submit and edit (product decision). The DB column is
   // nullable only so legacy abstracts created before this field can still be
   // read; every new write must supply an affiliation.
-  authorAffiliation: z.string().trim().min(1).max(200),
+  authorAffiliation: z.string().trim().min(1).max(500),
   authorEmail: z.string().email(),
   authorPhone: z.string().min(1).max(40),
   coAuthors: z.array(CoAuthorSchema).max(20).default([]),
@@ -188,8 +203,16 @@ export const ListAbstractsQuerySchema = z.strictObject({
   themeId: z.string().uuid().optional(),
   reviewerId: z.string().min(1).optional(),
   q: z.string().trim().min(1).max(120).optional(),
+  presentationType: z
+    .enum(["ORAL_COMMUNICATION", "POSTER", "CONFERENCE"])
+    .optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
   offset: z.coerce.number().int().min(0).optional(),
+});
+
+export const ExportAbstractsQuerySchema = ListAbstractsQuerySchema.omit({
+  limit: true,
+  offset: true,
 });
 
 export const FinalizeAbstractSchema = z.discriminatedUnion("decision", [
@@ -204,6 +227,7 @@ export const FinalizeAbstractSchema = z.discriminatedUnion("decision", [
 ]);
 
 export type ListAbstractsQuery = z.infer<typeof ListAbstractsQuerySchema>;
+export type ExportAbstractsQuery = z.infer<typeof ExportAbstractsQuerySchema>;
 export type FinalizeAbstractInput = z.infer<typeof FinalizeAbstractSchema>;
 
 export const MarkAbstractPresentedSchema = z.strictObject({
@@ -274,6 +298,29 @@ export const SetCommitteeMemberPasswordSchema = z.strictObject({
   password: StrongPasswordSchema,
 });
 
+// Public committee-invite endpoints. Token shape is validated here (not in an
+// `extract` helper) so a malformed token fails as a 400 — these routes must
+// never answer 401, which the admin app treats as "session dead, sign out".
+export const CommitteeInviteTokenValueSchema = z
+  .string()
+  .regex(/^[0-9a-f]{64}$/, "Invalid invitation token");
+
+// Verification takes the token in a POST body, never a query string: query
+// params land in access logs, proxy logs and Referer headers, which would leak
+// a live credential-setting token.
+export const CommitteeInviteVerifySchema = z.strictObject({
+  token: CommitteeInviteTokenValueSchema,
+});
+
+export const CommitteeInviteSetPasswordSchema = z.strictObject({
+  token: CommitteeInviteTokenValueSchema,
+  password: StrongPasswordSchema,
+});
+
+export const CommitteeInviteResendSchema = z.strictObject({
+  token: CommitteeInviteTokenValueSchema,
+});
+
 export type AddCommitteeMemberInput = z.infer<typeof AddCommitteeMemberSchema>;
 export type SetReviewerThemesInput = z.infer<typeof SetReviewerThemesSchema>;
 export type AssignReviewersInput = z.infer<typeof AssignReviewersSchema>;
@@ -281,4 +328,13 @@ export type CommitteeAbstractsQuery = z.infer<typeof CommitteeAbstractsQuerySche
 export type ReviewAbstractInput = z.infer<typeof ReviewAbstractSchema>;
 export type SetCommitteeMemberPasswordInput = z.infer<
   typeof SetCommitteeMemberPasswordSchema
+>;
+export type CommitteeInviteVerifyInput = z.infer<
+  typeof CommitteeInviteVerifySchema
+>;
+export type CommitteeInviteSetPasswordInput = z.infer<
+  typeof CommitteeInviteSetPasswordSchema
+>;
+export type CommitteeInviteResendInput = z.infer<
+  typeof CommitteeInviteResendSchema
 >;

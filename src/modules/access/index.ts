@@ -12,6 +12,8 @@ export {
   getAlreadyCoveredAccessIds,
 } from "./access.service.js";
 
+export { assertAccessSelectionRequirement } from "./access-validation.js";
+
 export { AccessSelectionSchema } from "./access.schema.js";
 
 export { accessRoutes } from "./access.routes.js";

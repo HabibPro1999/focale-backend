@@ -29,6 +29,7 @@ import {
   incrementAccessRegisteredCountTx,
   syncPaidCountDelta,
   validateAccessSelections,
+  assertAccessSelectionRequirement,
 } from "@access";
 import { faker } from "@faker-js/faker";
 
@@ -46,6 +47,7 @@ vi.mock("@access", () => ({
   validateAccessSelections: vi
     .fn()
     .mockResolvedValue({ valid: true, errors: [] }),
+  assertAccessSelectionRequirement: vi.fn().mockResolvedValue(undefined),
   incrementAccessRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
   decrementAccessRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
   getAlreadyCoveredAccessIds: vi.fn().mockResolvedValue(new Set<string>()),
@@ -244,8 +246,48 @@ describe("Registrations Service", () => {
       expect(result.totalAmount).toBe(300);
       expect(prismaMock.form.findUnique).toHaveBeenCalledWith({
         where: { id: formId },
-        select: { id: true, eventId: true, schemaVersion: true },
+        select: {
+          id: true,
+          eventId: true,
+          schemaVersion: true,
+          schema: true,
+        },
       });
+      expect(assertAccessSelectionRequirement).toHaveBeenCalledWith(
+        eventId,
+        input.formData,
+        [],
+        undefined,
+      );
+    });
+
+    it("should propagate the access selection requirement error as 400", async () => {
+      const input = {
+        formId,
+        formData: { firstName: "John" },
+        email: "required@example.com",
+        accessSelections: [],
+      };
+
+      prismaMock.form.findUnique.mockResolvedValue(mockForm);
+      prismaMock.registration.findFirst.mockResolvedValue(null);
+      (
+        assertAccessSelectionRequirement as unknown as Mock
+      ).mockRejectedValueOnce(
+        new AppError(
+          "Veuillez sélectionner au moins une option",
+          400,
+          ErrorCodes.ACCESS_SELECTION_REQUIRED,
+        ),
+      );
+
+      await expect(
+        createRegistration(input, priceBreakdown),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.ACCESS_SELECTION_REQUIRED,
+      });
+      expect(prismaMock.$transaction).not.toHaveBeenCalled();
     });
 
     it("should reject lab sponsorship payment method when sponsorships are enabled", async () => {
@@ -1347,6 +1389,67 @@ describe("Registrations Service", () => {
       });
 
       expect(result.registration).toBeDefined();
+    });
+
+    it("should enforce the access selection requirement on access edits", async () => {
+      const existingAccessId = faker.string.uuid();
+      const priceWithAccess = createMockPriceBreakdown({
+        accessItems: [
+          {
+            accessId: existingAccessId,
+            name: "Workshop 1",
+            unitPrice: 50,
+            quantity: 1,
+            subtotal: 50,
+          },
+        ],
+      });
+      const registration = {
+        ...createMockRegistration({
+          paymentStatus: "PENDING",
+          paidAmount: 0,
+          priceBreakdown: priceWithAccess,
+          sponsorshipCode: null,
+        }),
+        form: {
+          id: formId,
+          eventId,
+          schema: { settings: { accessSelectionRequired: true } },
+        },
+        event: createPolicyEvent({ status: "OPEN" }),
+      };
+
+      prismaMock.registration.findUnique.mockResolvedValue(registration);
+      prismaMock.eventAccess.findMany.mockResolvedValue([
+        createMockEventAccess({ id: existingAccessId }),
+      ]);
+      (
+        assertAccessSelectionRequirement as unknown as Mock
+      ).mockRejectedValueOnce(
+        new AppError(
+          "Veuillez sélectionner au moins une option",
+          400,
+          ErrorCodes.ACCESS_SELECTION_REQUIRED,
+        ),
+      );
+
+      await expect(
+        editRegistrationPublic(registration.id, {
+          expectedUpdatedAt: registration.updatedAt.toISOString(),
+          accessSelections: [],
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.ACCESS_SELECTION_REQUIRED,
+      });
+
+      expect(assertAccessSelectionRequirement).toHaveBeenCalledWith(
+        registration.eventId,
+        expect.any(Object),
+        [],
+        { accessSelectionRequired: true },
+        expect.anything(),
+      );
     });
 
     it("should use in-transaction state for access validation, pricing, and update precondition", async () => {

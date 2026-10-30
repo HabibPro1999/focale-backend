@@ -20,18 +20,18 @@ import {
   enqueueRealtimeOutboxEvent,
 } from "@core/outbox";
 import {
-  generatePasswordResetLink,
   revokeFirebaseRefreshTokens,
   updateFirebaseUserPassword,
 } from "@shared/services/firebase.service.js";
-import { sendEmail } from "@modules/email/email-sender.service.js";
 import {
-  compileMjmlToHtml,
-  escapeHtml,
-} from "@modules/email/email-renderer.service.js";
+  sendInviteEmail,
+  sendResetPasswordEmail,
+} from "./abstracts.committee-emails.js";
+import {
+  buildCommitteeInviteLink,
+  mintCommitteeInviteToken,
+} from "./abstracts.committee-invite.service.js";
 import { assertClientModuleEnabled } from "@clients";
-import { config } from "@config/app.config.js";
-import type { ActionCodeSettings } from "firebase-admin/auth";
 import type {
   AddCommitteeMemberInput,
   AssignReviewersInput,
@@ -341,147 +341,8 @@ export async function listCommitteeMembers(eventId: string) {
 
 function generateThrowawayPassword(): string {
   // Random throwaway used to satisfy Firebase Auth's password requirement.
-  // The user immediately overwrites it via the reset link in their invite email.
+  // The user immediately overwrites it via the invite link in their email.
   return `${randomUUID()}A!${randomUUID()}`;
-}
-
-/**
- * ActionCodeSettings forwarded with every committee password-reset link.
- * The Firebase Console "Customize action URL" maps the action handler to
- * ${ADMIN_APP_URL}/auth/action; the `url` here is the final post-reset
- * destination Firebase appends as `continueUrl`, *not* another action URL —
- * pointing it back at /auth/action loops the redirect onto a handler page
- * with no oobCode and renders an "unknown mode" error.
- *
- * `handleCodeInApp` is intentionally not set — that flag is for email-link
- * sign-in, not password reset.
- */
-function buildPasswordResetActionCodeSettings(): ActionCodeSettings {
-  return {
-    url: `${config.urls.adminAppUrl}/committee`,
-  };
-}
-
-const EVENT_NAME_TOKEN = "{eventName}";
-
-interface SendCommitteeMjmlEmailInput {
-  to: string;
-  toName?: string | null;
-  subject: string;
-  headline: string;
-  intro: string;
-  ctaText: string;
-  link: string;
-  eventName: string;
-  category: string;
-  footnote?: string;
-  logContext: string;
-}
-
-/**
- * Shared MJML + SendGrid plumbing for committee transactional emails.
- *
- * All user-controlled strings are HTML-escaped before being interpolated into
- * the MJML template, since MJML treats text as raw markup.
- */
-async function sendCommitteeMjmlEmail(
-  input: SendCommitteeMjmlEmailInput,
-): Promise<boolean> {
-  const toName = input.toName?.trim() || input.to;
-  const safeName = escapeHtml(toName);
-  const safeEventName = escapeHtml(input.eventName);
-  const safeLink = escapeHtml(input.link);
-  const safeHeadline = escapeHtml(input.headline);
-  const safeCtaText = escapeHtml(input.ctaText);
-  const safeIntro = escapeHtml(input.intro).replaceAll(
-    EVENT_NAME_TOKEN,
-    `<strong>${safeEventName}</strong>`,
-  );
-  // The intro is composed by the caller — it intentionally allows the
-  // {eventName} placeholder to render as bold-wrapped, escaped event name.
-  // Caller-provided literal text is otherwise already plain English/French.
-  const footnoteBlock = input.footnote
-    ? `<mj-text font-size="13px" color="#6b7280">${escapeHtml(
-        input.footnote,
-      )}</mj-text>`
-    : "";
-  const mjml = `
-<mjml>
-  <mj-head>
-    <mj-attributes>
-      <mj-all font-family="Helvetica, Arial, sans-serif" />
-      <mj-text font-size="15px" line-height="1.6" color="#1f2937" />
-    </mj-attributes>
-  </mj-head>
-  <mj-body background-color="#fafaf9">
-    <mj-section padding="32px 24px">
-      <mj-column>
-        <mj-text font-size="20px" font-weight="600">${safeHeadline}</mj-text>
-        <mj-text>Bonjour ${safeName},</mj-text>
-        <mj-text>${safeIntro}</mj-text>
-        <mj-button background-color="#0d9488" color="#ffffff" border-radius="6px" href="${safeLink}">${safeCtaText}</mj-button>
-        <mj-text font-size="13px" color="#6b7280">Ce lien est valable pour une durée limitée. Après avoir défini votre mot de passe, vous pourrez vous connecter directement avec votre email.</mj-text>
-        ${footnoteBlock}
-      </mj-column>
-    </mj-section>
-  </mj-body>
-</mjml>`;
-  const { html } = compileMjmlToHtml(mjml);
-  const result = await sendEmail({
-    to: input.to,
-    toName,
-    subject: input.subject,
-    html,
-    categories: [input.category],
-  });
-  if (!result.success) {
-    logger.error({ email: input.to, error: result.error }, input.logContext);
-  }
-  return result.success;
-}
-
-async function sendInviteEmail(
-  user: Pick<User, "email" | "name">,
-  eventName: string,
-  link: string,
-): Promise<boolean> {
-  return sendCommitteeMjmlEmail({
-    to: user.email,
-    toName: user.name,
-    subject: `Invitation au comité scientifique - ${eventName}`,
-    headline: "Bienvenue au comité scientifique",
-    intro:
-      "Vous êtes invité(e) à rejoindre le comité scientifique de {eventName} sur Focale. Pour activer votre compte, choisissez un mot de passe avec le lien sécurisé ci-dessous :",
-    ctaText: "Définir mon mot de passe",
-    link,
-    eventName,
-    category: "committee-invite",
-    footnote:
-      "Si vous n'attendiez pas cette invitation, vous pouvez ignorer cet email.",
-    logContext: "Failed to send committee invitation email",
-  });
-}
-
-async function sendResetPasswordEmail(
-  user: Pick<User, "email" | "name">,
-  eventName: string,
-  link: string,
-): Promise<boolean> {
-  return sendCommitteeMjmlEmail({
-    to: user.email,
-    toName: user.name,
-    subject: "Réinitialisation du mot de passe comité",
-    headline: "Réinitialiser votre mot de passe comité",
-    intro:
-      "Une réinitialisation du mot de passe a été demandée pour votre compte comité scientifique sur {eventName}. Utilisez le lien sécurisé ci-dessous pour choisir un nouveau mot de passe :",
-    ctaText: "Définir mon mot de passe",
-    link,
-    eventName,
-    category: "committee-password-reset",
-    footnote:
-      "Si vous n'avez pas demandé cette réinitialisation, vous pouvez ignorer cet email.",
-    logContext: "Failed to send committee password-reset email",
-  });
 }
 
 function assertCommitteeUserEligible(user: User) {
@@ -573,11 +434,16 @@ export async function addCommitteeMember(
   // doesn't roll the membership back. The admin sees a warning and can resend.
   const inviteEmailSent = await (async () => {
     try {
-      const link = await generatePasswordResetLink(
-        user.email,
-        buildPasswordResetActionCodeSettings(),
+      const token = await mintCommitteeInviteToken(
+        user.id,
+        eventId,
+        performedBy,
       );
-      return await sendInviteEmail(user, event?.name ?? "the event", link);
+      return await sendInviteEmail(
+        user,
+        event?.name ?? "the event",
+        buildCommitteeInviteLink(token),
+      );
     } catch (err) {
       logger.error(
         { err, userId: user.id, eventId, createdUser },
@@ -1095,12 +961,13 @@ async function assertCommitteeMemberExists(eventId: string, userId: string) {
 }
 
 /**
- * Re-issue a password-reset link for a committee member and email it to them.
- * Used by admins to unblock members who lost the original invite email.
+ * Re-issue a single-use invite link for a committee member and email it to
+ * them. Used by admins to unblock members who lost the original invite email.
  *
- * The link itself is generated by Firebase regardless of whether SendGrid
- * delivers the email; we audit-log the admin's intent and report the email
- * outcome to the caller so the UI can surface a warning when delivery fails.
+ * Minting supersedes (deletes) any earlier unused token for this membership,
+ * so the previously emailed link stops working. We audit-log the admin's
+ * intent and report the email outcome to the caller so the UI can surface a
+ * warning when delivery fails.
  */
 export async function resendCommitteeInvite(
   eventId: string,
@@ -1111,24 +978,29 @@ export async function resendCommitteeInvite(
     where: { userId_eventId: { userId, eventId } },
     select: {
       active: true,
-      user: { select: { email: true, name: true } },
+      user: { select: { email: true, name: true, active: true, role: true } },
       event: { select: { name: true } },
     },
   });
-  if (!membership?.active) {
+  // A deactivated account (or one whose role moved off the committee) can never
+  // sign in, so a fresh invite would only email a dead link. Same 404 as a
+  // missing membership — from the admin's point of view there is no member to
+  // resend to.
+  if (
+    !membership?.active ||
+    !membership.user.active ||
+    membership.user.role !== UserRole.SCIENTIFIC_COMMITTEE
+  ) {
     throw new AppError("Committee member not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   let inviteEmailSent = false;
   try {
-    const link = await generatePasswordResetLink(
-      membership.user.email,
-      buildPasswordResetActionCodeSettings(),
-    );
+    const token = await mintCommitteeInviteToken(userId, eventId, performedBy);
     inviteEmailSent = await sendResetPasswordEmail(
       membership.user,
       membership.event.name,
-      link,
+      buildCommitteeInviteLink(token),
     );
   } catch (err) {
     logger.error(
@@ -1142,7 +1014,7 @@ export async function resendCommitteeInvite(
     entityType: "User",
     entityId: userId,
     action: "admin_reset_password",
-    changes: { method: { old: null, new: "email_link" } },
+    changes: { method: { old: null, new: "invite_token" } },
     performedBy,
   });
 
@@ -1165,6 +1037,19 @@ export async function setCommitteeMemberPassword(
 
   await updateFirebaseUserPassword(userId, newPassword);
   await revokeFirebaseRefreshTokens(userId);
+
+  // The admin just set a live password, so every outstanding invite link — on
+  // this event and any other — must stop being a way to overwrite it.
+  try {
+    await prisma.committeeInviteToken.deleteMany({
+      where: { userId, usedAt: null },
+    });
+  } catch (err) {
+    logger.error(
+      { err, userId, eventId },
+      "Failed to purge committee invite tokens after an admin password override",
+    );
+  }
 
   await auditLog(prisma, {
     entityType: "User",

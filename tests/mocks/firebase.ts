@@ -12,7 +12,6 @@ export const firebaseAuthMock = {
   updateUser: vi.fn(),
   deleteUser: vi.fn(),
   setCustomUserClaims: vi.fn(),
-  generatePasswordResetLink: vi.fn(),
   updateFirebaseUserPassword: vi.fn(),
   revokeFirebaseRefreshTokens: vi.fn(),
 };
@@ -60,7 +59,6 @@ vi.mock("@shared/services/firebase.service.js", () => ({
   createFirebaseUser: firebaseAuthMock.createUser,
   setCustomClaims: firebaseAuthMock.setCustomUserClaims,
   deleteFirebaseUser: firebaseAuthMock.deleteUser,
-  generatePasswordResetLink: firebaseAuthMock.generatePasswordResetLink,
   updateFirebaseUserPassword: firebaseAuthMock.updateFirebaseUserPassword,
   revokeFirebaseRefreshTokens: firebaseAuthMock.revokeFirebaseRefreshTokens,
 }));

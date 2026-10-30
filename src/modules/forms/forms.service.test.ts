@@ -152,6 +152,123 @@ describe("Forms Service", () => {
       });
     });
 
+    it("should persist schema translations verbatim", async () => {
+      const mockForm = createMockForm({ eventId });
+      const schema = {
+        settings: { languages: ["fr" as const, "en" as const, "ar" as const] },
+        steps: [
+          {
+            id: "step-1",
+            title: "Info",
+            translations: { en: { title: "Info" }, ar: { title: "معلومات" } },
+            fields: [
+              {
+                id: "field-1",
+                type: "text" as const,
+                label: "Nom",
+                translations: {
+                  en: { label: "Name" },
+                  ar: { errorMessages: { required: "مطلوب" } },
+                },
+              },
+              {
+                id: "field-2",
+                type: "radio" as const,
+                label: "Formule",
+                options: [
+                  {
+                    id: "opt-1",
+                    label: "Standard",
+                    translations: { en: { label: "Standard" } },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+
+      vi.mocked(mockEventExists).mockResolvedValue(true);
+      prismaMock.form.findFirst.mockResolvedValue(null);
+      prismaMock.form.create.mockResolvedValue(mockForm);
+
+      await createForm({ eventId, name: "Trilingual Form", schema });
+
+      expect(prismaMock.form.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ schema }),
+      });
+    });
+
+    it("should reject an unknown translation language code", async () => {
+      vi.mocked(mockEventExists).mockResolvedValue(true);
+      prismaMock.form.findFirst.mockResolvedValue(null);
+
+      await expect(
+        createForm({
+          eventId,
+          name: "Invalid Form",
+          schema: {
+            steps: [
+              {
+                id: "step-1",
+                title: "Info",
+                fields: [
+                  {
+                    id: "field-1",
+                    type: "text",
+                    label: "Nom",
+                    translations: { de: { label: "Name" } },
+                  },
+                ],
+              },
+            ],
+          } as never,
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.VALIDATION_ERROR,
+      });
+      expect(prismaMock.form.create).not.toHaveBeenCalled();
+    });
+
+    it("should create a form with successTranslations", async () => {
+      const mockForm = createMockForm({ eventId });
+      const successTranslations = {
+        en: { successTitle: "Thank you!", successMessage: "See you soon." },
+        ar: { successTitle: "شكرا" },
+      };
+
+      vi.mocked(mockEventExists).mockResolvedValue(true);
+      prismaMock.form.findFirst.mockResolvedValue(null);
+      prismaMock.form.create.mockResolvedValue(mockForm);
+
+      await createForm({
+        eventId,
+        name: "Form with Success",
+        successTranslations,
+      });
+
+      expect(prismaMock.form.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ successTranslations }),
+      });
+    });
+
+    it("should store JsonNull when no successTranslations are provided", async () => {
+      const mockForm = createMockForm({ eventId });
+
+      vi.mocked(mockEventExists).mockResolvedValue(true);
+      prismaMock.form.findFirst.mockResolvedValue(null);
+      prismaMock.form.create.mockResolvedValue(mockForm);
+
+      await createForm({ eventId, name: "Plain Form" });
+
+      expect(prismaMock.form.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          successTranslations: Prisma.JsonNull,
+        }),
+      });
+    });
+
     it("should throw when event does not exist", async () => {
       const input = {
         eventId: "non-existent-event",
@@ -422,6 +539,129 @@ describe("Forms Service", () => {
       expect(prismaMock.form.update).toHaveBeenCalledWith({
         where: { id: formId },
         data: {},
+      });
+    });
+
+    it("should increment schemaVersion when only translations change", async () => {
+      const existingSchema = {
+        steps: [
+          {
+            id: "step-1",
+            title: "Info",
+            fields: [{ id: "field-1", type: "text", label: "Nom" }],
+          },
+        ],
+      };
+      const mockForm = createMockForm({
+        id: formId,
+        schemaVersion: 1,
+        schema: existingSchema,
+      });
+      const updatedForm = createMockForm({ id: formId, schemaVersion: 2 });
+
+      prismaMock.form.findUnique.mockResolvedValue(mockForm);
+      prismaMock.form.update.mockResolvedValue(updatedForm);
+
+      const newSchema = {
+        steps: [
+          {
+            id: "step-1",
+            title: "Info",
+            fields: [
+              {
+                id: "field-1",
+                type: "text" as const,
+                label: "Nom",
+                translations: { en: { label: "Name" } },
+              },
+            ],
+          },
+        ],
+      };
+      await updateForm(formId, { schema: newSchema });
+
+      expect(prismaMock.form.update).toHaveBeenCalledWith({
+        where: { id: formId },
+        data: expect.objectContaining({
+          schema: newSchema,
+          schemaVersion: { increment: 1 },
+        }),
+      });
+    });
+
+    it("should reject an unknown translation language code", async () => {
+      const mockForm = createMockForm({ id: formId, type: "REGISTRATION" });
+      prismaMock.form.findUnique.mockResolvedValue(mockForm);
+
+      await expect(
+        updateForm(formId, {
+          schema: {
+            steps: [
+              {
+                id: "step-1",
+                title: "Info",
+                fields: [
+                  {
+                    id: "field-1",
+                    type: "text",
+                    label: "Nom",
+                    translations: { de: { label: "Name" } },
+                  },
+                ],
+              },
+            ],
+          } as never,
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.VALIDATION_ERROR,
+      });
+      expect(prismaMock.form.update).not.toHaveBeenCalled();
+    });
+
+    it("should update successTranslations without bumping schemaVersion", async () => {
+      const mockForm = createMockForm({ id: formId });
+      prismaMock.form.findUnique.mockResolvedValue(mockForm);
+      prismaMock.form.update.mockResolvedValue(mockForm);
+
+      const successTranslations = { en: { successTitle: "Thank you!" } };
+      await updateForm(formId, { successTranslations });
+
+      expect(prismaMock.form.update).toHaveBeenCalledWith({
+        where: { id: formId },
+        data: { successTranslations },
+      });
+    });
+
+    it("should clear successTranslations with JsonNull without bumping schemaVersion", async () => {
+      const mockForm = createMockForm({
+        id: formId,
+        successTranslations: { en: { successTitle: "Thank you!" } },
+      });
+      prismaMock.form.findUnique.mockResolvedValue(mockForm);
+      prismaMock.form.update.mockResolvedValue(mockForm);
+
+      await updateForm(formId, { successTranslations: null });
+
+      expect(prismaMock.form.update).toHaveBeenCalledWith({
+        where: { id: formId },
+        data: { successTranslations: Prisma.JsonNull },
+      });
+    });
+
+    it("should leave successTranslations untouched when omitted", async () => {
+      const mockForm = createMockForm({
+        id: formId,
+        successTranslations: { en: { successTitle: "Thank you!" } },
+      });
+      prismaMock.form.findUnique.mockResolvedValue(mockForm);
+      prismaMock.form.update.mockResolvedValue(mockForm);
+
+      await updateForm(formId, { name: "Renamed" });
+
+      expect(prismaMock.form.update).toHaveBeenCalledWith({
+        where: { id: formId },
+        data: { name: "Renamed" },
       });
     });
 

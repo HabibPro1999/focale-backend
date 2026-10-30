@@ -155,7 +155,7 @@ export const TimeSlotSchema = z.object({
 
 // Groups access items by date (day)
 export const DateGroupSchema = z.object({
-  dateKey: z.string(), // ISO date string (e.g., "2026-04-16") or "no-date"
+  dateKey: z.string(), // ISO date string (e.g., "2026-04-16")
   label: z.string(), // Formatted display label (e.g., "Jeudi 16 avril")
   slots: z.array(TimeSlotSchema),
 });
@@ -164,7 +164,7 @@ export const GroupedAccessResponseSchema = z.object({
   groups: z.array(DateGroupSchema),
   addonGroup: z
     .object({
-      items: z.array(z.unknown()),
+      slots: z.array(TimeSlotSchema),
     })
     .nullable(),
 });

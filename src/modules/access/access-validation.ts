@@ -1,5 +1,8 @@
 import { prisma } from "@/database/client.js";
 import { evaluateConditions } from "@shared/utils/conditions.js";
+import { getExclusivityKey, getGroupedAccess } from "./access-grouping.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
 import type { AccessSelection, AccessCondition } from "./access.schema.js";
 import type { EventAccess } from "@/generated/prisma/client.js";
 import type { TxClient } from "@shared/types/prisma.js";
@@ -87,10 +90,7 @@ export async function validateAccessSelections(
 
   for (const selection of selections) {
     const access = accessMap.get(selection.accessId)!;
-    const typeKey =
-      access.type === "OTHER"
-        ? `OTHER:${access.groupLabel || ""}`
-        : access.type;
+    const typeKey = getExclusivityKey(access);
 
     if (!selectionsByType.has(typeKey)) selectionsByType.set(typeKey, []);
     selectionsByType.get(typeKey)!.push({ access, selection });
@@ -111,6 +111,25 @@ export async function validateAccessSelections(
           if (!(aEnd <= bStart || bEnd <= aStart)) {
             errors.push(`Time conflict: "${a.name}" and "${b.name}" overlap`);
           }
+        }
+
+        // Undated items of the same exclusivity key render as one radio group,
+        // so only one of them can be selected. Included-in-base items are
+        // exempt (they can never be deselected), and pairs already held by the
+        // registration are grandfathered.
+        const bothExisting =
+          existingAccessIds?.has(a.id) && existingAccessIds.has(b.id);
+        if (
+          a.type !== "ADDON" &&
+          a.startsAt === null &&
+          b.startsAt === null &&
+          !a.includedInBase &&
+          !b.includedInBase &&
+          !bothExisting
+        ) {
+          errors.push(
+            `Only one of "${a.name}" and "${b.name}" can be selected`,
+          );
         }
       }
     }
@@ -173,4 +192,60 @@ export async function validateAccessSelections(
   }
 
   return { valid: errors.length === 0, errors };
+}
+
+/**
+ * Throws ACC_7012 when the form requires an access selection, the registrant
+ * made none, and something was actually selectable.
+ *
+ * Rule 1: satisfied as soon as one selected item is NOT `includedInBase`
+ *         (auto-included pack items never count as a choice).
+ * Rule 2: skipped when nothing is selectable, i.e. no visible item that is
+ *         both not `includedInBase` and not full.
+ *
+ * Note: `getGroupedAccess` reads through the global `prisma` client, not `db`.
+ * That is acceptable here — the visibility computation is read-only and does
+ * not need to observe uncommitted transaction state.
+ */
+export async function assertAccessSelectionRequirement(
+  eventId: string,
+  formData: Record<string, unknown>,
+  selections: AccessSelection[],
+  settings: { accessSelectionRequired?: boolean } | null | undefined,
+  db: AccessValidationDbClient = prisma,
+): Promise<void> {
+  if (settings?.accessSelectionRequired !== true) return;
+
+  const selectedIds = selections
+    .filter((s) => s.quantity > 0)
+    .map((s) => s.accessId);
+
+  if (selectedIds.length > 0) {
+    const selectedItems = await db.eventAccess.findMany({
+      where: { id: { in: selectedIds }, eventId },
+      select: { id: true, includedInBase: true },
+    });
+    // Rule 1: a selection the registrant actually made satisfies the requirement.
+    if (selectedItems.some((item) => !item.includedInBase)) return;
+  }
+
+  // Rule 2: skip the requirement when nothing is selectable for this registrant.
+  const grouped = await getGroupedAccess(eventId, formData, selectedIds);
+  const visibleItems = [
+    ...grouped.groups.flatMap((group) =>
+      group.slots.flatMap((slot) => slot.items),
+    ),
+    ...(grouped.addonGroup?.slots.flatMap((slot) => slot.items) ?? []),
+  ] as Array<{ includedInBase: boolean; isFull: boolean }>;
+
+  const selectable = visibleItems.filter(
+    (item) => !item.includedInBase && !item.isFull,
+  );
+  if (selectable.length === 0) return;
+
+  throw new AppError(
+    "Veuillez sélectionner au moins une option",
+    400,
+    ErrorCodes.ACCESS_SELECTION_REQUIRED,
+  );
 }

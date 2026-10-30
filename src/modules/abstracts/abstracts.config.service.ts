@@ -93,6 +93,8 @@ export async function updateConfig(
   if (fields.bookOrder !== undefined) data.bookOrder = fields.bookOrder;
   if (fields.bookIncludeAuthorNames !== undefined)
     data.bookIncludeAuthorNames = fields.bookIncludeAuthorNames;
+  if (fields.languages !== undefined)
+    data.languages = fields.languages as Prisma.InputJsonValue;
 
   // Deadlines: accept ISO string or null → Date | null
   for (const key of [
@@ -209,6 +211,7 @@ export async function createTheme(
       configId,
       label: body.label,
       description: body.description?.trim() || null,
+      translations: body.translations ?? Prisma.JsonNull,
       sortOrder: body.sortOrder ?? 0,
       active: body.active ?? true,
     },
@@ -235,6 +238,9 @@ export async function updateTheme(
       ...(body.label !== undefined && { label: body.label }),
       ...(body.description !== undefined && {
         description: body.description?.trim() || null,
+      }),
+      ...(body.translations !== undefined && {
+        translations: body.translations ?? Prisma.JsonNull,
       }),
       ...(body.sortOrder !== undefined && { sortOrder: body.sortOrder }),
       ...(body.active !== undefined && { active: body.active }),

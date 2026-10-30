@@ -3,6 +3,7 @@
 // ============================================================================
 
 import { z } from "zod";
+import { LanguageCodeSchema } from "@shared/schemas/i18n.schema.js";
 
 // ============================================================================
 // Query Schemas
@@ -80,7 +81,7 @@ export const SponsorshipFieldSchema = z.enum([
   "beneficiaryAddress",
 ]);
 
-export const ExportLanguageSchema = z.enum(["fr", "en", "ar"]);
+export const ExportLanguageSchema = LanguageCodeSchema;
 
 export const ExportRegistrationsBodySchema = z.strictObject({
   filters: z
