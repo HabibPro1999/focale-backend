@@ -1131,7 +1131,9 @@ checkout: `pnpm --filter @app/worker <name>`.
   link never wrote it), and each over-quote row of the 0011 sign-off reports
   `SPONSORED_NOT_COVERED`. Their money columns are right. One settlement write
   per row clears them, but no script does it and it changes what a sponsor's
-  usage records: decide per row (your decision) or keep them as known rows.
+  usage records. Rows of finished or archived events stay as they are, as known
+  rows (decision of 2026-10-30); run `invariants --event <id>` for each live
+  event and decide its rows (your decision).
 - Sponsored `VERIFYING` registrations (the preflight counts them): while one is
   under review its sponsorship-covered seats stay reserved, and confirmation
   adds only the uncovered seats. If the preflight reports any, reconcile their

@@ -225,18 +225,22 @@ const README_0011_QUERY = `
  * The README's 0011 rows whose stored sponsorship is below the breakdown's:
  * an admin linked the signup code and main capped the usage at the net
  * total. After 0011 they owe subtotal − sponsorship, more than the net the
- * breakdown quoted.
+ * breakdown quoted. Only live events (not archived, not ended) are listed:
+ * rows of finished events keep 0011's result as they are.
  */
 const OVER_QUOTE_0011_QUERY = `
-   SELECT id, total_amount, sponsorship_amount, (price_breakdown->>'sponsorshipTotal')::integer AS quoted_sponsorship
-   FROM registrations
-   WHERE sponsorship_amount > 0
-     AND jsonb_typeof(price_breakdown->'subtotal') = 'number'
-     AND jsonb_typeof(price_breakdown->'total') = 'number'
-     AND jsonb_typeof(price_breakdown->'sponsorshipTotal') = 'number'
-     AND total_amount = (price_breakdown->>'total')::integer
-     AND (price_breakdown->>'subtotal')::integer > total_amount
-     AND sponsorship_amount < (price_breakdown->>'sponsorshipTotal')::integer;`;
+   SELECT r.id, r.event_id, r.total_amount, r.sponsorship_amount, (r.price_breakdown->>'sponsorshipTotal')::integer AS quoted_sponsorship
+   FROM registrations r
+   JOIN events e ON e.id = r.event_id
+   WHERE r.sponsorship_amount > 0
+     AND e.status <> 'ARCHIVED'
+     AND e.end_date >= now()
+     AND jsonb_typeof(r.price_breakdown->'subtotal') = 'number'
+     AND jsonb_typeof(r.price_breakdown->'total') = 'number'
+     AND jsonb_typeof(r.price_breakdown->'sponsorshipTotal') = 'number'
+     AND r.total_amount = (r.price_breakdown->>'total')::integer
+     AND (r.price_breakdown->>'subtotal')::integer > r.total_amount
+     AND r.sponsorship_amount < (r.price_breakdown->>'sponsorshipTotal')::integer;`;
 
 async function readme0011Rows(client: Client): Promise<{ id: string; total: number; subtotal: number }[]> {
   const result = await client.query<{ id: string; total_amount: number; subtotal: string }>(README_0011_QUERY);
@@ -463,6 +467,17 @@ describe.runIf(dbTestsEnabled())("legacy production data across the cutover", ()
       expect(overQuote.rows.map((row) => [nameOf(row.id), Number(row.total_amount), Number(row.sponsorship_amount), Number(row.quoted_sponsorship)])).toEqual([
         ["registration.signupCodeThenLinked", 80, 80, 200],
       ]);
+      // The same row is not listed once its event has ended or is archived.
+      await database.client.query("BEGIN");
+      try {
+        await database.client.query("UPDATE events SET end_date = now() - INTERVAL '1 day' WHERE id = $1", [LEGACY_IDS.event.congress]);
+        expect((await database.client.query(OVER_QUOTE_0011_QUERY)).rows).toEqual([]);
+        await database.client.query("UPDATE events SET end_date = '2036-11-22 18:00:00', status = 'ARCHIVED' WHERE id = $1", [LEGACY_IDS.event.congress]);
+        expect((await database.client.query(OVER_QUOTE_0011_QUERY)).rows).toEqual([]);
+      } finally {
+        await database.client.query("ROLLBACK");
+      }
+      expect((await database.client.query(OVER_QUOTE_0011_QUERY)).rows).toHaveLength(1);
     });
 
     it("apply --dry-run writes nothing; apply runs what it listed, defers none; verify --schema reports no error", async () => {
