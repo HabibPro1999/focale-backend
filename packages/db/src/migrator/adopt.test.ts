@@ -3,6 +3,7 @@ import { deriveCatalogProbes } from "./catalog";
 import {
   adoptionCatalogState,
   decideAdoption,
+  describeProbe,
   formatAdoptionReport,
   legacyTracking,
   mapLegacyNetworkingRows,
@@ -232,7 +233,8 @@ describe("superseded probes", () => {
       // 0018 drops the per-event table-name index that 0012 creates; 0024
       // rebuilds two 0001 email_logs indexes under the same names; 0031
       // replaces 0025's withdrawn-profile index with the erasure-due one;
-      // 0033 drops the abstract_code_sequences table and index from 0000.
+      // 0033 drops the abstract_code_sequences table (with its columns) and
+      // index from 0000.
       expect(nonEmpty).toEqual([
         ["0025", new Map([["index:networking_profiles_withdrawn_idx", "0031"]])],
         ["0012", new Map([["index:networking_tables_event_name_key", "0018"]])],
@@ -247,6 +249,11 @@ describe("superseded probes", () => {
           "0000",
           new Map([
             ["table::abstract_code_sequences", "0033"],
+            ["column:abstract_code_sequences:id", "0033"],
+            ["column:abstract_code_sequences:final_type", "0033"],
+            ["column:abstract_code_sequences:last_value", "0033"],
+            ["column:abstract_code_sequences:created_at", "0033"],
+            ["column:abstract_code_sequences:updated_at", "0033"],
             ["index:abstract_code_sequences_final_type_key", "0033"],
           ]),
         ],
@@ -358,5 +365,64 @@ describe("formatAdoptionReport", () => {
     expect(text).toContain("missing: table networking_second_factors");
     expect(text).toContain("Adoption aborted; nothing was written.");
     expect(text).not.toContain("hunter2");
+  });
+});
+
+describe("what an aborted 0000 lists as missing", () => {
+  const probe = (extra: Partial<CatalogObjectProbe>): CatalogObjectProbe => ({
+    migrationId: "0000",
+    variant: "shared",
+    statementIndex: 0,
+    kind: "column",
+    name: "banner_url",
+    table: "events",
+    expectedPresent: true,
+    source: "ddl",
+    ...extra,
+  });
+
+  it("names columns, enum labels and both accepted foreign key names", () => {
+    expect(describeProbe(probe({}))).toBe("column events.banner_url");
+    expect(describeProbe(probe({ kind: "label", table: "PaymentStatus", name: "PARTIAL" }))).toBe("label PaymentStatus.PARTIAL");
+    expect(
+      describeProbe(probe({
+        kind: "constraint",
+        table: "users",
+        name: "users_client_id_clients_id_fk",
+        aliases: ["users_client_id_fkey"],
+      })),
+    ).toBe("constraint users.users_client_id_clients_id_fk (or users_client_id_fkey)");
+  });
+
+  it("prints every failed probe, however many", () => {
+    const failed = Array.from({ length: 30 }, (_, index) => `column events.missing_${index}`);
+    const view = adoptionCatalogState({
+      migrationId: "0000",
+      variant: "shared",
+      matched: 1,
+      total: 31,
+      state: "partial",
+      probes: [
+        { probe: probe({ kind: "table", name: "events", table: undefined }), passed: true },
+        ...failed.map((_, index) => ({ probe: probe({ name: `missing_${index}` }), passed: false })),
+      ],
+    });
+    expect(view.failed).toEqual(failed);
+    const migration = fixture("0000", false);
+    const lines = formatAdoptionReport({
+      engine: "cockroach",
+      assessments: [{
+        migration,
+        abort: "0000: _prisma_migrations records a Prisma-managed schema, but the 0000 catalog probes do not all match",
+        evidence: { source: "adopt", catalog: { state: view.state, matched: view.matched, total: view.total, failed: view.failed } },
+        catalog: { migrationId: "0000", variant: "shared", matched: 1, total: 31, state: "partial", probes: [] },
+        carriedSteps: [],
+      }],
+      warnings: [],
+      errors: ["0000: _prisma_migrations records a Prisma-managed schema, but the 0000 catalog probes do not all match"],
+      aborted: true,
+      written: { migrations: 0, steps: 0 },
+    }, false);
+    expect(lines.filter((line) => line.trim().startsWith("missing:"))).toHaveLength(30);
   });
 });

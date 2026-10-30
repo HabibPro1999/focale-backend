@@ -12,6 +12,7 @@ import {
   deriveEffectiveCatalogProbes,
   inspectCatalogProbes,
 } from "./catalog";
+import { describeProbe } from "./adopt-rules";
 import {
   assertAdoptionRequiredIfNonEmpty,
   createMigrationLedger,
@@ -400,7 +401,10 @@ export async function verifyMigrations(
       if (probes.length) {
         const catalog = await inspectCatalogProbes(client, engine, migration, probes);
         if (catalog.state === "partial" || catalog.state === "none") {
-          errors.push(`Migration ${migration.id} final schema probes passed ${catalog.matched}/${catalog.total}`);
+          const missing = catalog.probes.filter(({ passed }) => !passed).map(({ probe }) => describeProbe(probe));
+          errors.push(
+            `Migration ${migration.id} final schema probes passed ${catalog.matched}/${catalog.total}; missing: ${missing.join(", ")}`,
+          );
         }
       } else if (deriveCatalogProbes(migration).length === 0) {
         warnings.push(`Migration ${migration.id} has no catalog probes`);
