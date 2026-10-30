@@ -179,7 +179,8 @@ against it.
 1. **Preflight (read-only).**
    `node packages/db/dist/ops/cutover-preflight-cli.js preflight --out <dir>`
    (from `packages/db`: `pnpm cutover:preflight preflight --out <dir>`;
-   `--out=<dir>` also works). It runs every query in one READ ONLY transaction
+   `--out=<dir>` also works). In the image only `/tmp` is writable by the
+   `node` user: use an absolute `<dir>` under it and copy it out. It runs every query in one READ ONLY transaction
    on a read-only session, proves a write is refused (SQLSTATE 25006) and ends
    with ROLLBACK. `<dir>` must be new or empty; it is created 0700 with 0600
    files: `report.md`, `report.json`, `table-counts.json` (the postflight
@@ -252,7 +253,9 @@ against it.
    Drizzle nor the Prisma name: inspect it before renaming anything.
 3. **Adopt.** `node packages/db/dist/migrator/cli.js adopt --apply`. It assesses
    again under the migration lease and writes the same verdicts, or aborts
-   without writing if the evidence changed. Expected: the same lines under
+   without writing a ledger row if the evidence changed (the empty ledger
+   tables it created first stay; adopt, apply and the preflight read an empty
+   ledger as no ledger, so run `adopt --apply` again once the cause is fixed). Expected: the same lines under
    `Migration adoption (cockroach; apply):`, ending
    `Wrote 7 migration record(s) and 0 step record(s).` It writes ledger rows
    only (0000 baseline; 0001, 0002 and 0007-0010 applied), creates exactly
