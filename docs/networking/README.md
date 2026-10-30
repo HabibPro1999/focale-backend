@@ -33,7 +33,7 @@ A missing embedding credential leaves the participant directory usable with an e
 
 ## Database migration
 
-The networking migrations (0012 onwards, with the CockroachDB-only 0017) run with the platform's through the unified runner. It refuses to run against an existing database without its ledger; adopt the existing history first with `node packages/db/dist/migrator/cli.js adopt` (dry run) and then `adopt --apply`. On production they apply in the same `apply` as the rest of the cutover ([migrator README, Production rollout](../../packages/db/src/migrator/README.md#production-rollout-operator-steps)).
+Networking's schema comes from migrations 0012-0020 (0017 on CockroachDB only), 0022, 0025, 0026, 0031, 0034 and 0035, applied by the unified runner with the platform's. The runner refuses to run against an existing database without its ledger; adopt the existing history first with `node packages/db/dist/migrator/cli.js adopt` (dry run) and then `adopt --apply`. On production they apply in the same `apply` as the rest of the cutover ([migrator README, Production rollout](../../packages/db/src/migrator/README.md#production-rollout-operator-steps)).
 
 PostgreSQL requires the pgvector extension package installed on the server and the `vector` extension installed in the database before migration 0013. The runner checks for it and never installs extensions. CockroachDB uses native `VECTOR`; the runner detects CockroachDB and does not check for a PostgreSQL extension. Verify the deployed CockroachDB version has native vector support before migration.
 
