@@ -2339,6 +2339,10 @@
         "isActive": {
           "default": true,
           "type": "boolean"
+        },
+        "attachments": {
+          "$ref": "#/$defs/EmailTemplateAttachmentsSchema",
+          "default": []
         }
       },
       "required": [
@@ -2346,7 +2350,8 @@
         "subject",
         "content",
         "category",
-        "isActive"
+        "isActive",
+        "attachments"
       ],
       "type": "object"
     },
@@ -2401,6 +2406,10 @@
         "isActive": {
           "default": true,
           "type": "boolean"
+        },
+        "attachments": {
+          "$ref": "#/$defs/EmailTemplateAttachmentsSchema",
+          "default": []
         }
       },
       "required": [
@@ -2409,7 +2418,8 @@
         "subject",
         "content",
         "category",
-        "isActive"
+        "isActive",
+        "attachments"
       ],
       "type": "object"
     },
@@ -3421,11 +3431,16 @@
         },
         "language": {
           "$ref": "#/$defs/LanguageCodeSchema"
+        },
+        "attachments": {
+          "$ref": "#/$defs/EmailTemplateAttachmentsSchema",
+          "default": []
         }
       },
       "required": [
         "subject",
-        "content"
+        "content",
+        "attachments"
       ],
       "type": "object"
     },
@@ -3443,6 +3458,10 @@
         "language": {
           "$ref": "#/$defs/LanguageCodeSchema"
         },
+        "attachments": {
+          "$ref": "#/$defs/EmailTemplateAttachmentsSchema",
+          "default": []
+        },
         "recipientEmail": {
           "format": "email",
           "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
@@ -3456,6 +3475,7 @@
       "required": [
         "subject",
         "content",
+        "attachments",
         "recipientEmail"
       ],
       "type": "object"
@@ -3757,6 +3777,30 @@
       ],
       "type": "string"
     },
+    "EmailTemplateAttachmentSchema": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "REGISTRATION_QR",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "EmailTemplateAttachmentsSchema": {
+      "items": {
+        "$ref": "#/$defs/EmailTemplateAttachmentSchema"
+      },
+      "maxItems": 5,
+      "type": "array"
+    },
     "EmailTemplateCategorySchema": {
       "enum": [
         "AUTOMATIC",
@@ -3960,6 +4004,7 @@
         "SPO_14005",
         "EML_15001",
         "EML_15002",
+        "EML_15003",
         "CON_16001",
         "CHK_17001",
         "CHK_17003",
@@ -17799,6 +17844,9 @@
         },
         "isActive": {
           "type": "boolean"
+        },
+        "attachments": {
+          "$ref": "#/$defs/EmailTemplateAttachmentsSchema"
         },
         "expectedUpdatedAt": {
           "format": "date-time",

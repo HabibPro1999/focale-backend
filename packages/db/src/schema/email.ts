@@ -9,7 +9,10 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
-import { StoredEmailContextSnapshotSchema } from "@app/contracts";
+import {
+  EmailTemplateAttachmentsSchema,
+  StoredEmailContextSnapshotSchema,
+} from "@app/contracts";
 import { idPk, timestamps } from "../helpers";
 import { jsonbOf } from "../jsonb";
 import {
@@ -46,6 +49,8 @@ export const emailTemplates = pgTable(
     }),
     isDefault: boolean().notNull().default(false),
     isActive: boolean().notNull().default(true),
+    // 0041: what each email from this template attaches, built at send time.
+    attachments: jsonbOf(EmailTemplateAttachmentsSchema).notNull().default([]),
     ...timestamps,
   },
   (t) => [

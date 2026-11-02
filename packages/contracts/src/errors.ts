@@ -148,6 +148,9 @@ export const ErrorCodes = {
   // Email (15xxx)
   MJML_COMPILATION_ERROR: "EML_15001",
   EMAIL_TEMPLATE_INACTIVE: "EML_15002",
+  // 400: an attachment the template's emails cannot carry, e.g. the
+  // registration QR code on an abstract-triggered template (no registration).
+  EMAIL_ATTACHMENT_NOT_SUPPORTED: "EML_15003",
 
   // Concurrency (16xxx)
   CONCURRENT_MODIFICATION: "CON_16001",

@@ -161,6 +161,29 @@ const triggerXorMessage = {
   path: ["trigger"],
 };
 
+/**
+ * One attachment a template's emails carry, built at send time. A
+ * discriminated union so further kinds can be added beside REGISTRATION_QR
+ * (the registrant's check-in QR code as a PNG).
+ */
+export const EmailTemplateAttachmentSchema = z.discriminatedUnion("type", [
+  z.strictObject({ type: z.literal("REGISTRATION_QR") }),
+]);
+
+/**
+ * The stored `email_templates.attachments` document (plan 5.2) and the
+ * request field: at most one attachment of each type.
+ */
+export const EmailTemplateAttachmentsSchema = z
+  .array(EmailTemplateAttachmentSchema)
+  .max(5)
+  .refine(
+    (attachments) =>
+      new Set(attachments.map((attachment) => attachment.type)).size ===
+      attachments.length,
+    { message: "Each attachment type may appear only once" },
+  );
+
 const emailTemplateBaseShape = {
   name: z.string().min(1).max(255),
   description: z.string().max(1000).optional(),
@@ -170,6 +193,7 @@ const emailTemplateBaseShape = {
   trigger: AutomaticEmailTriggerSchema.optional().nullable(),
   abstractTrigger: AbstractEmailTriggerSchema.optional().nullable(),
   isActive: z.boolean().default(true),
+  attachments: EmailTemplateAttachmentsSchema.default([]),
 };
 
 /** Full create schema (includes eventId). */
@@ -210,6 +234,7 @@ export const UpdateEmailTemplateSchema = z
     trigger: AutomaticEmailTriggerSchema.optional().nullable(),
     abstractTrigger: AbstractEmailTriggerSchema.optional().nullable(),
     isActive: z.boolean().optional(),
+    attachments: EmailTemplateAttachmentsSchema.optional(),
     // M11: optimistic-concurrency precondition from GET's `updatedAt`. Optional
     // for backward compatibility — omitted means last-write-wins, as before.
     expectedUpdatedAt: z.string().datetime().optional(),
@@ -361,6 +386,8 @@ export type EmailTemplateCategory = z.infer<typeof EmailTemplateCategorySchema>;
 export type AutomaticEmailTrigger = z.infer<typeof AutomaticEmailTriggerSchema>;
 export type AbstractEmailTrigger = z.infer<typeof AbstractEmailTriggerSchema>;
 export type EmailStatus = z.infer<typeof EmailStatusSchema>;
+export type EmailTemplateAttachment = z.infer<typeof EmailTemplateAttachmentSchema>;
+export type EmailTemplateAttachments = z.infer<typeof EmailTemplateAttachmentsSchema>;
 
 export type CreateEmailTemplateInput = z.infer<typeof CreateEmailTemplateSchema>;
 export type CreateEmailTemplateBody = z.infer<
@@ -389,7 +416,12 @@ export const EventEmailLogResponseSchema = z.object({
   clickedAt: z.string().nullable(), bouncedAt: z.string().nullable(), failedAt: z.string().nullable(),
 });
 
-export const DraftEmailPreviewSchema = SendCustomEmailSchema.extend({ language: LanguageCodeSchema.optional() });
+// `attachments` carries the editor's unsaved toggles: a draft test send
+// attaches them built from the sample registration.
+export const DraftEmailPreviewSchema = SendCustomEmailSchema.extend({
+  language: LanguageCodeSchema.optional(),
+  attachments: EmailTemplateAttachmentsSchema.default([]),
+});
 export const DraftEmailTestSendSchema = DraftEmailPreviewSchema.extend({
   recipientEmail: z.string().email(), recipientName: z.string().max(200).optional(),
 });

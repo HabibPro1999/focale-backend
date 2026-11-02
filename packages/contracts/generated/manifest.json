@@ -401,6 +401,14 @@
       "module": "packages/contracts/src/email.ts",
       "type": "EmailStatus"
     },
+    "EmailTemplateAttachmentSchema": {
+      "module": "packages/contracts/src/email.ts",
+      "type": "EmailTemplateAttachment"
+    },
+    "EmailTemplateAttachmentsSchema": {
+      "module": "packages/contracts/src/email.ts",
+      "type": "EmailTemplateAttachments"
+    },
     "EmailTemplateCategorySchema": {
       "module": "packages/contracts/src/email.ts",
       "type": "EmailTemplateCategory"

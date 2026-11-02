@@ -5,6 +5,7 @@ import {
   type BulkSendEmailInput,
   type DraftEmailPreview,
   type DraftEmailTestSend,
+  type EmailTemplateAttachment,
   type TiptapDocument,
 } from "@app/contracts";
 import {
@@ -25,6 +26,8 @@ import {
 import {
   getEmailProvider,
   getSampleEmailContext,
+  buildTemplateAttachments,
+  SAMPLE_REGISTRATION_ID,
   resolveEmailParts,
   buildEmailContextWithAccess,
   buildBatchEmailContext,
@@ -80,7 +83,7 @@ export class EmailSendService {
       sampleContext,
     );
 
-    return this.deliverTest(resolved, recipientEmail, recipientName);
+    return this.deliverTest(resolved, template.attachments, recipientEmail, recipientName);
   }
 
   async previewDraft(eventId: string, input: DraftEmailPreview) {
@@ -90,11 +93,19 @@ export class EmailSendService {
   }
 
   async testSendDraft(eventId: string, input: DraftEmailTestSend) {
-    return this.deliverTest(await this.previewDraft(eventId, input), input.recipientEmail, input.recipientName);
+    return this.deliverTest(await this.previewDraft(eventId, input), input.attachments, input.recipientEmail, input.recipientName);
   }
 
-  private async deliverTest(resolved: { subject: string; html: string; plain: string }, recipientEmail: string, recipientName?: string)
-    : Promise<{ success: true; message: string; messageId?: string }> {
+  /** Template attachments are built from the sample registration, so the test email carries a real QR code. */
+  private async deliverTest(
+    resolved: { subject: string; html: string; plain: string },
+    attachmentConfig: readonly EmailTemplateAttachment[],
+    recipientEmail: string,
+    recipientName?: string,
+  ): Promise<{ success: true; message: string; messageId?: string }> {
+    const attachments = await buildTemplateAttachments(attachmentConfig, {
+      registrationId: SAMPLE_REGISTRATION_ID,
+    });
     const result = await getEmailProvider().sendEmail({
       to: recipientEmail,
       toName: recipientName,
@@ -102,6 +113,7 @@ export class EmailSendService {
       html: resolved.html,
       plainText: resolved.plain,
       categories: ["test-email"],
+      ...(attachments.length > 0 && { attachments }),
     });
 
     if (!result.success) {

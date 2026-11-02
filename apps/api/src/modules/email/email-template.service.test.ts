@@ -48,6 +48,7 @@ function templateRow(overrides: Record<string, unknown> = {}) {
     abstractTrigger: null,
     isDefault: false,
     isActive: true,
+    attachments: [],
     createdAt: new Date(0),
     updatedAt: new Date(0),
     ...overrides,
@@ -165,6 +166,31 @@ describe("create", () => {
     ).resolves.toBeDefined();
   });
 
+  it("stores the attachments, an empty list by default", async () => {
+    const plain = (await service.create({ ...baseArgs, category: "MANUAL" })) as Record<string, unknown>;
+    expect(plain.attachments).toEqual([]);
+
+    const withQr = (await service.create({
+      ...baseArgs,
+      category: "AUTOMATIC",
+      trigger: "REGISTRATION_CREATED",
+      attachments: [{ type: "REGISTRATION_QR" }],
+    })) as Record<string, unknown>;
+    expect(withQr.attachments).toEqual([{ type: "REGISTRATION_QR" }]);
+  });
+
+  it("rejects the registration QR on an abstract-triggered template (400 EML_15003)", async () => {
+    await expect(
+      service.create({
+        ...baseArgs,
+        category: "AUTOMATIC",
+        abstractTrigger: "ABSTRACT_SUBMISSION_ACK",
+        attachments: [{ type: "REGISTRATION_QR" }],
+      }),
+    ).rejects.toMatchObject({ status: 400, code: "EML_15003" });
+    expect(insertEmailTemplate).not.toHaveBeenCalled();
+  });
+
   it("maps a DB unique-index race to a 409", async () => {
     vi.mocked(insertEmailTemplate).mockResolvedValue({
       ok: false,
@@ -231,6 +257,33 @@ describe("update", () => {
         trigger: "PAYMENT_CONFIRMED",
       }),
     ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("writes the attachments when provided", async () => {
+    vi.mocked(getEmailTemplateById).mockResolvedValue(templateRow());
+    await service.update("tmpl-1", { attachments: [{ type: "REGISTRATION_QR" }] });
+    const patch = vi.mocked(updateEmailTemplate).mock.calls[0][1];
+    expect(patch).toEqual({ attachments: [{ type: "REGISTRATION_QR" }] });
+  });
+
+  it("rejects adding the registration QR to an abstract-triggered template (400 EML_15003)", async () => {
+    vi.mocked(getEmailTemplateById).mockResolvedValue(
+      templateRow({ category: "AUTOMATIC", abstractTrigger: "ABSTRACT_DECISION" }),
+    );
+    await expect(
+      service.update("tmpl-1", { attachments: [{ type: "REGISTRATION_QR" }] }),
+    ).rejects.toMatchObject({ status: 400, code: "EML_15003" });
+    expect(updateEmailTemplate).not.toHaveBeenCalled();
+  });
+
+  it("rejects switching a template that attaches the QR to an abstract trigger (400 EML_15003)", async () => {
+    vi.mocked(getEmailTemplateById).mockResolvedValue(
+      templateRow({ attachments: [{ type: "REGISTRATION_QR" }] }),
+    );
+    await expect(
+      service.update("tmpl-1", { category: "AUTOMATIC", abstractTrigger: "ABSTRACT_DECISION" }),
+    ).rejects.toMatchObject({ status: 400, code: "EML_15003" });
+    expect(updateEmailTemplate).not.toHaveBeenCalled();
   });
 
   // M11: optimistic-concurrency precondition.
@@ -302,6 +355,14 @@ describe("duplicate", () => {
     expect(dup.trigger).toBeNull();
     expect(dup.isActive).toBe(false);
     expect(dup.mjmlContent).toBe("OLD_MJML"); // reused, not recompiled
+  });
+
+  it("copies the attachments", async () => {
+    vi.mocked(getEmailTemplateById).mockResolvedValue(
+      templateRow({ attachments: [{ type: "REGISTRATION_QR" }] }),
+    );
+    const dup = (await service.duplicate("tmpl-1")) as Record<string, unknown>;
+    expect(dup.attachments).toEqual([{ type: "REGISTRATION_QR" }]);
   });
 
   it("uses a custom name when provided", async () => {
