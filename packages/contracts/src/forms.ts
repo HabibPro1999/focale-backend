@@ -1,0 +1,399 @@
+import { z } from "zod";
+import { hasUpdateField, paginationQueryShape } from "./zod-helpers";
+import {
+  FormLanguagesSchema,
+  translationsMapOf,
+} from "./i18n.schema";
+
+
+// ============================================================================
+// Field Schemas
+// ============================================================================
+
+export const FieldTypeSchema = z.enum([
+  "text",
+  "firstName",
+  "lastName",
+  "email",
+  "phone",
+  "number",
+  "textarea",
+  "dropdown",
+  "radio",
+  "checkbox",
+  "date",
+  "file",
+  "heading",
+  "paragraph",
+  "governorate",
+  "country",
+]);
+
+export const OptionTranslationEntrySchema = z.strictObject({
+  label: z.string().optional(),
+  description: z.string().optional(),
+});
+
+export const FieldOptionSchema = z.strictObject({
+  id: z.string(),
+  label: z.string(),
+  description: z.string().optional(),
+  maxCapacity: z.number().optional(),
+  currentCount: z.number().optional(),
+  priceModifier: z.number().optional(),
+  translations: translationsMapOf(OptionTranslationEntrySchema).optional(),
+});
+
+export const ConditionOperatorSchema = z.enum([
+  "equals",
+  "not_equals",
+  "contains",
+  "not_contains",
+  "greater_than",
+  "less_than",
+  "is_empty",
+  "is_not_empty",
+]);
+
+export const FieldConditionSchema = z.strictObject({
+  id: z.string().optional(),
+  fieldId: z.string(),
+  operator: ConditionOperatorSchema,
+  value: z.union([z.string(), z.number(), z.boolean()]).optional(),
+});
+
+export const FieldValidationErrorMessagesSchema = z.strictObject({
+  required: z.string().optional(),
+  minLength: z.string().optional(),
+  maxLength: z.string().optional(),
+  pattern: z.string().optional(),
+  email: z.string().optional(),
+  min: z.string().optional(),
+  max: z.string().optional(),
+});
+
+export const FieldValidationSchema = z.strictObject({
+  required: z.boolean().optional(),
+  minLength: z.number().int().positive().optional(),
+  maxLength: z.number().int().positive().optional(),
+  min: z.number().optional(),
+  max: z.number().optional(),
+  pattern: z.string().optional(),
+  fileTypes: z.array(z.string()).optional(),
+  maxFileSize: z.number().int().positive().optional(),
+  minValue: z.number().optional(),
+  maxValue: z.number().optional(),
+  step: z.number().optional(),
+  minDate: z.string().optional(),
+  maxDate: z.string().optional(),
+  acceptedFileTypes: z.array(z.string()).optional(),
+  minSelections: z.number().int().optional(),
+  maxSelections: z.number().int().optional(),
+  errorMessages: FieldValidationErrorMessagesSchema.optional(),
+});
+
+// Custom error-message translations live here, on the field sidecar, rather
+// than nested inside `validation` — the server never reads them.
+export const FieldTranslationEntrySchema = z.strictObject({
+  label: z.string().optional(),
+  placeholder: z.string().optional(),
+  helpText: z.string().optional(),
+  helperText: z.string().optional(),
+  content: z.string().optional(),
+  errorMessages: FieldValidationErrorMessagesSchema.optional(),
+});
+
+export const FormFieldSchema = z.strictObject({
+  id: z.string(),
+  type: FieldTypeSchema,
+  label: z.string().optional(),
+  placeholder: z.string().optional(),
+  helpText: z.string().optional(),
+  helperText: z.string().optional(),
+  required: z.boolean().optional(),
+  width: z.string().optional(),
+  options: z.array(FieldOptionSchema).optional(),
+  validation: FieldValidationSchema.optional(),
+  conditions: z.array(FieldConditionSchema).optional(),
+  conditionLogic: z.enum(["AND", "OR", "and", "or"]).optional(),
+  conditionAction: z.enum(["show", "disable"]).optional(),
+  clearOnHide: z.boolean().optional(),
+  defaultValue: z
+    .union([z.string(), z.number(), z.array(z.string())])
+    .optional(),
+  pricingEnabled: z.boolean().optional(),
+  gridColumn: z.string().optional(),
+  fieldKey: z.string().optional(),
+  phoneFormat: z.string().optional(),
+  dateFormat: z.string().optional(),
+  rows: z.number().int().optional(),
+  layout: z.enum(["vertical", "horizontal", "cards"]).optional(),
+  searchable: z.boolean().optional(),
+  headingSize: z.enum(["h2", "h3", "h4"]).optional(),
+  content: z.string().optional(),
+  translations: translationsMapOf(FieldTranslationEntrySchema).optional(),
+});
+
+// ============================================================================
+// Form Step Schema
+// ============================================================================
+
+export const StepTranslationEntrySchema = z.strictObject({
+  title: z.string().optional(),
+  description: z.string().optional(),
+});
+
+export const FormStepSchema = z.strictObject({
+  id: z.string(),
+  title: z.string(),
+  description: z.string().optional(),
+  fields: z.array(FormFieldSchema),
+  translations: translationsMapOf(StepTranslationEntrySchema).optional(),
+});
+
+// ============================================================================
+// Form Settings Schema
+// ============================================================================
+
+// Settings-level sidecar. Additive by design: the deferred per-language
+// settings copy (accessSectionTitle, addonGroupTitle, ...) lands here as one
+// optional key each, with no rename and no data migration.
+export const FormSettingsTranslationEntrySchema = z.strictObject({
+  registrationFeeLabel: z.string().max(120).optional(),
+});
+
+// Loose: existing persisted blobs already carry admin-authored settings keys
+// (isFree, screens, ...) that must keep round-tripping untouched.
+export const FormSettingsSchema = z.looseObject({
+  languages: FormLanguagesSchema.optional(),
+  // When true, the public registration form requires at least one non-included
+  // access option to be selected (skipped when nothing is selectable).
+  accessSelectionRequired: z.boolean().optional(),
+  registrationFeeLabel: z.string().max(120).optional(),
+  translations: translationsMapOf(
+    FormSettingsTranslationEntrySchema,
+  ).optional(),
+});
+
+// ============================================================================
+// Complete Form Schema (JSONB)
+// ============================================================================
+
+// Registration form schema structure
+// Uses looseObject to allow top-level extensions while requiring a valid persisted steps array
+export const FormSchemaJsonSchema = z.looseObject({
+  steps: z.array(FormStepSchema).min(1),
+  settings: FormSettingsSchema.optional(),
+});
+
+// ============================================================================
+// Sponsor Form Schemas
+// ============================================================================
+
+// Beneficiary template for sponsor forms
+export const BeneficiaryTemplateSchema = z.looseObject({
+  fields: z.array(FormFieldSchema),
+  minCount: z.number().int().min(1).default(1),
+  maxCount: z.number().int().max(500).default(100),
+});
+
+export const SponsorSummaryTranslationEntrySchema = z.strictObject({
+  title: z.string().optional(),
+  termsText: z.string().optional(),
+});
+
+// Summary settings for sponsor forms
+export const SponsorSummarySettingsSchema = z.looseObject({
+  title: z.string().optional(),
+  showPriceBreakdown: z.boolean().default(true),
+  termsText: z.string().optional(),
+  translations: translationsMapOf(
+    SponsorSummaryTranslationEntrySchema,
+  ).optional(),
+});
+
+// Sponsorship mode settings (only for SPONSOR forms)
+export const SponsorshipModeSchema = z.enum(["LINKED_ACCOUNT", "CODE"]);
+export const RegistrantSearchScopeSchema = z.enum(["ALL", "UNPAID_ONLY"]);
+
+export const SponsorshipSettingsSchema = z.strictObject({
+  sponsorshipMode: SponsorshipModeSchema.default("CODE"),
+  registrantSearchScope: RegistrantSearchScopeSchema.optional(),
+  autoApproveSponsorship: z.boolean().optional(),
+});
+
+// Sponsor form schema structure
+export const SponsorFormSchemaJsonSchema = z.looseObject({
+  formType: z.literal("SPONSOR"),
+  sponsorSteps: z.array(FormStepSchema),
+  beneficiaryTemplate: BeneficiaryTemplateSchema,
+  summarySettings: SponsorSummarySettingsSchema.optional(),
+  sponsorshipSettings: SponsorshipSettingsSchema.optional(),
+  settings: FormSettingsSchema.optional(),
+});
+
+const UpdatableFormSchemaJsonSchema = z.union([
+  FormSchemaJsonSchema,
+  SponsorFormSchemaJsonSchema,
+]);
+
+/**
+ * The stored `forms.schema` document (plan 5.2): a registration or a sponsor
+ * form schema exactly as the form routes write it (parsed, defaults filled
+ * in). Both shapes stay open at the top level and in `settings`: admin-authored
+ * keys the server does not know round-trip untouched.
+ */
+export const StoredFormSchemaJsonSchema = z.union([
+  FormSchemaJsonSchema,
+  SponsorFormSchemaJsonSchema,
+]);
+
+// ============================================================================
+// Request Schemas
+// ============================================================================
+
+export const SuccessTranslationsSchema = translationsMapOf(
+  z.strictObject({
+    successTitle: z.string().optional(),
+    successMessage: z.string().optional(),
+  }),
+);
+
+export const CreateFormSchema = z.strictObject({
+  eventId: z.string().uuid(),
+  name: z.string().min(1).max(200),
+  schema: FormSchemaJsonSchema.optional(), // Optional - backend provides defaults
+  successTitle: z.string().optional().nullable(),
+  successMessage: z.string().optional().nullable(),
+  successTranslations: SuccessTranslationsSchema.optional().nullable(),
+});
+
+export const UpdateFormSchema = z
+  .strictObject({
+    name: z.string().min(1).max(200).optional(),
+    schema: UpdatableFormSchemaJsonSchema.optional(),
+    successTitle: z.string().optional().nullable(),
+    successMessage: z.string().optional().nullable(),
+    successTranslations: SuccessTranslationsSchema.optional().nullable(),
+  })
+  .refine(hasUpdateField, {
+    message: "At least one field must be provided for update",
+  });
+
+export const ListFormsQuerySchema = z.strictObject({
+  ...paginationQueryShape(),
+  eventId: z.string().uuid().optional(),
+  search: z.string().optional(),
+  type: z.enum(["REGISTRATION", "SPONSOR"]).optional(),
+});
+
+export const FormIdParamSchema = z.strictObject({
+  id: z.string().uuid(),
+});
+
+// Update sponsorship settings (for SPONSOR forms only)
+export const UpdateSponsorshipSettingsSchema = z.strictObject({
+  sponsorshipMode: SponsorshipModeSchema,
+  registrantSearchScope: RegistrantSearchScopeSchema.optional(),
+  autoApproveSponsorship: z.boolean().optional(),
+});
+
+// POST /api/forms/events/:id/sponsor body — looseObject: unknown keys accepted.
+export const CreateSponsorFormBodySchema = z.looseObject({
+  name: z.string().min(1).max(200).optional(),
+});
+
+// ============================================================================
+// Types
+// ============================================================================
+
+export type FieldType = z.infer<typeof FieldTypeSchema>;
+export type FieldCondition = z.infer<typeof FieldConditionSchema>;
+export type FieldValidation = z.infer<typeof FieldValidationSchema>;
+export type FieldTranslationEntry = z.infer<typeof FieldTranslationEntrySchema>;
+export type OptionTranslationEntry = z.infer<
+  typeof OptionTranslationEntrySchema
+>;
+export type StepTranslationEntry = z.infer<typeof StepTranslationEntrySchema>;
+export type FormField = z.infer<typeof FormFieldSchema>;
+export type FormStep = z.infer<typeof FormStepSchema>;
+export type FormSettings = z.infer<typeof FormSettingsSchema>;
+export type FormSettingsTranslationEntry = z.infer<
+  typeof FormSettingsTranslationEntrySchema
+>;
+export type SuccessTranslations = z.infer<typeof SuccessTranslationsSchema>;
+export type FormSchemaJson = z.infer<typeof FormSchemaJsonSchema>;
+export type SponsorshipSettings = z.infer<typeof SponsorshipSettingsSchema>;
+export type SponsorFormSchemaJson = z.infer<typeof SponsorFormSchemaJsonSchema>;
+export type StoredFormSchemaJson = z.infer<typeof StoredFormSchemaJsonSchema>;
+export type CreateFormInput = z.infer<typeof CreateFormSchema>;
+export type UpdateFormInput = z.infer<typeof UpdateFormSchema>;
+export type ListFormsQuery = z.infer<typeof ListFormsQuerySchema>;
+export type CreateSponsorFormBody = z.infer<typeof CreateSponsorFormBodySchema>;
+export type UpdateSponsorshipSettingsInput = z.infer<
+  typeof UpdateSponsorshipSettingsSchema
+>;
+
+// ============================================================================
+// Pure schema helpers (shared by the api service layer and the db txn layer;
+// framework- and DB-free so both packages can consume them from @app/contracts).
+// ============================================================================
+
+/**
+ * Sponsorship mode embedded in a (sponsor) form schema. Defaults to "CODE"
+ * when absent — identical to the legacy getSponsorshipMode.
+ */
+export function getSponsorshipMode(
+  schema: unknown,
+): SponsorshipSettings["sponsorshipMode"] {
+  return getSponsorshipSettings(schema).sponsorshipMode ?? "CODE";
+}
+
+/**
+ * Collect field ids from a form schema. Walks ONLY `steps[].fields[].id`
+ * (NOT sponsorSteps / beneficiaryTemplate) — preserved verbatim from legacy,
+ * so on sponsor-shaped schemas this returns [] unless a `steps` key is present.
+ */
+export function extractFieldIds(schema: unknown): string[] {
+  const ids: string[] = [];
+  if (!schema || typeof schema !== "object") return ids;
+
+  const schemaObj = schema as {
+    steps?: Array<{ fields?: Array<{ id?: string }> }>;
+  };
+
+  if (Array.isArray(schemaObj.steps)) {
+    for (const step of schemaObj.steps) {
+      if (Array.isArray(step.fields)) {
+        for (const field of step.fields) {
+          if (field.id) ids.push(field.id);
+        }
+      }
+    }
+  }
+  return ids;
+}
+
+
+/** Reads settings without parsing or changing stored-schema compatibility. */
+export function getSponsorshipSettings(schema: unknown): Partial<SponsorshipSettings> {
+  return (schema as { sponsorshipSettings?: Partial<SponsorshipSettings> } | null)?.sponsorshipSettings ?? {};
+}
+
+/** Keep the steps-only field walker, duplicate ids and previous-field order. */
+export function removedFieldIds(previous: unknown, next: unknown): string[] {
+  const nextIds = extractFieldIds(next);
+  return extractFieldIds(previous).filter((fieldId) => !nextIds.includes(fieldId));
+}
+
+/** Sponsor settings are a shallow patch; schema fields keep their values. */
+export function mergeSponsorshipSettings(
+  schema: SponsorFormSchemaJson,
+  settings: UpdateSponsorshipSettingsInput,
+): SponsorFormSchemaJson {
+  return { ...schema, sponsorshipSettings: { ...schema.sponsorshipSettings, ...settings } };
+}
+
+/** Copy to an event with no form of this type; one form per event/type remains enforced. */
+export const DuplicateFormSchema = z.strictObject({ targetEventId: z.string().uuid(), name: z.string().min(1).max(200).optional() });
+export type DuplicateFormInput = z.infer<typeof DuplicateFormSchema>;

@@ -1,0 +1,164 @@
+import { setTimeout as sleep } from "node:timers/promises";
+import { sql } from "drizzle-orm";
+import { DB_TIMEOUT_MAX_MS } from "@app/contracts";
+import { getDb, getDbSettings, type DbTransaction, type DbExecutor } from "./client";
+
+type TxnFn<T> = (tx: DbTransaction) => Promise<T>;
+
+type PgErrorShape = { code?: unknown; constraint?: unknown; table?: unknown };
+
+/**
+ * Walk an error's `cause` chain until a pg error carrying `code` is found.
+ * drizzle-orm wraps every driver error in DrizzleQueryError, which exposes the
+ * pg error only on `.cause` (no `code` on the wrapper itself).
+ */
+function unwrapPgError(err: unknown): PgErrorShape | null {
+  let current = err as (PgErrorShape & { cause?: unknown }) | null | undefined;
+  for (let depth = 0; current && depth < 10; depth++) {
+    if (typeof current.code === "string") return current;
+    current = current.cause as typeof current;
+  }
+  return null;
+}
+
+/**
+ * True for the pg SQLSTATEs worth retrying: 40001 serialization_failure
+ * (CockroachDB "restart transaction") and 40P01 deadlock_detected.
+ */
+export function isSerializationFailure(err: unknown): boolean {
+  const code = unwrapPgError(err)?.code;
+  return code === "40001" || code === "40P01";
+}
+
+/**
+ * SQLSTATE of the pg error buried in `err`'s cause chain, or null when none.
+ * Restricted to 5-char SQLSTATE shape so Node errno codes (ENOENT, …) that
+ * also live on `.code` are not mistaken for database errors.
+ */
+export function pgErrorCode(err: unknown): string | null {
+  const code = unwrapPgError(err)?.code;
+  return typeof code === "string" && /^[0-9A-Z]{5}$/.test(code) ? code : null;
+}
+
+/**
+ * pg unique_violation (SQLSTATE 23505) detector. Returns the offending index
+ * name in `constraint` (empty string when the driver did not surface one), or
+ * null when the error is not a unique violation. CockroachDB reports the index
+ * in error.constraint; callers map constraint names to domain errors.
+ */
+export function pgUniqueViolation(
+  err: unknown,
+): { constraint: string } | null {
+  const e = unwrapPgError(err);
+  if (e?.code !== "23505") return null;
+  return { constraint: typeof e.constraint === "string" ? e.constraint : "" };
+}
+
+/**
+ * Value-free identification of a pg error for logs: SQLSTATE, constraint and
+ * table only. Never the message/detail/query/params, which can embed row
+ * values (e.g. `Key (email)=(…) already exists`). Null when `err` carries no
+ * SQLSTATE in its cause chain.
+ */
+export function pgErrorLogFields(
+  err: unknown,
+): { code: string; constraint: string | null; table: string | null } | null {
+  const code = pgErrorCode(err);
+  if (code === null) return null;
+  const e = unwrapPgError(err);
+  return {
+    code,
+    constraint: typeof e?.constraint === "string" ? e.constraint : null,
+    table: typeof e?.table === "string" ? e.table : null,
+  };
+}
+
+/**
+ * Retry a serializable transaction on CockroachDB/Postgres serialization
+ * failures. 5 attempts total; delay = 25ms * 2^(attempt-1) + up to 50% jitter;
+ * retries only on SQLSTATE 40001/40P01; rethrows the original error otherwise
+ * or once attempts are exhausted. Ported from legacy withTxnRetry.
+ */
+export async function withTxnRetry<T>(
+  fn: () => Promise<T>,
+  opts: { attempts?: number; delayMs?: (attempt: number) => number } = {},
+): Promise<T> {
+  const attempts = opts.attempts ?? 5;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      if (attempt >= attempts || !isSerializationFailure(err)) throw err;
+      const base = 25 * 2 ** (attempt - 1);
+      const delay = opts.delayMs ? opts.delayMs(attempt) : base + Math.random() * (base * 0.5);
+      await sleep(delay);
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * READ COMMITTED transaction. Set explicitly because CockroachDB's session
+ * default is SERIALIZABLE.
+ */
+export function withTxn<T>(fn: TxnFn<T>): Promise<T> {
+  return getDb().transaction(fn, { isolationLevel: "read committed" });
+}
+
+/**
+ * True when `exec` is a transaction. A drizzle transaction executor exposes
+ * rollback(); the root db does not. Row locks and savepoints only make sense
+ * inside a transaction.
+ */
+export function isTransactionExecutor(exec: DbExecutor): boolean {
+  return typeof (exec as { rollback?: unknown }).rollback === "function";
+}
+
+/**
+ * READ COMMITTED transaction for the lock-first pattern (ADR 0001): take the
+ * row locks from `locks.ts` first, re-read the locked rows, then write. The
+ * whole transaction runs again on 40001/40P01: a deadlock between lockers
+ * (40P01 on PostgreSQL, 40001 on CockroachDB) or a CockroachDB restart.
+ * `fn` must be safe to re-run, so keep side effects other than database
+ * writes (email, storage, HTTP) outside it; use the outbox instead.
+ */
+export function withLockingTxn<T>(fn: TxnFn<T>): Promise<T> {
+  return withTxnRetry(() => withTxn(fn));
+}
+
+/** SERIALIZABLE transaction wrapped in withTxnRetry. */
+export function withSerializableTxn<T>(fn: TxnFn<T>): Promise<T> {
+  return withTxnRetry(() =>
+    getDb().transaction(fn, { isolationLevel: "serializable" }),
+  );
+}
+
+/**
+ * READ COMMITTED transaction whose statements may run for `timeoutMs`
+ * (0 = unlimited) instead of the pool's DB_STATEMENT_TIMEOUT_MS. `SET LOCAL`
+ * reverts at COMMIT/ROLLBACK on PostgreSQL and CockroachDB, so the pooled
+ * session keeps its default afterwards. Keep only queries inside `fn`; the
+ * idle-in-transaction timeout still applies between them.
+ */
+export function withStatementTimeout<T>(timeoutMs: number, fn: TxnFn<T>): Promise<T> {
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > DB_TIMEOUT_MAX_MS) {
+    return Promise.reject(
+      new Error(`Statement timeout must be an integer from 0 to ${DB_TIMEOUT_MAX_MS} ms`),
+    );
+  }
+  return getDb().transaction(
+    async (tx) => {
+      // SET takes no bind parameters; timeoutMs is a validated integer.
+      await tx.execute(sql.raw(`SET LOCAL statement_timeout = ${timeoutMs}`));
+      return fn(tx);
+    },
+    { isolationLevel: "read committed" },
+  );
+}
+
+/** Report/registration export fetches: DB_EXPORT_STATEMENT_TIMEOUT_MS per statement. */
+export function withExportStatementTimeout<T>(fn: TxnFn<T>): Promise<T> {
+  return withStatementTimeout(getDbSettings().exportStatementTimeoutMs, fn);
+}

@@ -1,0 +1,327 @@
+import { describe, expect, it } from "vitest";
+import {
+  BulkSendEmailSchema,
+  CreateEmailTemplateSchema,
+  CreateEmailTemplateBodySchema,
+  TiptapDocumentSchema,
+  UpdateEmailTemplateSchema,
+} from "./email";
+
+const eventId = "123e4567-e89b-12d3-a456-426614174000";
+const content = { type: "doc" as const, content: [] };
+const base = {
+  eventId,
+  name: "Welcome",
+  subject: "Hello",
+  content,
+};
+
+describe("CreateEmailTemplateSchema trigger XOR refine", () => {
+  it("accepts an automatic template with an abstractTrigger (and no trigger)", () => {
+    const parsed = CreateEmailTemplateSchema.safeParse({
+      ...base,
+      category: "AUTOMATIC",
+      abstractTrigger: "ABSTRACT_SUBMISSION_ACK",
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("accepts an automatic template with a (registration) trigger", () => {
+    const parsed = CreateEmailTemplateSchema.safeParse({
+      ...base,
+      category: "AUTOMATIC",
+      trigger: "REGISTRATION_CREATED",
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects an automatic template with neither trigger set", () => {
+    const parsed = CreateEmailTemplateSchema.safeParse({
+      ...base,
+      category: "AUTOMATIC",
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects an automatic template with BOTH triggers set", () => {
+    const parsed = CreateEmailTemplateSchema.safeParse({
+      ...base,
+      category: "AUTOMATIC",
+      trigger: "REGISTRATION_CREATED",
+      abstractTrigger: "ABSTRACT_SUBMISSION_ACK",
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects a MANUAL template that includes an abstractTrigger", () => {
+    const parsed = CreateEmailTemplateSchema.safeParse({
+      ...base,
+      category: "MANUAL",
+      abstractTrigger: "ABSTRACT_SUBMISSION_ACK",
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("accepts a MANUAL template with no triggers", () => {
+    const parsed = CreateEmailTemplateSchema.safeParse({
+      ...base,
+      category: "MANUAL",
+    });
+    expect(parsed.success).toBe(true);
+  });
+});
+
+describe("CreateEmailTemplateBodySchema", () => {
+  it("rejects an eventId in the body (strict object)", () => {
+    const parsed = CreateEmailTemplateBodySchema.safeParse({
+      eventId,
+      name: "x",
+      subject: "y",
+      content,
+      category: "MANUAL",
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("accepts a body without eventId and enforces the XOR refine", () => {
+    const ok = CreateEmailTemplateBodySchema.safeParse({
+      name: "x",
+      subject: "y",
+      content,
+      category: "MANUAL",
+    });
+    expect(ok.success).toBe(true);
+
+    const bad = CreateEmailTemplateBodySchema.safeParse({
+      name: "x",
+      subject: "y",
+      content,
+      category: "AUTOMATIC",
+    });
+    expect(bad.success).toBe(false);
+  });
+});
+
+describe("UpdateEmailTemplateSchema", () => {
+  it("accepts a partial update containing only abstractTrigger (no XOR at the update layer)", () => {
+    const parsed = UpdateEmailTemplateSchema.safeParse({
+      abstractTrigger: "ABSTRACT_SUBMISSION_ACK",
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects an empty update (at least one field required)", () => {
+    const parsed = UpdateEmailTemplateSchema.safeParse({});
+    expect(parsed.success).toBe(false);
+  });
+
+  it("treats an explicit null description as a provided field", () => {
+    const parsed = UpdateEmailTemplateSchema.safeParse({ description: null });
+    expect(parsed.success).toBe(true);
+  });
+
+  // M11: optimistic-concurrency precondition.
+  describe("expectedUpdatedAt", () => {
+    it("accepts an update alongside a valid ISO datetime", () => {
+      const parsed = UpdateEmailTemplateSchema.safeParse({
+        name: "New",
+        expectedUpdatedAt: "2026-07-19T00:00:00.000Z",
+      });
+      expect(parsed.success).toBe(true);
+    });
+
+    it("is optional — omitting it stays backward compatible", () => {
+      const parsed = UpdateEmailTemplateSchema.safeParse({ name: "New" });
+      expect(parsed.success).toBe(true);
+      expect(parsed.success && parsed.data.expectedUpdatedAt).toBeUndefined();
+    });
+
+    it("rejects a non-ISO-datetime value", () => {
+      const parsed = UpdateEmailTemplateSchema.safeParse({
+        name: "New",
+        expectedUpdatedAt: "not-a-date",
+      });
+      expect(parsed.success).toBe(false);
+    });
+
+    it("rejects a body containing only the precondition (nothing to update)", () => {
+      const parsed = UpdateEmailTemplateSchema.safeParse({
+        expectedUpdatedAt: "2026-07-19T00:00:00.000Z",
+      });
+      expect(parsed.success).toBe(false);
+    });
+  });
+});
+
+describe("TiptapDocumentSchema node style attributes", () => {
+  it("accepts editor-shaped default attrs and preserves other node and mark attrs", () => {
+    const parsed = TiptapDocumentSchema.safeParse({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          attrs: { textAlign: null, fontSize: null, lineHeight: null },
+          content: [
+            {
+              type: "text",
+              text: "A link",
+              marks: [
+                {
+                  type: "link",
+                  attrs: { href: "https://example.test", target: "_blank" },
+                },
+              ],
+            },
+            { type: "mention", attrs: { id: "firstName" } },
+          ],
+        },
+        {
+          type: "heading",
+          attrs: { level: 2, textAlign: "center" },
+          content: [{ type: "text", text: "Heading" }],
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.content[0]?.attrs).toMatchObject({
+      textAlign: null,
+      fontSize: null,
+      lineHeight: null,
+    });
+    expect(parsed.data.content[1]?.attrs).toMatchObject({
+      level: 2,
+      textAlign: "center",
+    });
+  });
+
+  it("normalizes unitless CSS lengths and rejects injected style values", () => {
+    const parsed = TiptapDocumentSchema.safeParse({
+      type: "doc",
+      content: [
+        { type: "paragraph", attrs: { fontSize: "16", lineHeight: 1.6 } },
+      ],
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.content[0]?.attrs).toMatchObject({
+        fontSize: "16px",
+        lineHeight: "1.6",
+      });
+    }
+
+    for (const attrs of [
+      { fontSize: '18px"><mj-include path="/tmp/canary" />' },
+      { lineHeight: '1.5"><mj-include path="/tmp/canary" />' },
+      { textAlign: 'left"><mj-include path="/tmp/canary" />' },
+    ]) {
+      expect(
+        TiptapDocumentSchema.safeParse({
+          type: "doc",
+          content: [{ type: "paragraph", attrs }],
+        }).success,
+      ).toBe(false);
+    }
+  });
+});
+
+describe("BulkSendFilterSchema role filter", () => {
+  it("accepts INVITED (registrations can hold it; admin UI offers it)", () => {
+    const parsed = BulkSendEmailSchema.safeParse({
+      filters: { role: ["INVITED", "PARTICIPANT"] },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects an unknown role", () => {
+    expect(
+      BulkSendEmailSchema.safeParse({ filters: { role: ["GHOST"] } }).success,
+    ).toBe(false);
+  });
+});
+
+describe("BulkSendEmailSchema abstracts audience", () => {
+  const abstractId = "22222222-2222-4222-8222-222222222222";
+  const themeId = "33333333-3333-4333-8333-333333333333";
+
+  it("defaults to the registrant audience with dedupe enabled", () => {
+    const parsed = BulkSendEmailSchema.safeParse({});
+    expect(parsed.success).toBe(true);
+    expect(parsed.data).toEqual({ audience: "registrants", dedupeByEmail: true });
+  });
+
+  it("accepts the abstracts audience with filters", () => {
+    const parsed = BulkSendEmailSchema.safeParse({
+      audience: "abstracts",
+      abstractFilters: {
+        status: ["ACCEPTED", "PENDING"],
+        themeId,
+        presentationType: "POSTER",
+      },
+      dedupeByEmail: false,
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.dedupeByEmail).toBe(false);
+  });
+
+  it("accepts the abstracts audience with explicit abstract ids", () => {
+    const parsed = BulkSendEmailSchema.safeParse({
+      audience: "abstracts",
+      abstractIds: [abstractId],
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects unknown abstract statuses", () => {
+    const parsed = BulkSendEmailSchema.safeParse({
+      audience: "abstracts",
+      abstractFilters: { status: ["WITHDRAWN"] },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects CONFERENCE as a presentation type filter", () => {
+    const parsed = BulkSendEmailSchema.safeParse({
+      audience: "abstracts",
+      abstractFilters: { presentationType: "CONFERENCE" },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects unknown abstract filter keys", () => {
+    const parsed = BulkSendEmailSchema.safeParse({
+      audience: "abstracts",
+      abstractFilters: { q: "dupont" },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it.each([
+    ["registrants", { abstractIds: [abstractId] }],
+    ["sponsors", { abstractFilters: { status: ["ACCEPTED"] } }],
+  ] as const)("rejects abstract fields on the %s audience", (audience, fields) => {
+    const parsed = BulkSendEmailSchema.safeParse({ audience, ...fields });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues[0]).toMatchObject({
+      path: ["abstractIds"],
+      message: 'abstractIds and abstractFilters require audience "abstracts"',
+    });
+  });
+
+  it("keeps registrant payloads valid", () => {
+    const parsed = BulkSendEmailSchema.safeParse({
+      audience: "registrants",
+      registrationIds: [abstractId],
+      filters: { paymentStatus: ["PAID"] },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("accepts the admin dialog's abstracts body", () => {
+    // BulkSendDialog: { audience, abstractFilters? (only when set), dedupeByEmail }.
+    expect(
+      BulkSendEmailSchema.safeParse({ audience: "abstracts", dedupeByEmail: true }).success,
+    ).toBe(true);
+  });
+});

@@ -1,0 +1,116 @@
+import { sql } from "drizzle-orm";
+import {
+  boolean,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
+import { PriceBreakdownSchema } from "@app/contracts";
+import { idPk, timestamps, moneyColumn } from "../helpers";
+import { jsonbOf } from "../jsonb";
+import { paymentMethod, paymentStatus, registrationRole, transactionType } from "./enums";
+import { events } from "./events-access";
+import { forms } from "./forms";
+
+export const registrations = pgTable(
+  "registrations",
+  {
+    id: idPk(),
+    formId: text()
+      .notNull()
+      .references(() => forms.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    eventId: text()
+      .notNull()
+      .references(() => events.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    formData: jsonb().notNull(),
+    networkingOptIn: boolean(),
+    submittedAt: timestamp({ precision: 3 }).defaultNow().notNull(),
+    formSchemaVersion: integer().notNull().default(1),
+    email: text().notNull(),
+    firstName: text(),
+    lastName: text(),
+    phone: text(),
+    referenceNumber: text(),
+    paymentStatus: paymentStatus().notNull().default("PENDING"),
+    totalAmount: moneyColumn().notNull(),
+    paidAmount: moneyColumn().notNull().default(0),
+    currency: text().notNull().default("TND"),
+    paymentMethod: paymentMethod(),
+    paymentReference: text(),
+    paymentProofUrl: text(),
+    priceBreakdown: jsonbOf(PriceBreakdownSchema).notNull(),
+    baseAmount: moneyColumn().notNull().default(0),
+    discountAmount: moneyColumn().notNull().default(0),
+    accessAmount: moneyColumn().notNull().default(0),
+    sponsorshipCode: text(),
+    sponsorshipAmount: moneyColumn().notNull().default(0),
+    labName: text(),
+    paidAt: timestamp({ precision: 3 }),
+    ...timestamps,
+    lastEditedAt: timestamp({ precision: 3 }),
+    editToken: text(),
+    linkBaseUrl: text(),
+    idempotencyKey: text(),
+    note: text(),
+    // Field is `role` but the column is `registration_role`.
+    role: registrationRole("registration_role").notNull().default("PARTICIPANT"),
+    // Arrays of EventAccess ids (no FK); a GIN index on access_type_ids lives in raw SQL.
+    // Live columns are nullable STRING[] with a default (no NOT NULL) — Prisma
+    // scalar-list quirk on CockroachDB. Keep default, no .notNull().
+    accessTypeIds: text("access_type_ids").array().default([]),
+    droppedAccessIds: text("dropped_access_ids").array().default([]),
+    checkedInAt: timestamp({ precision: 3, withTimezone: true }),
+    checkedInBy: text(),
+  },
+  (t) => [
+    uniqueIndex("registrations_reference_number_key").on(t.referenceNumber),
+    uniqueIndex("registrations_edit_token_key").on(t.editToken),
+    uniqueIndex("registrations_idempotency_key_key").on(t.idempotencyKey),
+    index("registrations_event_id_payment_status_idx").on(t.eventId, t.paymentStatus),
+    index("registrations_event_id_submitted_at_idx").on(t.eventId, t.submittedAt),
+    index("registrations_form_id_idx").on(t.formId),
+    index("registrations_email_idx").on(t.email),
+    index("registrations_sponsorship_code_idx").on(t.sponsorshipCode),
+    index("registrations_payment_status_updated_at_idx").on(t.paymentStatus, t.updatedAt),
+    uniqueIndex("registrations_email_form_id_key").on(t.email, t.formId),
+    // 0030 (plan 2.7): one registration per signup sponsorship code.
+    uniqueIndex("registrations_event_id_sponsorship_code_key")
+      .on(t.eventId, t.sponsorshipCode)
+      .where(sql`${t.sponsorshipCode} IS NOT NULL`),
+    index("registrations_access_type_ids_inverted_idx").using("gin", t.accessTypeIds),
+  ],
+);
+
+/**
+ * One reference-number sequence per prefix ("YY-SLUGCODE-", migration 0021),
+ * shared by events whose truncated slugs collide. See allocateReferenceNumber.
+ */
+export const registrationReferenceCounters = pgTable("registration_reference_counters", {
+  prefix: text().primaryKey(),
+  lastValue: integer().notNull(),
+});
+
+export const paymentTransaction = pgTable(
+  "payment_transaction",
+  {
+    id: idPk(),
+    registrationId: text()
+      .notNull()
+      .references(() => registrations.id, {
+        onDelete: "cascade",
+        onUpdate: "cascade",
+      }),
+    type: transactionType().notNull(),
+    amount: moneyColumn().notNull(),
+    method: paymentMethod(),
+    reference: text(),
+    note: text(),
+    performedBy: text(),
+    createdAt: timestamp({ precision: 3 }).defaultNow().notNull(),
+  },
+  (t) => [index("payment_transaction_registration_id_idx").on(t.registrationId)],
+);

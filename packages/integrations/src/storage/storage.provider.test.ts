@@ -1,0 +1,275 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ErrorCodes } from "@app/contracts";
+import { FirebaseStorageProvider } from "./firebase-storage.provider";
+import { R2StorageProvider } from "./r2-storage.provider";
+import { StorageObjectNotFoundError } from "./storage.provider";
+
+const { firebaseStorageMock } = vi.hoisted(() => ({
+  firebaseStorageMock: { bucket: vi.fn() },
+}));
+
+vi.mock("../firebase", () => ({
+  getFirebaseStorage: () => firebaseStorageMock,
+}));
+
+const awsMocks = vi.hoisted(() => ({
+  send: vi.fn(),
+  putObjectCommand: vi.fn(function PutObjectCommand(input: unknown) {
+    return { input };
+  }),
+  getObjectCommand: vi.fn(function GetObjectCommand(input: unknown) {
+    return { input };
+  }),
+  deleteObjectCommand: vi.fn(function DeleteObjectCommand(input: unknown) {
+    return { input };
+  }),
+  listObjectsV2Command: vi.fn(function ListObjectsV2Command(input: unknown) {
+    return { input };
+  }),
+}));
+
+vi.mock("@aws-sdk/client-s3", () => ({
+  S3Client: vi.fn(function S3Client() {
+    return { send: awsMocks.send };
+  }),
+  PutObjectCommand: awsMocks.putObjectCommand,
+  GetObjectCommand: awsMocks.getObjectCommand,
+  DeleteObjectCommand: awsMocks.deleteObjectCommand,
+  ListObjectsV2Command: awsMocks.listObjectsV2Command,
+}));
+
+vi.mock("@aws-sdk/s3-request-presigner", () => ({
+  getSignedUrl: vi.fn().mockResolvedValue("https://signed.example.com/file"),
+}));
+
+describe("FirebaseStorageProvider", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("makes public uploads public and returns a public URL", async () => {
+    const file = {
+      save: vi.fn().mockResolvedValue(undefined),
+      delete: vi.fn().mockResolvedValue(undefined),
+      getSignedUrl: vi.fn().mockResolvedValue(["https://signed.example.com"]),
+      exists: vi.fn().mockResolvedValue([true]),
+      makePublic: vi.fn().mockResolvedValue(undefined),
+      publicUrl: vi.fn().mockReturnValue("https://public.example.com/file"),
+    };
+    firebaseStorageMock.bucket.mockReturnValue({
+      file: vi.fn(() => file),
+    });
+
+    const provider = new FirebaseStorageProvider();
+    const result = await provider.uploadPublic(
+      Buffer.from("file"),
+      "public/file.webp",
+      "image/webp",
+    );
+
+    expect(file.save).toHaveBeenCalledWith(
+      Buffer.from("file"),
+      expect.objectContaining({
+        contentType: "image/webp",
+        metadata: expect.objectContaining({
+          cacheControl: "public, max-age=31536000",
+        }),
+      }),
+    );
+    expect(file.makePublic).toHaveBeenCalled();
+    expect(result).toBe("https://public.example.com/file");
+  });
+
+  it("keeps private uploads private and returns the storage key", async () => {
+    const file = {
+      save: vi.fn().mockResolvedValue(undefined),
+      delete: vi.fn().mockResolvedValue(undefined),
+      getSignedUrl: vi.fn().mockResolvedValue(["https://signed.example.com"]),
+      exists: vi.fn().mockResolvedValue([true]),
+      makePublic: vi.fn().mockResolvedValue(undefined),
+      publicUrl: vi.fn(),
+    };
+    firebaseStorageMock.bucket.mockReturnValue({
+      file: vi.fn(() => file),
+    });
+
+    const provider = new FirebaseStorageProvider();
+    const result = await provider.uploadPrivate(
+      Buffer.from("file"),
+      "private/proof.webp",
+      "image/webp",
+      { contentDisposition: "attachment" },
+    );
+
+    expect(file.save).toHaveBeenCalledWith(
+      Buffer.from("file"),
+      expect.objectContaining({
+        contentType: "image/webp",
+        metadata: expect.objectContaining({
+          cacheControl: "private, max-age=0",
+          contentDisposition: "attachment",
+        }),
+      }),
+    );
+    expect(file.makePublic).not.toHaveBeenCalled();
+    expect(result).toBe("private/proof.webp");
+  });
+});
+
+describe("R2StorageProvider", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    awsMocks.send.mockResolvedValue({});
+    process.env.R2_ACCOUNT_ID = "account-id";
+    process.env.R2_ACCESS_KEY_ID = "access-key";
+    process.env.R2_SECRET_ACCESS_KEY = "secret-key";
+    process.env.R2_BUCKET = "bucket";
+    process.env.R2_PUBLIC_URL = "https://cdn.example.com/";
+  });
+
+  it("returns public URLs only for public uploads", async () => {
+    const provider = new R2StorageProvider();
+
+    const result = await provider.uploadPublic(
+      Buffer.from("file"),
+      "public/file.webp",
+      "image/webp",
+    );
+
+    expect(awsMocks.putObjectCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        Bucket: "bucket",
+        Key: "public/file.webp",
+        CacheControl: "public, max-age=31536000",
+      }),
+    );
+    expect(result).toBe("https://cdn.example.com/public/file.webp");
+  });
+
+  it("returns storage keys for private uploads", async () => {
+    const provider = new R2StorageProvider();
+
+    const result = await provider.uploadPrivate(
+      Buffer.from("file"),
+      "private/proof.webp",
+      "image/webp",
+    );
+
+    expect(awsMocks.putObjectCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        Bucket: "bucket",
+        Key: "private/proof.webp",
+        CacheControl: "private, max-age=0",
+      }),
+    );
+    expect(result).toBe("private/proof.webp");
+  });
+});
+
+describe("download of a missing object", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.R2_ACCOUNT_ID = "account-id";
+    process.env.R2_ACCESS_KEY_ID = "access-key";
+    process.env.R2_SECRET_ACCESS_KEY = "secret-key";
+    process.env.R2_BUCKET = "bucket";
+    process.env.R2_PUBLIC_URL = "https://cdn.example.com/";
+  });
+
+  it("Firebase 404 becomes StorageObjectNotFoundError", async () => {
+    firebaseStorageMock.bucket.mockReturnValue({
+      file: () => ({
+        download: vi.fn().mockRejectedValue(Object.assign(new Error("No such object"), { code: 404 })),
+        getMetadata: vi.fn(),
+      }),
+    });
+    const err = await new FirebaseStorageProvider().download("a/b.pdf").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StorageObjectNotFoundError);
+    expect(err).toMatchObject({ key: "a/b.pdf", status: 404, code: ErrorCodes.NOT_FOUND, name: "IntegrationError" });
+    expect((err as { details?: unknown }).details).toBeUndefined();
+  });
+
+  it("R2 NoSuchKey becomes StorageObjectNotFoundError", async () => {
+    awsMocks.send.mockRejectedValueOnce(
+      Object.assign(new Error("The specified key does not exist."), {
+        name: "NoSuchKey",
+        $metadata: { httpStatusCode: 404 },
+      }),
+    );
+    const err = await new R2StorageProvider().download("a/b.pdf").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StorageObjectNotFoundError);
+  });
+
+  it("other errors pass through", async () => {
+    const boom = Object.assign(new Error("AccessDenied"), { name: "AccessDenied", $metadata: { httpStatusCode: 403 } });
+    awsMocks.send.mockRejectedValueOnce(boom);
+    await expect(new R2StorageProvider().download("a/b.pdf")).rejects.toBe(boom);
+  });
+});
+
+describe("list (orphan-photos operator script)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.R2_ACCOUNT_ID = "account-id";
+    process.env.R2_ACCESS_KEY_ID = "access-key";
+    process.env.R2_SECRET_ACCESS_KEY = "secret-key";
+    process.env.R2_BUCKET = "bucket";
+    process.env.R2_PUBLIC_URL = "https://cdn.example.com/";
+  });
+
+  it("R2 lists one page under the prefix and hands back the continuation token", async () => {
+    const modified = new Date("2026-09-01T10:00:00Z");
+    awsMocks.send.mockResolvedValueOnce({
+      Contents: [{ Key: "networking/e/profiles/p/a.webp", LastModified: modified, Size: 12 }, { Key: undefined }, { Key: "networking/e/profiles/p/b.webp" }],
+      IsTruncated: true,
+      NextContinuationToken: "token-2",
+    });
+    const page = await new R2StorageProvider().list("networking/", { cursor: "token-1", limit: 5000 });
+    expect(awsMocks.listObjectsV2Command).toHaveBeenCalledWith({
+      Bucket: "bucket", Prefix: "networking/", MaxKeys: 1000, ContinuationToken: "token-1",
+    });
+    expect(page).toEqual({
+      items: [
+        { key: "networking/e/profiles/p/a.webp", updatedAt: modified, size: 12 },
+        { key: "networking/e/profiles/p/b.webp", updatedAt: null, size: null },
+      ],
+      nextCursor: "token-2",
+    });
+  });
+
+  it("R2 ends the listing when the response is not truncated", async () => {
+    awsMocks.send.mockResolvedValueOnce({ IsTruncated: false, NextContinuationToken: "ignored" });
+    expect(await new R2StorageProvider().list("networking/e/", { limit: 0 })).toEqual({ items: [], nextCursor: null });
+    expect(awsMocks.listObjectsV2Command).toHaveBeenCalledWith({ Bucket: "bucket", Prefix: "networking/e/", MaxKeys: 1 });
+  });
+
+  it("Firebase lists one page (no auto-pagination) and returns the next page token", async () => {
+    const getFiles = vi.fn().mockResolvedValue([
+      [
+        { name: "networking/e/profiles/p/a.webp", metadata: { updated: "2026-09-01T10:00:00.000Z", size: "34" } },
+        { name: "networking/e/profiles/p/b.webp", metadata: { updated: "not a date" } },
+        { name: "networking/e/profiles/p/c.webp" },
+      ],
+      { pageToken: "page-2", prefix: "networking/" },
+      {},
+    ]);
+    firebaseStorageMock.bucket.mockReturnValue({ getFiles });
+    const page = await new FirebaseStorageProvider().list("networking/", { cursor: "page-1", limit: 50 });
+    expect(getFiles).toHaveBeenCalledWith({ prefix: "networking/", autoPaginate: false, maxResults: 50, pageToken: "page-1" });
+    expect(page).toEqual({
+      items: [
+        { key: "networking/e/profiles/p/a.webp", updatedAt: new Date("2026-09-01T10:00:00.000Z"), size: 34 },
+        { key: "networking/e/profiles/p/b.webp", updatedAt: null, size: null },
+        { key: "networking/e/profiles/p/c.webp", updatedAt: null, size: null },
+      ],
+      nextCursor: "page-2",
+    });
+  });
+
+  it("Firebase ends the listing without a next query", async () => {
+    const getFiles = vi.fn().mockResolvedValue([[], null, {}]);
+    firebaseStorageMock.bucket.mockReturnValue({ getFiles });
+    expect(await new FirebaseStorageProvider().list("networking/")).toEqual({ items: [], nextCursor: null });
+    expect(getFiles).toHaveBeenCalledWith({ prefix: "networking/", autoPaginate: false, maxResults: 1000 });
+  });
+});

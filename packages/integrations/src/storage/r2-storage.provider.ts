@@ -1,0 +1,185 @@
+import { PUBLIC_CACHE_CONTROL, PRIVATE_CACHE_CONTROL } from "./storage.provider";
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectCommand,
+  ListObjectsV2Command,
+} from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { integrationsConfig } from "../config";
+import {
+  StorageObjectNotFoundError,
+  storageListLimit,
+  type DownloadedFile,
+  type StorageListPage,
+  type StorageProvider,
+  type UploadOptions,
+} from "./storage.provider";
+
+async function readBodyAsBuffer(body: unknown): Promise<Buffer> {
+  if (!body) {
+    return Buffer.alloc(0);
+  }
+
+  if (typeof body === "string") {
+    return Buffer.from(body);
+  }
+
+  if (body instanceof Uint8Array) {
+    return Buffer.from(body);
+  }
+
+  if (
+    typeof body === "object" &&
+    body !== null &&
+    "transformToByteArray" in body &&
+    typeof body.transformToByteArray === "function"
+  ) {
+    return Buffer.from(await body.transformToByteArray());
+  }
+
+  if (
+    typeof body === "object" &&
+    body !== null &&
+    Symbol.asyncIterator in body
+  ) {
+    const chunks: Uint8Array[] = [];
+
+    for await (const chunk of body as AsyncIterable<Uint8Array | string>) {
+      chunks.push(
+        typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk),
+      );
+    }
+
+    return Buffer.concat(chunks);
+  }
+
+  throw new Error("Unsupported R2 response body");
+}
+
+export class R2StorageProvider implements StorageProvider {
+  private client: S3Client;
+  private bucket: string;
+  private publicUrl: string;
+
+  constructor() {
+    // App config rules guarantee these R2 keys exist when STORAGE_PROVIDER=r2.
+    const r2 = integrationsConfig().r2;
+    this.bucket = r2.bucket!;
+    this.publicUrl = r2.publicUrl!;
+    this.client = new S3Client({
+      region: "auto",
+      endpoint: `https://${r2.accountId!}.r2.cloudflarestorage.com`,
+      credentials: {
+        accessKeyId: r2.accessKeyId!,
+        secretAccessKey: r2.secretAccessKey!,
+      },
+    });
+  }
+
+  async uploadPublic(
+    buffer: Buffer,
+    key: string,
+    contentType: string,
+    options?: UploadOptions,
+  ): Promise<string> {
+    await this.putObject(buffer, key, contentType, {
+      ...options,
+      cacheControl: options?.cacheControl ?? PUBLIC_CACHE_CONTROL,
+    });
+
+    return `${this.publicUrl.replace(/\/$/, "")}/${key}`;
+  }
+
+  async uploadPrivate(
+    buffer: Buffer,
+    key: string,
+    contentType: string,
+    options?: UploadOptions,
+  ): Promise<string> {
+    await this.putObject(buffer, key, contentType, {
+      ...options,
+      cacheControl: options?.cacheControl ?? PRIVATE_CACHE_CONTROL,
+    });
+    return key;
+  }
+
+  async getSignedUrl(key: string, expiresInSeconds = 3600): Promise<string> {
+    const command = new GetObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+    });
+
+    return getSignedUrl(this.client, command, { expiresIn: expiresInSeconds });
+  }
+
+  async download(key: string): Promise<DownloadedFile> {
+    let response;
+    try {
+      response = await this.client.send(
+        new GetObjectCommand({
+          Bucket: this.bucket,
+          Key: key,
+        }),
+      );
+    } catch (err) {
+      const error = err as { name?: unknown; $metadata?: { httpStatusCode?: unknown } };
+      if (error.name === "NoSuchKey" || error.$metadata?.httpStatusCode === 404) {
+        throw new StorageObjectNotFoundError(key);
+      }
+      throw err;
+    }
+
+    return {
+      buffer: await readBodyAsBuffer(response.Body),
+      contentType: response.ContentType ?? null,
+    };
+  }
+
+  async delete(key: string): Promise<void> {
+    const command = new DeleteObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+    });
+
+    await this.client.send(command);
+  }
+
+  async list(prefix: string, options: { cursor?: string; limit?: number } = {}): Promise<StorageListPage> {
+    const response = await this.client.send(
+      new ListObjectsV2Command({
+        Bucket: this.bucket,
+        Prefix: prefix,
+        MaxKeys: storageListLimit(options.limit),
+        ...(options.cursor ? { ContinuationToken: options.cursor } : {}),
+      }),
+    );
+    return {
+      items: (response.Contents ?? []).flatMap((object) => object.Key
+        ? [{ key: object.Key, updatedAt: object.LastModified ?? null, size: object.Size ?? null }]
+        : []),
+      nextCursor: response.IsTruncated && response.NextContinuationToken ? response.NextContinuationToken : null,
+    };
+  }
+
+  private async putObject(
+    buffer: Buffer,
+    key: string,
+    contentType: string,
+    options?: UploadOptions,
+  ): Promise<void> {
+    const command = new PutObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+      Body: buffer,
+      ContentType: contentType,
+      CacheControl: options?.cacheControl,
+      ...(options?.contentDisposition && {
+        ContentDisposition: options.contentDisposition,
+      }),
+    });
+
+    await this.client.send(command);
+  }
+}

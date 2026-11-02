@@ -1,0 +1,274 @@
+import { BulkSendCountResponseSchema, EventEmailLogResponseSchema, DraftEmailPreviewResponseSchema } from "@app/contracts";
+import { ResponseContract } from "../../core/response-contract";
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from "@nestjs/common";
+import { Throttle } from "@nestjs/throttler";
+import { ErrorCodes } from "@app/contracts";
+import {
+  getEventWithPricing,
+  type EventWithPricing,
+  type ScopedClientRow,
+  type ScopedEventRow,
+} from "@app/db";
+import { getAvailableVariables, type VariableDefinition } from "@app/integrations";
+import type { PaginatedResult } from "@app/shared";
+import { Auth } from "../../core/auth/auth.decorator";
+import { SkipEnvelope } from "../../core/envelope.interceptor";
+import { AppException, notFound } from "../../core/app-exception";
+import { assertModuleEnabledForClient } from "../clients/module-gates";
+import { EmailTemplateScoped, EventScoped, ScopedClient, ScopedEvent } from "../tenancy";
+import { EmailTemplateService } from "./email-template.service";
+import { EmailSendService } from "./email-send.service";
+import {
+  CreateEmailTemplateBodyDto,
+  DraftEmailPreviewDto,
+  DraftEmailTestSendDto,
+  DuplicateEmailTemplateDto,
+  UpdateEmailTemplateDto,
+  ListEmailTemplatesQueryDto,
+  ListEventEmailLogsQueryDto,
+  TestSendEmailDto,
+  BulkSendEmailDto,
+  SendCustomEmailDto,
+  EmailEventIdParamDto,
+  EmailTemplateIdParamDto,
+  BulkSendParamDto,
+  SendCustomEmailParamDto,
+  ResendEmailLogParamDto,
+  GetEmailLogParamDto,
+  EmailVariablesQueryDto,
+} from "./dto";
+
+// Every route requires a valid Bearer token (any role); the tenant check is the
+// route's scope guard (`@EventScoped` / `@EmailTemplateScoped`, plan 5.4):
+// 404 → 403 (canAccessClient) → archived (writes) → emails module gate. A bulk
+// send to abstract authors also needs the abstracts module.
+@Controller("api/events")
+@Auth()
+export class EmailController {
+  constructor(
+    private readonly templates: EmailTemplateService,
+    private readonly send: EmailSendService,
+  ) {}
+
+  /** The event with the fields the send paths need (after the scope guard). */
+  private async eventForSend(eventId: string): Promise<EventWithPricing> {
+    const event = await getEventWithPricing(eventId);
+    if (!event) {
+      throw notFound("Event not found");
+    }
+    return event;
+  }
+
+  private async template(templateId: string) {
+    const template = await this.templates.getById(templateId);
+    if (!template) {
+      throw notFound("Email template not found");
+    }
+    return template;
+  }
+
+  // ==========================================================================
+  // EMAIL TEMPLATES
+  // ==========================================================================
+
+  @Get(":eventId/email-templates")
+  @EventScoped({ module: "emails" })
+  async list(
+    @Param() params: EmailEventIdParamDto,
+    @Query() query: ListEmailTemplatesQueryDto,
+  ): Promise<PaginatedResult<unknown>> {
+    return this.templates.list(params.eventId, query);
+  }
+
+  @Post(":eventId/email-templates/draft/preview")
+  @HttpCode(200)
+  @EventScoped({ module: "emails" })
+  @ResponseContract(DraftEmailPreviewResponseSchema)
+  previewDraft(@Param() params: EmailEventIdParamDto, @Body() body: DraftEmailPreviewDto) {
+    return this.send.previewDraft(params.eventId, body);
+  }
+
+  @Post(":eventId/email-templates/draft/test-send")
+  @HttpCode(200)
+  @EventScoped({ module: "emails", write: true })
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  testSendDraft(@Param() params: EmailEventIdParamDto, @Body() body: DraftEmailTestSendDto) {
+    return this.send.testSendDraft(params.eventId, body);
+  }
+
+  @Get(":eventId/email-templates/variables")
+  @EventScoped({ module: "emails" })
+  async variables(
+    @Param() params: EmailEventIdParamDto,
+    @Query() query: EmailVariablesQueryDto,
+  ): Promise<VariableDefinition[]> {
+    return getAvailableVariables(params.eventId, query.language);
+  }
+
+  @Post(":eventId/email-templates")
+  @EventScoped({ module: "emails", write: true })
+  @HttpCode(201)
+  async create(
+    @Param() params: EmailEventIdParamDto,
+    @Body() body: CreateEmailTemplateBodyDto,
+    @ScopedEvent() event: ScopedEventRow,
+  ) {
+    return this.templates.create({
+      clientId: event.clientId,
+      eventId: params.eventId,
+      ...body,
+    });
+  }
+
+  @Get("email-templates/:templateId")
+  @EmailTemplateScoped({ module: "emails" })
+  async getOne(@Param() params: EmailTemplateIdParamDto) {
+    return this.template(params.templateId);
+  }
+
+  @Patch("email-templates/:templateId")
+  @EmailTemplateScoped({ module: "emails", write: true })
+  async update(
+    @Param() params: EmailTemplateIdParamDto,
+    @Body() body: UpdateEmailTemplateDto,
+  ) {
+    return this.templates.update(params.templateId, body);
+  }
+
+  @Delete("email-templates/:templateId")
+  @EmailTemplateScoped({ module: "emails", write: true })
+  @HttpCode(204)
+  @SkipEnvelope()
+  async remove(@Param() params: EmailTemplateIdParamDto): Promise<void> {
+    await this.templates.delete(params.templateId);
+  }
+
+  @Post("email-templates/:templateId/duplicate")
+  @EmailTemplateScoped({ module: "emails", write: true })
+  @HttpCode(201)
+  async duplicate(
+    @Param() params: EmailTemplateIdParamDto,
+    @Body() body: DuplicateEmailTemplateDto,
+  ) {
+    return this.templates.duplicate(params.templateId, body.name);
+  }
+
+  @Post("email-templates/:templateId/test-send")
+  @EmailTemplateScoped({ module: "emails", write: true })
+  @HttpCode(200)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  async testSend(
+    @Param() params: EmailTemplateIdParamDto,
+    @Body() body: TestSendEmailDto,
+  ) {
+    const template = await this.template(params.templateId);
+    return this.send.testSend(template, body.recipientEmail, body.recipientName);
+  }
+
+  // ==========================================================================
+  // EVENT EMAIL LOGS
+  // ==========================================================================
+
+  @Get(":eventId/email-logs")
+  @EventScoped({ module: "emails" })
+  async listLogs(
+    @Param() params: EmailEventIdParamDto,
+    @Query() query: ListEventEmailLogsQueryDto,
+  ) {
+    return this.templates.listLogs(params.eventId, query);
+  }
+
+  /**
+   * 3.6: explicitly resend an UNCERTAIN email (the provider may have sent it,
+   * so it is never resent automatically). Queues a new email log.
+   */
+  @Get(":eventId/email-logs/:emailLogId")
+  @EventScoped({ module: "emails" })
+  @ResponseContract(EventEmailLogResponseSchema)
+  getLog(@Param() params: GetEmailLogParamDto) {
+    return this.templates.getLog(params.eventId, params.emailLogId);
+  }
+
+  @Post(":eventId/email-logs/:emailLogId/resend")
+  @EventScoped({ module: "emails", write: true })
+  @HttpCode(201)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  async resendLog(@Param() params: ResendEmailLogParamDto) {
+    return this.send.resendUncertain(params.eventId, params.emailLogId);
+  }
+
+  // ==========================================================================
+  // BULK SEND + CUSTOM SEND
+  // ==========================================================================
+
+  @Post(":eventId/email-templates/:templateId/send")
+  @EventScoped({ module: "emails", write: true })
+  @HttpCode(200)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  async bulkSend(
+    @Param() params: BulkSendParamDto,
+    @Body() body: BulkSendEmailDto,
+    @ScopedClient() client: ScopedClientRow,
+  ) {
+    const event = await this.bulkEvent(params, body, client);
+    return this.send.bulkSend(event, params.templateId, body);
+  }
+
+  /** POST body deliberately matches send, including complex filters and explicit ids. */
+  @Post(":eventId/email-templates/:templateId/send/count")
+  @EventScoped({ module: "emails", write: true })
+  @HttpCode(200)
+  @ResponseContract(BulkSendCountResponseSchema)
+  async countSend(@Param() params: BulkSendParamDto, @Body() body: BulkSendEmailDto, @ScopedClient() client: ScopedClientRow) {
+    const event = await this.bulkEvent(params, body, client);
+    return this.send.countBulkSend(event, params.templateId, body);
+  }
+
+  private async bulkEvent(params: BulkSendParamDto, body: BulkSendEmailDto, client: ScopedClientRow) {
+    const event = await this.eventForSend(params.eventId);
+    const template = await this.template(params.templateId);
+    if (template.clientId !== event.clientId) {
+      throw new AppException(
+        ErrorCodes.FORBIDDEN,
+        "Template does not belong to this client",
+        403,
+      );
+    }
+    if (template.isActive === false) {
+      throw new AppException(ErrorCodes.EMAIL_TEMPLATE_INACTIVE, "Email template is inactive", 409);
+    }
+    // After the template checks, as in legacy.
+    if (body.audience === "abstracts") {
+      assertModuleEnabledForClient(client, "abstracts");
+    }
+
+    return event;
+  }
+
+  @Post(":eventId/registrations/:registrationId/send-custom-email")
+  @EventScoped({ module: "emails", write: true })
+  @HttpCode(200)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  async sendCustom(
+    @Param() params: SendCustomEmailParamDto,
+    @Body() body: SendCustomEmailDto,
+  ) {
+    const event = await this.eventForSend(params.eventId);
+    return this.send.sendCustom(
+      event,
+      params.registrationId,
+      body.subject,
+      body.content,
+    );
+  }
+}

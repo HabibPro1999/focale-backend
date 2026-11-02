@@ -1,0 +1,23 @@
+// Declarative tenant scoping for admin routes (plan 5.4).
+export {
+  AccessItemScoped,
+  CertificateTemplateScoped,
+  ClientScoped,
+  EmailTemplateScoped,
+  EventScoped,
+  FormScoped,
+  RegistrationScoped,
+  requireTenantScope,
+  ScopedClient,
+  ScopedEvent,
+  SponsorshipScoped,
+  TENANT_SCOPE,
+  TenantScopeGuard,
+  type ClientScope,
+  type EventScope,
+  type FormScopeOptions,
+  type TenantScope,
+  type TenantScopeKind,
+  type TenantScopeOptions,
+  type TenantScopeRule,
+} from "./tenant-scope";

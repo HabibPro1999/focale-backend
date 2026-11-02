@@ -1,0 +1,82 @@
+// The email queries: templates, logs, the registration reads that email
+// contexts are built from, and the lease queue. This module keeps their
+// public names in one place.
+
+export {
+  EMAIL_TEMPLATE_ABSTRACT_UNIQ,
+  EMAIL_TEMPLATE_REGISTRATION_UNIQ,
+  deleteEmailTemplateById,
+  findAbstractEmailTemplate,
+  findActiveTemplateForTrigger,
+  getEmailTemplateById,
+  getTemplateByTrigger,
+  insertEmailTemplate,
+  listEmailTemplates,
+  updateEmailTemplate,
+  type EmailTemplateInsert,
+  type EmailTemplateRow,
+  type ListEmailTemplatesArgs,
+} from "./email-templates";
+
+export {
+  EMAIL_LOG_INSERT_CHUNK_SIZE,
+  EMAIL_LOG_LIST_COUNT_CAP,
+  EMAIL_LOGS_DEDUPE_KEY_ACTIVE_KEY,
+  EMAIL_LOGS_REGISTRATION_TRIGGER_ACTIVE_KEY,
+  EMAIL_LOGS_TEMPLATE_RECIPIENT_TRIGGER_ACTIVE_KEY,
+  createEmailLog,
+  getEmailLogRealtimeTarget,
+  insertEmailLogsSkippingConflicts,
+  listEventEmailLogs,
+  getEventEmailLog,
+  queuedEmailLogValues,
+  readEmailLogStatus,
+  updateEmailLogById,
+  updateEmailLogStatusGuarded,
+  type EmailLogInsert,
+  type EmailLogRealtimeTarget,
+  type EmailLogRow,
+  type EventEmailLog,
+  type ListEventEmailLogsArgs,
+} from "./email-logs";
+
+export {
+  formLanguagesSql,
+  getEventAccessByIdsForEmail,
+  getEventPricingForEmail,
+  getRegistrationForEmailContext,
+  getRegistrationFormLanguage,
+  getRegistrationFormSchema,
+  getRegistrationsByFilters,
+  getRegistrationsByIds,
+  getRegistrationsForEmailContextByIds,
+  getSponsorshipByCodeForEmail,
+  listSponsorshipBatchesForBulk,
+  type BulkRegistrationRow,
+  type EventAccessEmailInfo,
+  type EventPricingEmailInfo,
+  type RegistrationEmailContext,
+  type SponsorBatchForBulk,
+  type SponsorshipEmailInfo,
+} from "./email-context";
+
+export {
+  EMAIL_LEASE_MS,
+  SEND_NOW_LEASE_MS,
+  beginProviderAttempt,
+  createSendNowEmailLog,
+  emailFailureStatus,
+  emailQueue,
+  getClaimedEmailLogsForProcessing,
+  getEmailQueueHealth,
+  hasActiveEmailLogForRegistrationTrigger,
+  hasActiveSponsorshipEmailLog,
+  markEmailFailed,
+  markEmailSent,
+  markEmailSkipped,
+  markEmailUncertain,
+  writeResolvedSubjectIfLeaseHeld,
+  type ClaimedEmailLog,
+  type EmailQueueHealth,
+  type SendNowEmailLogValues,
+} from "./email-queue";

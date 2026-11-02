@@ -1,0 +1,216 @@
+import { z } from "zod";
+
+export const ErrorCodes = {
+  // Participant networking errors
+  NETWORKING_MFA_REQUIRED: "NETWORKING_MFA_REQUIRED",
+  NETWORKING_AUTH_UNAVAILABLE: "NETWORKING_AUTH_UNAVAILABLE",
+  NETWORKING_BADGE_INVALID: "NETWORKING_BADGE_INVALID",
+  NETWORKING_BADGE_WRONG_PARTICIPANT: "NETWORKING_BADGE_WRONG_PARTICIPANT",
+  NETWORKING_MEETING_CHECKIN_UNCONFIRMED: "NETWORKING_MEETING_CHECKIN_UNCONFIRMED",
+  NETWORKING_MEETING_CHECKIN_UNAVAILABLE: "NETWORKING_MEETING_CHECKIN_UNAVAILABLE",
+  NETWORKING_NOT_ELIGIBLE: "NETWORKING_NOT_ELIGIBLE",
+  NETWORKING_CLOSED: "NETWORKING_CLOSED",
+  NETWORKING_FEATURE_DISABLED: "NETWORKING_FEATURE_DISABLED",
+  NETWORKING_CONNECTION_REQUIRED: "NETWORKING_CONNECTION_REQUIRED",
+  NETWORKING_SLOT_INVALID: "NETWORKING_SLOT_INVALID",
+  NETWORKING_SLOT_CONFLICT: "NETWORKING_SLOT_CONFLICT",
+  NETWORKING_MEETING_LOCKED: "NETWORKING_MEETING_LOCKED",
+  NETWORKING_MEETING_CHECKED_IN: "NETWORKING_MEETING_CHECKED_IN",
+  NETWORKING_RATE_LIMITED: "NETWORKING_RATE_LIMITED",
+  NETWORKING_CONFIG_STALE: "NETWORKING_CONFIG_STALE",
+  NETWORKING_VALIDATION: "NETWORKING_VALIDATION",
+  NETWORKING_SESSION_EXPIRED: "NETWORKING_SESSION_EXPIRED",
+  NETWORKING_NOT_FOUND: "NETWORKING_NOT_FOUND",
+  NETWORKING_ACTION_NOT_ALLOWED: "NETWORKING_ACTION_NOT_ALLOWED",
+  NETWORKING_MFA_ENFORCED: "NETWORKING_MFA_ENFORCED",
+  NETWORKING_CONSENT_REQUIRED: "NETWORKING_CONSENT_REQUIRED",
+  /** 503 with Retry-After: a networking write ran out of serialization retries; nothing was saved. */
+  NETWORKING_BUSY: "NETWORKING_BUSY",
+  /** 409: enabling networking after the event's retention period ended or its purge started. */
+  NETWORKING_RETENTION_ENDED: "NETWORKING_RETENTION_ENDED",
+  /** 409: an organizer edit of a participant who withdrew from networking (withdrawal is final). */
+  NETWORKING_PROFILE_WITHDRAWN: "NETWORKING_PROFILE_WITHDRAWN",
+
+  // Auth (1xxx)
+  UNAUTHORIZED: "AUTH_1001",
+  INVALID_TOKEN: "AUTH_1002",
+  FORBIDDEN: "AUTH_1004",
+  USER_INACTIVE: "AUTH_1005",
+  USER_SELF_DELETE: "AUTH_1006",
+
+  // Validation (2xxx)
+  VALIDATION_ERROR: "VAL_2001",
+
+  // Resource (3xxx)
+  NOT_FOUND: "RES_3001",
+  CONFLICT: "RES_3002",
+  BAD_REQUEST: "RES_3003",
+
+  // Rate Limit (4xxx)
+  RATE_LIMITED: "RATE_4001",
+
+  // Server (5xxx)
+  INTERNAL_ERROR: "SRV_5001",
+  DATABASE_ERROR: "SRV_5002",
+  /** The process is draining for shutdown; retry after Retry-After. */
+  SERVER_SHUTTING_DOWN: "SRV_5003",
+
+  // Pricing (6xxx)
+  EXTRA_CAPACITY_EXCEEDED: "PRC_6001",
+  PRICE_MISMATCH: "PRC_6002",
+  EXTRA_NOT_AVAILABLE: "PRC_6003",
+  INVALID_SPONSORSHIP_CODE: "PRC_6004",
+  PRICING_NOT_FOUND: "PRC_6005",
+  PRICING_RULE_UNSATISFIABLE: "PRC_6006",
+  PRICING_CONDITION_INVALID_OPTION: "PRC_6007",
+  CURRENCY_LOCKED: "PRC_6008",
+
+  // Access (7xxx)
+  ACCESS_NOT_FOUND: "ACC_7001",
+  ACCESS_CAPACITY_EXCEEDED: "ACC_7002",
+  ACCESS_TIME_CONFLICT: "ACC_7004",
+  ACCESS_PREREQUISITE_MISSING: "ACC_7005",
+  ACCESS_NOT_AVAILABLE: "ACC_7006",
+  ACCESS_CIRCULAR_DEPENDENCY: "ACC_7007",
+  ACCESS_HAS_REGISTRATIONS: "ACC_7008",
+  ACCESS_DATE_OUT_OF_BOUNDS: "ACC_7009",
+  ACCESS_HAS_SPONSORSHIPS: "ACC_7010",
+  ACCESS_CONDITION_INVALID_OPTION: "ACC_7011",
+  ACCESS_SELECTION_REQUIRED: "ACC_7012",
+
+  // Events (8xxx)
+  EVENT_HAS_REGISTRATIONS: "EVT_8000",
+  EVENT_NOT_OPEN: "EVT_8001",
+  EVENT_FULL: "EVT_8002",
+  EVENT_ARCHIVED: "EVT_8003",
+
+  // Registration (8xxx — shared numeric range with Events, use string prefix to disambiguate)
+  REGISTRATION_NOT_FOUND: "REG_8001",
+  REGISTRATION_ALREADY_EXISTS: "REG_8002",
+  REGISTRATION_REFUNDED: "REG_8003",
+  REGISTRATION_INVALID_STATUS: "REG_8004",
+  REGISTRATION_PAYMENT_REQUIRED: "REG_8005",
+  EVENT_CAPACITY_EXCEEDED: "REG_8006",
+  REGISTRATION_EDIT_FORBIDDEN: "REG_8007",
+  REGISTRATION_ACCESS_REMOVAL_BLOCKED: "REG_8008",
+  REGISTRATION_DELETE_BLOCKED: "REG_8009",
+  REGISTRATION_VERIFYING_BLOCKED: "REG_8010",
+  REGISTRATION_FULLY_SPONSORED_BLOCKED: "REG_8011",
+  REGISTRATION_WAIVED_ACCESS_BLOCKED: "REG_8012",
+  // A PAID confirmation for less than the amount due (plan 2.6): confirm PARTIAL.
+  PAID_AMOUNT_BELOW_DUE: "REG_8013",
+  // A self-edit would change what a PAID registration costs (plan 2.6).
+  REGISTRATION_PRICE_LOCKED: "REG_8014",
+  // An admin edit changes a PAID registration's price without saying how the
+  // payment follows (a paidAmount or a paymentStatus) (plan 2.6).
+  PAYMENT_ADJUSTMENT_REQUIRED: "REG_8015",
+
+  // Form Validation (9xxx)
+  FORM_VALIDATION_ERROR: "FRM_9001",
+  FORM_FIELD_REQUIRED: "FRM_9002",
+  FORM_FIELD_INVALID_FORMAT: "FRM_9003",
+  FORM_FIELD_INVALID_TYPE: "FRM_9004",
+  FORM_FILE_TOO_LARGE: "FRM_9005",
+  FORM_FILE_INVALID_TYPE: "FRM_9006",
+
+  // File Upload (10xxx)
+  INVALID_FILE_TYPE: "FIL_10001",
+  FILE_TOO_LARGE: "FIL_10002",
+
+  // Reports (11xxx)
+  REPORT_GENERATION_FAILED: "RPT_11001",
+  EXPORT_FAILED: "RPT_11002",
+  EXPORT_TOO_LARGE: "RPT_11003",
+  /** 503 with Retry-After: every export slot and queue place is taken; retry later. */
+  EXPORT_BUSY: "EXPORT_BUSY",
+
+  // State Transitions (12xxx)
+  INVALID_STATUS_TRANSITION: "STT_12001",
+  INVALID_PAYMENT_TRANSITION: "STT_12002",
+
+  // Dependencies (13xxx)
+  CLIENT_HAS_DEPENDENCIES: "DEP_13001",
+
+  // Sponsorship (14xxx)
+  SPONSORSHIP_NOT_APPLICABLE: "SPO_14001",
+  SPONSORSHIP_STATUS_CONFLICT: "SPO_14002",
+  // A signup code that is already linked, reserved for another registration,
+  // or claimed by an earlier signup (plan 2.7). Unknown/cancelled codes are
+  // INVALID_SPONSORSHIP_CODE (400).
+  SPONSORSHIP_CODE_ALREADY_USED: "SPO_14003",
+  // A sponsorship change on a registration whose money is settled (plan 2.8):
+  // linking to PAID/WAIVED/REFUNDED, or changing a PAID registration's
+  // sponsorship amount (unlink, cancel, delete, coverage change).
+  SPONSORSHIP_TARGET_SETTLED: "SPO_14004",
+  // A sponsorship would leave the registration paid more than it owes (plan 2.8).
+  SPONSORSHIP_EXCEEDS_AMOUNT_DUE: "SPO_14005",
+
+  // Email (15xxx)
+  MJML_COMPILATION_ERROR: "EML_15001",
+  EMAIL_TEMPLATE_INACTIVE: "EML_15002",
+
+  // Concurrency (16xxx)
+  CONCURRENT_MODIFICATION: "CON_16001",
+
+  // Check-in (17xxx). CHK_17002 (registration not found) is retired: check-in
+  // answers REG_8001 like every other route (plan 5.4).
+  CHECKIN_ALREADY_DONE: "CHK_17001",
+  CHECKIN_ACCESS_NOT_ON_REGISTRATION: "CHK_17003",
+  /**
+   * 400: the registration belongs to another event than the route's. One code
+   * for the condition wherever it is checked (check-in, admin edit, available
+   * sponsorships; plan 5.4b), despite the check-in name.
+   */
+  CHECKIN_EVENT_MISMATCH: "CHK_17004",
+  CHECKIN_PAYMENT_REQUIRED: "CHK_17005",
+  CHECKIN_NETWORKING_MEETING_REQUIRED: "CHK_17006",
+
+  // Abstracts (18xxx)
+  ABSTRACT_SUBMISSIONS_CLOSED: "ABS_18001",
+  ABSTRACT_MODE_MISMATCH: "ABS_18002",
+  ABSTRACT_WORD_LIMIT_EXCEEDED: "ABS_18003",
+  ABSTRACT_INVALID_THEMES: "ABS_18004",
+  ABSTRACT_ADDITIONAL_FIELDS_INVALID: "ABS_18005",
+  ABSTRACT_EDIT_DISABLED: "ABS_18006",
+  ABSTRACT_EDIT_DEADLINE_PASSED: "ABS_18007",
+  ABSTRACT_NOT_EDITABLE: "ABS_18008",
+  ABSTRACT_SUBMISSIONS_NOT_OPEN: "ABS_18009",
+  ABSTRACT_DUPLICATE_AUTHOR_EMAIL: "ABS_18010",
+  ABSTRACT_TOO_MANY_THEMES: "ABS_18011",
+
+  // Committee invites (19xxx) — all surfaced as HTTP 410 on the public
+  // set-password endpoints so the admin app can distinguish dead-link causes.
+  COMMITTEE_INVITE_INVALID: "INV_19001",
+  COMMITTEE_INVITE_EXPIRED: "INV_19002",
+  COMMITTEE_INVITE_USED: "INV_19003",
+
+  // Clients (20xxx). The module gate's two refusals (plan 5.4); both 403.
+  /** The client (tenant) is deactivated. */
+  CLIENT_INACTIVE: "CLT_20001",
+  /** The client has not enabled the module this route belongs to. */
+  MODULE_DISABLED: "CLT_20002",
+} as const;
+
+export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
+/** Exported in generated artifacts so consumers can map every stable code. */
+export const ErrorCodeSchema = z.enum(Object.values(ErrorCodes));
+
+/** Default HTTP status -> error code map for HttpExceptions without an explicit code. */
+export function statusToCode(status: number): ErrorCode {
+  switch (status) {
+    case 400:
+      return ErrorCodes.VALIDATION_ERROR;
+    case 401:
+      return ErrorCodes.UNAUTHORIZED;
+    case 403:
+      return ErrorCodes.FORBIDDEN;
+    case 404:
+      return ErrorCodes.NOT_FOUND;
+    case 409:
+      return ErrorCodes.CONFLICT;
+    case 429:
+      return ErrorCodes.RATE_LIMITED;
+    default:
+      return ErrorCodes.INTERNAL_ERROR;
+  }
+}

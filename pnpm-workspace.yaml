@@ -1,0 +1,10 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+onlyBuiltDependencies:
+  - '@swc/core'
+  - sharp
+  - esbuild
+  - protobufjs
+  - unrs-resolver

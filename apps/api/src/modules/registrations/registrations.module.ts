@@ -1,0 +1,38 @@
+import { Module } from "@nestjs/common";
+import { PlatformRegistrationsController } from "./platform-registrations.controller";
+import { AccessModule } from "../access/access.module";
+import { PricingModule } from "../pricing/pricing.module";
+import { RegistrationsService } from "./registrations.service";
+import { RegistrationCreateService } from "./registrations.create.service";
+import { RegistrationSideEffects } from "./registrations.side-effects";
+import { PaymentProofService } from "./registrations.payment-proof.service";
+import { RegistrationRepricer } from "./registrations.repricer";
+import { RegistrationPaymentsService } from "./registrations.payments.service";
+import {
+  RegistrationEditLinkController,
+  RegistrationsController,
+} from "./registrations.controller";
+import {
+  RegistrationsPublicController,
+  RegistrationEditPublicController,
+} from "./registrations.public.controller";
+
+@Module({
+  imports: [AccessModule, PricingModule],
+  controllers: [
+    PlatformRegistrationsController,
+    RegistrationsController,
+    RegistrationEditLinkController,
+    RegistrationsPublicController,
+    RegistrationEditPublicController,
+  ],
+  providers: [
+    RegistrationsService,
+    RegistrationCreateService,
+    RegistrationSideEffects,
+    PaymentProofService,
+    RegistrationRepricer,
+    RegistrationPaymentsService,
+  ],
+})
+export class RegistrationsModule {}

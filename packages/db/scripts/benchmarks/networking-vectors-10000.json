@@ -1,0 +1,83 @@
+{
+  "profiles": 10000,
+  "engine": "CockroachDB CCL v26.2.5 (aarch64-apple-darwin21.2, built 2026/07/28 19:18:29, go1.25.5)",
+  "dimensions": 1536,
+  "syntheticLatentDimensions": 32,
+  "samples": [
+    {
+      "exactMs": 1290,
+      "annMs": 641,
+      "recallAt30": 1,
+      "returned": 30
+    },
+    {
+      "exactMs": 987,
+      "annMs": 582,
+      "recallAt30": 1,
+      "returned": 30
+    },
+    {
+      "exactMs": 988,
+      "annMs": 564,
+      "recallAt30": 1,
+      "returned": 30
+    }
+  ],
+  "plan": [
+    {
+      "info": "distribution: local"
+    },
+    {
+      "info": ""
+    },
+    {
+      "info": "• top-k"
+    },
+    {
+      "info": "│ estimated row count: 240"
+    },
+    {
+      "info": "│ order: +column14"
+    },
+    {
+      "info": "│ k: 240"
+    },
+    {
+      "info": "│"
+    },
+    {
+      "info": "└── • render"
+    },
+    {
+      "info": "    │"
+    },
+    {
+      "info": "    └── • lookup join"
+    },
+    {
+      "info": "        │ table: networking_embeddings@networking_embeddings_pkey"
+    },
+    {
+      "info": "        │ equality: (id) = (id)"
+    },
+    {
+      "info": "        │ equality cols are key"
+    },
+    {
+      "info": "        │"
+    },
+    {
+      "info": "        └── • vector search"
+    },
+    {
+      "info": "              table: networking_embeddings@networking_embeddings_cosine_idx"
+    },
+    {
+      "info": "              target count: 240"
+    },
+    {
+      "info": "              prefix spans: [/'9c7b3680-53a4-4a9c-a6a9-45e1a3c0b5fb'/'PROFILE'/'synthetic-vector-benchmark' - /'9c7b3680-53a4-4a9c-a6a9-45e1a3c0b5fb'/'PROFILE'/'synthetic-vector-benchmark']"
+    }
+  ],
+  "limitations": "Three sequential callers on a local single-node database, synthetic vectors, no real-profile relevance or production concurrency claim."
+}

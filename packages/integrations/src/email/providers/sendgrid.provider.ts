@@ -1,0 +1,304 @@
+// =============================================================================
+// SENDGRID EMAIL PROVIDER
+// Sends via the SendGrid API; verifies + normalizes SendGrid event webhooks.
+// =============================================================================
+
+import sgMail from "@sendgrid/mail";
+import { resolveVerifiedNetworkingSender } from "./networking-sender";
+import { EventWebhook, EventWebhookHeader } from "@sendgrid/eventwebhook";
+import { logger } from "../../logger";
+import { integrationsConfig } from "../../config";
+import {
+  EMAIL_PROVIDER_TIMEOUT_MS,
+  acceptedSend,
+  ambiguousSend,
+  rejectedSend,
+  getHeader,
+  resolveEmailSender,
+  stripHtml,
+  type EmailProvider,
+  type NormalizedEventType,
+  type NormalizedWebhookEvent,
+  type LogOnlyWebhookEvent,
+  type SendEmailInput,
+  type SendEmailResult,
+  type WebhookHeaders,
+  type WebhookResult,
+} from "./email-provider.types";
+
+// Webhook signature freshness window — reject replays / stale deliveries.
+const WEBHOOK_TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000;
+
+// SendGrid event names already match our normalized vocabulary 1:1.
+const HANDLED_EVENTS: Record<string, NormalizedEventType> = {
+  processed: "processed",
+  delivered: "delivered",
+  open: "open",
+  click: "click",
+  bounce: "bounce",
+  dropped: "dropped",
+  blocked: "blocked",
+  spam_report: "spam_report",
+  unsubscribe: "unsubscribe",
+};
+
+// Acknowledged but not mapped to a status change (e.g. transient deferral).
+const LOG_ONLY_EVENTS = new Set(["deferred"]);
+
+/**
+ * Map a parsed SendGrid webhook batch onto our normalized vocabulary.
+ * Pure (no crypto / config) so it can be unit-tested directly.
+ */
+export function mapSendgridEvents(parsed: unknown): {
+  events: NormalizedWebhookEvent[];
+  logOnly: LogOnlyWebhookEvent[];
+} {
+  const events: NormalizedWebhookEvent[] = [];
+  const logOnly: LogOnlyWebhookEvent[] = [];
+
+  if (!Array.isArray(parsed)) {
+    logger.warn(
+      { bodyType: typeof parsed },
+      "Invalid SendGrid webhook payload: expected array",
+    );
+    return { events, logOnly };
+  }
+
+  for (const raw of parsed as Array<Record<string, unknown>>) {
+    const eventName = String(raw.event || "");
+    // customArgs are flattened onto the event object by SendGrid.
+    const emailLogId = raw.emailLogId as string | undefined;
+    if (!emailLogId) continue;
+
+    const reason = raw.reason as string | undefined;
+
+    if (LOG_ONLY_EVENTS.has(eventName)) {
+      logOnly.push({ type: eventName, emailLogId, reason });
+      continue;
+    }
+
+    const type = HANDLED_EVENTS[eventName];
+    if (!type) continue;
+
+    events.push({
+      emailLogId,
+      type,
+      metadata: { url: raw.url as string | undefined, reason },
+    });
+  }
+
+  return { events, logOnly };
+}
+
+// Connection errors raised before the request reached SendGrid: nothing was sent.
+const NOT_SENT_ERROR_CODES = new Set([
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "ERR_INVALID_URL",
+  "ERR_BAD_OPTION",
+  "ERR_BAD_OPTION_VALUE",
+  "ERR_NOT_SUPPORT",
+]);
+// Gateway errors: SendGrid behind the gateway may still have taken the email.
+const AMBIGUOUS_HTTP_STATUSES = new Set([502, 504]);
+
+/**
+ * Classify a failed `sgMail.send` (3.6). SendGrid has no idempotency key, so
+ * anything that may have reached it is `ambiguous` and must not be resent:
+ * - an HTTP error response (the client's ResponseError: numeric `code` and
+ *   `response`) is `rejected`, except 502/504 from a gateway;
+ * - an HTTP client error without a response is `rejected` only for a failure
+ *   to connect at all (DNS, refused); a timeout, reset or abort is `ambiguous`;
+ * - an error that is neither was raised by the SendGrid library before the
+ *   request (message validation): `rejected`.
+ */
+export function classifySendgridError(error: unknown): SendEmailResult {
+  const err = (error ?? {}) as {
+    message?: string;
+    code?: unknown;
+    isAxiosError?: boolean;
+    response?: { body?: { errors?: Array<{ message?: string }> } };
+  };
+  const message = err.response?.body?.errors?.[0]?.message || err.message || "Unknown error";
+  if (err.response && typeof err.code === "number") {
+    return AMBIGUOUS_HTTP_STATUSES.has(err.code)
+      ? ambiguousSend(message, { statusCode: err.code })
+      : rejectedSend(message, err.code);
+  }
+  if (err.isAxiosError === true) {
+    return typeof err.code === "string" && NOT_SENT_ERROR_CODES.has(err.code)
+      ? rejectedSend(message)
+      : ambiguousSend(message);
+  }
+  return error instanceof Error ? rejectedSend(message) : ambiguousSend(message);
+}
+
+export interface SendgridProviderOptions {
+  apiKey?: string;
+  webhookPublicKey?: string;
+  fromEmail: string;
+  fromName: string;
+}
+
+export class SendgridProvider implements EmailProvider {
+  readonly name = "sendgrid" as const;
+
+  private readonly apiKey?: string;
+  private readonly webhookPublicKey?: string;
+  private readonly fromEmail: string;
+  private readonly fromName: string;
+  private keySet = false;
+
+  constructor(opts: SendgridProviderOptions) {
+    this.apiKey = opts.apiKey;
+    this.webhookPublicKey = opts.webhookPublicKey;
+    this.fromEmail = opts.fromEmail;
+    this.fromName = opts.fromName;
+  }
+
+  isConfigured(): boolean {
+    return Boolean(this.apiKey);
+  }
+
+  private ensureApiKey(): void {
+    if (this.apiKey && !this.keySet) {
+      sgMail.setApiKey(this.apiKey);
+      // Without it a stalled request would hold the email job until its timeout.
+      sgMail.setTimeout(EMAIL_PROVIDER_TIMEOUT_MS);
+      this.keySet = true;
+    }
+  }
+
+  async sendEmail(input: SendEmailInput): Promise<SendEmailResult> {
+    if (!this.apiKey) {
+      logger.warn("SendGrid API key not configured, skipping email send");
+      return rejectedSend("SendGrid not configured");
+    }
+    this.ensureApiKey();
+
+    let msg: sgMail.MailDataRequired;
+    try {
+      const approvedFrom = await resolveVerifiedNetworkingSender(input, this.name, this.apiKey);
+      msg = {
+        to: input.toName ? { email: input.to, name: input.toName } : input.to,
+        from: { email: approvedFrom ?? this.fromEmail, name: input.fromName || this.fromName },
+        ...(input.replyTo && {
+          replyTo: {
+            email: input.replyTo,
+            name: input.replyToName || input.replyTo,
+          },
+        }),
+        subject: input.subject,
+        text: input.plainText || stripHtml(input.html),
+        html: input.html,
+        trackingSettings: {
+          clickTracking: { enable: true, enableText: false },
+          openTracking: { enable: true },
+        },
+        ...(input.trackingId && {
+          customArgs: { emailLogId: input.trackingId },
+        }),
+        ...(input.categories && { categories: input.categories }),
+        ...(input.attachments?.length && { attachments: input.attachments }),
+      };
+    } catch (error: unknown) {
+      // Before the request: nothing reached SendGrid.
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error({ to: input.to, error: message, trackingId: input.trackingId }, "Failed to prepare email for SendGrid");
+      return rejectedSend(message);
+    }
+
+    try {
+      const [response] = await sgMail.send(msg);
+      const messageId = response.headers["x-message-id"] as string | undefined;
+
+      logger.info(
+        { to: input.to, messageId, trackingId: input.trackingId },
+        "Email sent successfully via SendGrid",
+      );
+
+      return acceptedSend(messageId || undefined);
+    } catch (error: unknown) {
+      const result = classifySendgridError(error);
+      logger.error(
+        {
+          to: input.to,
+          error: result.error,
+          outcome: result.outcome,
+          trackingId: input.trackingId,
+          statusCode: result.statusCode,
+        },
+        "Failed to send email via SendGrid",
+      );
+      return result;
+    }
+  }
+
+  handleWebhook(rawBody: Buffer, headers: WebhookHeaders): WebhookResult {
+    if (!this.webhookPublicKey) {
+      logger.error(
+        "SendGrid webhook public key not configured — rejecting webhook request",
+      );
+      return { ok: false, reason: "unconfigured" };
+    }
+
+    const signature = getHeader(headers, EventWebhookHeader.SIGNATURE());
+    const timestamp = getHeader(headers, EventWebhookHeader.TIMESTAMP());
+
+    // Staleness check happens before the (more expensive) signature verification.
+    const timestampMs = Number(timestamp) * 1000;
+    if (
+      !Number.isFinite(timestampMs) ||
+      Math.abs(Date.now() - timestampMs) > WEBHOOK_TIMESTAMP_TOLERANCE_MS
+    ) {
+      return { ok: false, reason: "stale" };
+    }
+
+    if (!signature || !this.verifySignature(rawBody, signature, timestamp!)) {
+      return { ok: false, reason: "invalid_signature" };
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawBody.toString());
+    } catch {
+      return { ok: false, reason: "bad_payload" };
+    }
+
+    return { ok: true, ...mapSendgridEvents(parsed) };
+  }
+
+  private verifySignature(
+    payload: Buffer,
+    signature: string,
+    timestamp: string,
+  ): boolean {
+    try {
+      const eventWebhook = new EventWebhook();
+      const ecPublicKey = eventWebhook.convertPublicKeyToECDSA(
+        this.webhookPublicKey!,
+      );
+      const isValid = eventWebhook.verifySignature(
+        ecPublicKey,
+        payload,
+        signature,
+        timestamp,
+      );
+      if (!isValid) logger.warn("Invalid SendGrid webhook signature");
+      return isValid;
+    } catch (error) {
+      logger.error({ error }, "Failed to verify SendGrid webhook signature");
+      return false;
+    }
+  }
+}
+
+export function createSendgridProvider(): EmailProvider {
+  const { apiKey, webhookPublicKey } = integrationsConfig().email.sendgrid;
+  return new SendgridProvider({
+    apiKey,
+    webhookPublicKey,
+    ...resolveEmailSender(),
+  });
+}

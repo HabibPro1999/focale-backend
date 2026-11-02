@@ -1,0 +1,438 @@
+// =============================================================================
+// EMAIL RENDERER
+// Converts Tiptap JSON documents to MJML, then compiles to responsive HTML.
+// Rendering is deterministic; MJML 5 compilation is asynchronous.
+// =============================================================================
+
+import mjml2html from "mjml";
+import { escapeHtml } from "@app/shared";
+import {
+  EmailFontSizeSchema,
+  EmailLineHeightSchema,
+  EmailTextAlignSchema,
+  type TiptapDocument,
+  type TiptapNode,
+  type TiptapMark,
+} from "@app/contracts";
+import type { MjmlCompilationResult } from "./types";
+
+// =============================================================================
+// MAIN EXPORTS
+// =============================================================================
+
+/**
+ * Converts a Tiptap JSON document to MJML markup, wrapped in the shared layout
+ * (purple header showing {{organizerName}}, white content, gray footer).
+ */
+export function renderTemplateToMjml(document: TiptapDocument): string {
+  const bodyContent = document.content
+    .map((node) => renderNode(node))
+    .join("\n");
+
+  return renderEmailLayout(bodyContent);
+}
+
+/**
+ * The shared email layout every Focale email uses: header, white content
+ * section (`bodyContent`: MJML column children) and footer. `header` is MJML
+ * text the caller has escaped; templates keep the `{{organizerName}}`
+ * placeholder, resolved at send time.
+ */
+export function renderEmailLayout(
+  bodyContent: string,
+  options: { header?: string } = {},
+): string {
+  const header = options.header ?? "{{organizerName}}";
+  return `
+<mjml>
+  <mj-head>
+    <mj-raw>
+      <meta name="color-scheme" content="light dark">
+      <meta name="supported-color-schemes" content="light dark">
+    </mj-raw>
+    <mj-attributes>
+      <mj-all font-family="Arial, sans-serif" />
+      <mj-text font-size="14px" line-height="1.6" color="#333333" />
+      <mj-button background-color="#4F46E5" color="#ffffff" border-radius="6px" inner-padding="10px 25px" />
+    </mj-attributes>
+    <mj-style>
+      .variable {
+        background-color: #E0E7FF;
+        padding: 2px 4px;
+        border-radius: 4px;
+        color: #4338CA;
+      }
+    </mj-style>
+    <mj-style inline="inline">
+      a {
+        color: #4F46E5;
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+    </mj-style>
+  </mj-head>
+  <mj-body background-color="#f4f4f5">
+    <!-- Header -->
+    <mj-section background-color="#4F46E5" padding="20px">
+      <mj-column>
+        <mj-text align="center" color="#ffffff" font-size="24px" font-weight="bold">
+          ${header}
+        </mj-text>
+      </mj-column>
+    </mj-section>
+
+    <!-- Main Content -->
+    <mj-section background-color="#ffffff" padding="30px 20px">
+      <mj-column>
+        ${bodyContent}
+      </mj-column>
+    </mj-section>
+
+    <!-- Footer -->
+    <mj-section background-color="#f4f4f5" padding="20px">
+      <mj-column>
+        <mj-text align="center" font-size="12px" color="#6b7280">
+          Powered by Focale Agency
+        </mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>
+  `.trim();
+}
+
+/**
+ * Compiles MJML markup to responsive HTML. Uses strict validation but filters
+ * out template-variable placeholder warnings ({{ }}). Any remaining real error
+ * throws a plain Error (surfaces as an unhandled 500 at the call site).
+ */
+export async function compileMjmlToHtml(
+  mjml: string,
+): Promise<MjmlCompilationResult> {
+  const result = await mjml2html(mjml, {
+    validationLevel: "strict",
+    minify: false,
+    beautify: false,
+    ignoreIncludes: true,
+  });
+
+  const errors = (result.errors || []).filter((error) => {
+    const msg = error.message || "";
+    return !msg.includes("{{") && !msg.includes("}}");
+  });
+
+  if (errors.length > 0) {
+    const errorMessages = errors
+      .map((e) => e.message || e.formattedMessage)
+      .join("; ");
+    throw new Error(`MJML compilation failed: ${errorMessages}`);
+  }
+
+  return {
+    html: result.html,
+  };
+}
+
+/** Extracts plain text from a Tiptap document; mentions become {{variable}}. */
+export function extractPlainText(document: TiptapDocument): string {
+  return document.content
+    .map((node) => extractTextFromNode(node))
+    .join("\n")
+    .trim();
+}
+
+// =============================================================================
+// NODE RENDERING
+// =============================================================================
+
+function renderNode(node: TiptapNode): string {
+  switch (node.type) {
+    case "paragraph":
+      return renderParagraph(node);
+    case "heading":
+      return renderHeading(node);
+    case "bulletList":
+      return renderList(node, "ul");
+    case "orderedList":
+      return renderList(node, "ol");
+    case "listItem":
+      return renderListItem(node);
+    case "blockquote":
+      return renderBlockquote(node);
+    case "horizontalRule":
+      return '<mj-divider border-color="#e5e7eb" border-width="1px" />';
+    case "hardBreak":
+      return "<br />";
+    case "image":
+      return renderImage(node);
+    default:
+      if (node.content) {
+        return node.content.map(renderNode).join("");
+      }
+      return "";
+  }
+}
+
+const LINK_VARIABLE_IDS = new Set([
+  "registrationLink",
+  "editRegistrationLink",
+  "paymentLink",
+]);
+
+const LINK_BUTTON_LABELS: Record<string, string> = {
+  registrationLink: "Voir l'inscription",
+  editRegistrationLink: "Modifier l'inscription",
+  paymentLink: "Envoyer le justificatif de paiement",
+};
+
+function safeTextAlign(value: unknown): string {
+  const parsed = EmailTextAlignSchema.safeParse(value);
+  return parsed.success ? parsed.data : "left";
+}
+
+function safeFontSize(value: unknown): string | undefined {
+  if (value == null) return undefined;
+  const parsed = EmailFontSizeSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function safeLineHeight(value: unknown): string | undefined {
+  if (value == null) return undefined;
+  const parsed = EmailLineHeightSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function renderParagraph(node: TiptapNode): string {
+  const nodes = node.content || [];
+  const align = safeTextAlign(node.attrs?.textAlign);
+
+  const nonEmptyNodes = nodes.filter(
+    (n) => !(n.type === "text" && (!n.text || n.text.trim() === "")),
+  );
+  if (nonEmptyNodes.length === 1 && nonEmptyNodes[0].type === "mention") {
+    const varId = (nonEmptyNodes[0].attrs?.id as string) || "";
+    if (LINK_VARIABLE_IDS.has(varId)) {
+      const label = LINK_BUTTON_LABELS[varId] || varId;
+      return `<mj-button href="{{${escapeHtml(varId)}}}" align="${escapeHtml(align)}">${label}</mj-button>`;
+    }
+  }
+
+  const content = renderInlineContent(nodes);
+
+  const attrs: string[] = [`align="${escapeHtml(align)}"`];
+  const fontSize = safeFontSize(node.attrs?.fontSize);
+  const lineHeight = safeLineHeight(node.attrs?.lineHeight);
+  if (fontSize) attrs.push(`font-size="${escapeHtml(fontSize)}"`);
+  if (lineHeight) attrs.push(`line-height="${escapeHtml(lineHeight)}"`);
+
+  if (!content || content.trim() === "") {
+    return "<mj-text>&nbsp;</mj-text>";
+  }
+
+  return `<mj-text ${attrs.join(" ")}>${content}</mj-text>`;
+}
+
+function renderHeading(node: TiptapNode): string {
+  const level = (node.attrs?.level as number) || 1;
+  const content = renderInlineContent(node.content || []);
+  const align = safeTextAlign(node.attrs?.textAlign);
+
+  const sizes: Record<number, string> = {
+    1: "28px",
+    2: "24px",
+    3: "20px",
+    4: "18px",
+    5: "16px",
+    6: "14px",
+  };
+
+  const lineHeights: Record<number, string> = {
+    1: "1.3",
+    2: "1.4",
+    3: "1.4",
+    4: "1.4",
+    5: "1.5",
+    6: "1.5",
+  };
+
+  const fontSize = sizes[level] || "14px";
+  const lineHeight = lineHeights[level] || "1.4";
+
+  return `<mj-text align="${escapeHtml(align)}" font-size="${escapeHtml(fontSize)}" font-weight="bold" line-height="${escapeHtml(lineHeight)}" padding-bottom="10px">${content}</mj-text>`;
+}
+
+function renderList(node: TiptapNode, tag: "ul" | "ol"): string {
+  const items = (node.content || [])
+    .map((item) => {
+      const itemContent = item.content?.[0]?.content || item.content || [];
+      return `<li>${renderInlineContent(itemContent)}</li>`;
+    })
+    .join("\n");
+
+  return `<mj-text><${tag} style="margin: 0; padding-left: 20px;">${items}</${tag}></mj-text>`;
+}
+
+function renderListItem(node: TiptapNode): string {
+  return renderInlineContent(node.content?.[0]?.content || []);
+}
+
+function renderBlockquote(node: TiptapNode): string {
+  const content = (node.content || []).map(renderNode).join("");
+
+  return `
+    <mj-section padding="0">
+      <mj-column border-left="4px solid #e5e7eb" padding-left="16px">
+        ${content}
+      </mj-column>
+    </mj-section>
+  `;
+}
+
+function renderImage(node: TiptapNode): string {
+  const src = escapeHtml(String(node.attrs?.src || ""));
+  const alt = escapeHtml(String(node.attrs?.alt ?? ""));
+  const widthValue = String(node.attrs?.width ?? "600").trim();
+  const widthMatch = /^(\d+(?:\.\d+)?)(?:px)?$/i.exec(widthValue);
+  const width = widthMatch ? `${widthMatch[1]}px` : "600px";
+
+  if (!src) return "";
+
+  return `<mj-image src="${src}" alt="${alt}" width="${escapeHtml(width)}" />`;
+}
+
+// =============================================================================
+// INLINE CONTENT RENDERING
+// =============================================================================
+
+function renderInlineContent(nodes: TiptapNode[]): string {
+  return nodes.map(renderInlineNode).join("");
+}
+
+function renderInlineNode(node: TiptapNode): string {
+  if (node.type === "text") {
+    let text = escapeHtml(node.text || "");
+
+    if (node.marks && node.marks.length > 0) {
+      text = applyMarks(text, node.marks);
+    }
+
+    return text;
+  }
+
+  if (node.type === "mention") {
+    const varId = (node.attrs?.id as string) || "";
+
+    if (LINK_VARIABLE_IDS.has(varId)) {
+      const label = LINK_BUTTON_LABELS[varId] || varId;
+      return `<a href="{{${escapeHtml(varId)}}}" target="_blank" style="color: #4F46E5;">${label}</a>`;
+    }
+
+    return `{{${escapeHtml(varId)}}}`;
+  }
+
+  if (node.type === "hardBreak") {
+    return "<br />";
+  }
+
+  if (node.content) {
+    return renderInlineContent(node.content);
+  }
+
+  return "";
+}
+
+function applyMarks(text: string, marks: TiptapMark[]): string {
+  let result = text;
+
+  for (const mark of marks) {
+    switch (mark.type) {
+      case "bold":
+        result = `<strong>${result}</strong>`;
+        break;
+      case "italic":
+        result = `<em>${result}</em>`;
+        break;
+      case "underline":
+        result = `<u>${result}</u>`;
+        break;
+      case "strike":
+        result = `<s>${result}</s>`;
+        break;
+      case "code":
+        result = `<code style="background-color: #f3f4f6; padding: 2px 4px; border-radius: 4px; font-family: monospace;">${result}</code>`;
+        break;
+      case "link": {
+        const href = escapeHtml(String(mark.attrs?.href || "#"));
+        const target = escapeHtml(String(mark.attrs?.target || "_blank"));
+        result = `<a href="${href}" target="${target}" style="color: #4F46E5;">${result}</a>`;
+        break;
+      }
+      case "textStyle": {
+        const styles: string[] = [];
+        if (mark.attrs?.color)
+          styles.push(`color: ${escapeHtml(String(mark.attrs.color))}`);
+        if (mark.attrs?.backgroundColor)
+          styles.push(
+            `background-color: ${escapeHtml(String(mark.attrs.backgroundColor))}`,
+          );
+        if (mark.attrs?.fontSize)
+          styles.push(`font-size: ${escapeHtml(String(mark.attrs.fontSize))}`);
+        if (mark.attrs?.fontFamily)
+          styles.push(
+            `font-family: ${escapeHtml(String(mark.attrs.fontFamily))}`,
+          );
+        if (styles.length > 0) {
+          result = `<span style="${styles.join("; ")}">${result}</span>`;
+        }
+        break;
+      }
+    }
+  }
+
+  return result;
+}
+
+// =============================================================================
+// PLAIN TEXT EXTRACTION
+// =============================================================================
+
+function extractTextFromNode(node: TiptapNode): string {
+  if (node.text) {
+    return node.text;
+  }
+
+  if (node.type === "mention") {
+    const varId = (node.attrs?.id as string) || "";
+    return `{{${varId}}}`;
+  }
+
+  if (node.type === "hardBreak") {
+    return "\n";
+  }
+
+  if (node.type === "horizontalRule") {
+    return "\n---\n";
+  }
+
+  if (!node.content) {
+    return "";
+  }
+
+  const childText = node.content.map(extractTextFromNode).join("");
+
+  switch (node.type) {
+    case "paragraph":
+    case "heading":
+    case "blockquote":
+      return childText + "\n";
+    case "bulletList":
+    case "orderedList":
+      return childText + "\n";
+    case "listItem":
+      return "- " + childText.trim() + "\n";
+    default:
+      return childText;
+  }
+}

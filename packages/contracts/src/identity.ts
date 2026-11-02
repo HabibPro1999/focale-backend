@@ -1,0 +1,79 @@
+import { z } from "zod";
+import { paginationQueryShape } from "./zod-helpers";
+import { UserRole } from "./roles";
+
+// ============================================================================
+// Shared validators
+// ============================================================================
+
+/**
+ * Strong-password Zod string: >=12 chars and at least one upper / lower / digit
+ * / special character. Ported verbatim from the legacy identity module — each
+ * failed rule produces its own issue message (part of the wire contract).
+ */
+export const StrongPasswordSchema = z
+  .string()
+  .min(12, "Password must be at least 12 characters")
+  .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
+  .regex(/[a-z]/, "Password must contain at least one lowercase letter")
+  .regex(/[0-9]/, "Password must contain at least one number")
+  .regex(/[^a-zA-Z0-9]/, "Password must contain at least one special character");
+
+// ============================================================================
+// Request Schemas
+// ============================================================================
+
+const UserRoleSchema = z.union([
+  z.literal(UserRole.SUPER_ADMIN),
+  z.literal(UserRole.CLIENT_ADMIN),
+  z.literal(UserRole.SCIENTIFIC_COMMITTEE),
+]);
+
+export const CreateUserSchema = z.strictObject({
+  email: z.string().email(),
+  password: StrongPasswordSchema,
+  name: z.string().min(1).max(100),
+  role: UserRoleSchema
+    .default(UserRole.CLIENT_ADMIN),
+  clientId: z.string().uuid().optional().nullable(),
+});
+
+export const UpdateUserSchema = z.strictObject({
+  name: z.string().min(1).max(100).optional(),
+  role: UserRoleSchema
+    .optional(),
+  clientId: z.string().uuid().optional().nullable(),
+  active: z.boolean().optional(),
+});
+
+export const ListUsersQuerySchema = z.strictObject({
+  ...paginationQueryShape(),
+  role: z.coerce.number().int().min(0).max(2).optional(),
+  clientId: z.string().uuid().optional(),
+  active: z
+    .enum(["true", "false"])
+    .transform((v) => v === "true")
+    .optional(),
+  search: z.string().optional(),
+});
+
+export const UserIdParamSchema = z.strictObject({
+  id: z.string().min(1),
+});
+
+// ============================================================================
+// Types
+// ============================================================================
+
+export type CreateUserInput = z.infer<typeof CreateUserSchema>;
+export type UpdateUserInput = z.infer<typeof UpdateUserSchema>;
+export type ListUsersQuery = z.infer<typeof ListUsersQuerySchema>;
+
+export const UserResponseSchema = z.object({
+  id: z.string(), email: z.string(), name: z.string(), role: UserRoleSchema,
+  clientId: z.string().nullable(), active: z.boolean(),
+  createdAt: z.date(), updatedAt: z.date(),
+  /** Verified sign-in time; null until the first observed login. Not last request/activity. */
+  lastLoginAt: z.date().nullable(),
+});
+export type UserResponse = z.infer<typeof UserResponseSchema>;

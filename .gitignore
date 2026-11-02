@@ -3,6 +3,7 @@ node_modules/
 
 # Build output
 dist/
+*.tsbuildinfo
 
 # Environment variables
 .env
@@ -10,7 +11,6 @@ dist/
 !.env.example
 !.env.test.example
 !.env.test.db.example
-!.env.test.migration.example
 
 # Logs
 *.log
@@ -26,7 +26,8 @@ Thumbs.db
 *.swp
 *.swo
 
-# Local agent workflow artifacts
+# Local agent workflow artifacts (root only: packages/contracts/src/artifacts/ is source)
+/artifacts/
 .codex/
 .memory/
 .progress/
@@ -40,19 +41,16 @@ coverage/
 firebase/
 .firebaserc
 
-# Prisma
-prisma/*.db
-prisma/*.db-journal
-prisma/seed.ts
-src/generated/
-docs/
+# Local docs stay untracked; only the networking README is committed (every
+# other doc lives in a README.md next to its code).
+docs/*
+!docs/networking/
 load-env.fish
 
 # Database backups
 backups/
 Action items.md
 
-# Local one-off artifacts (schema dumps, data-repair backups and their scripts)
+# Local one-off schema and data-repair artifacts
 _schema_full.sql
 abstract-html-repair-backup-*.json
-src/scripts/repair-abstract-html.ts

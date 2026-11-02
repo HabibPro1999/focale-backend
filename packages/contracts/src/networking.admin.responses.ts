@@ -1,0 +1,245 @@
+import { z } from "zod";
+import {
+  NetworkingAdminConfigSchema,
+  NetworkingSyncStateSchema,
+  NetworkingStoredProfileSchema,
+  NetworkingSpaceRowSchema,
+  NetworkingDeletedSchema,
+  NetworkingAdminTableRowSchema,
+  NetworkingSavedTableSchema,
+  NetworkingOrganizerMeetingSchema,
+  NetworkingMeetingRowSchema,
+  NetworkingReportRowSchema,
+  NetworkingMessageRowSchema,
+  NetworkingVisibleProfileSchema,
+} from "./networking.response-rows";
+
+/** NetworkingAdminController.config */
+export const NetworkingAdminConfigResponseSchema = NetworkingAdminConfigSchema;
+
+/** NetworkingAdminController.updateConfig */
+export const NetworkingAdminUpdateConfigResponseSchema = NetworkingAdminConfigSchema;
+
+/** NetworkingAdminController.uploadLogo */
+export const NetworkingAdminUploadLogoResponseSchema = z.object({
+  url: z.string(),
+  resource: NetworkingAdminConfigSchema,
+});
+
+/** NetworkingAdminController.sync */
+export const NetworkingAdminSyncResponseSchema = NetworkingSyncStateSchema;
+
+/** NetworkingAdminController.syncState */
+export const NetworkingAdminSyncStateResponseSchema = NetworkingSyncStateSchema;
+
+/** NetworkingAdminController.profiles */
+export const NetworkingAdminProfilesResponseSchema = z.object({
+  items: z.array(NetworkingStoredProfileSchema.extend({
+    matchCount: z.number(),
+    meetingCount: z.number(),
+  })),
+  total: z.number(),
+});
+
+/** NetworkingAdminController.updateProfile */
+export const NetworkingAdminUpdateProfileResponseSchema = NetworkingStoredProfileSchema.extend({ accessUndoId: z.string().optional() });
+
+/** NetworkingAdminController.spaces */
+export const NetworkingAdminSpacesResponseSchema = z.object({
+  items: z.array(NetworkingSpaceRowSchema.extend({
+    allocatedCount: z.number(),
+  })),
+  total: z.number(),
+});
+
+/** NetworkingAdminController.createSpace */
+export const NetworkingAdminCreateSpaceResponseSchema = NetworkingSpaceRowSchema;
+
+/** NetworkingAdminController.updateSpace */
+export const NetworkingAdminUpdateSpaceResponseSchema = NetworkingSpaceRowSchema;
+
+/** NetworkingAdminController.removeSpace */
+export const NetworkingAdminRemoveSpaceResponseSchema = NetworkingDeletedSchema;
+
+/** NetworkingAdminController.tables */
+export const NetworkingAdminTablesResponseSchema = z.object({
+  items: z.array(NetworkingAdminTableRowSchema),
+  total: z.number(),
+});
+
+/** NetworkingAdminController.table */
+export const NetworkingAdminTableResponseSchema = NetworkingSavedTableSchema;
+
+/** NetworkingAdminController.updateTable */
+export const NetworkingAdminUpdateTableResponseSchema = NetworkingSavedTableSchema;
+
+/** NetworkingAdminController.removeTable */
+export const NetworkingAdminRemoveTableResponseSchema = NetworkingDeletedSchema;
+
+/** NetworkingAdminController.meetings */
+export const NetworkingAdminMeetingsResponseSchema = z.object({
+  items: z.array(NetworkingOrganizerMeetingSchema),
+  total: z.number(),
+});
+
+/** NetworkingAdminController.calendar */
+export const NetworkingAdminCalendarResponseSchema = z.object({
+  date: z.string(),
+  timezone: z.string(),
+  items: z.array(NetworkingMeetingRowSchema.extend({
+    requester: NetworkingStoredProfileSchema.nullable(),
+    recipient: NetworkingStoredProfileSchema.nullable(),
+    table: NetworkingAdminTableRowSchema.nullable(),
+  })),
+});
+
+/** NetworkingAdminController.updateMeeting */
+export const NetworkingAdminUpdateMeetingResponseSchema = NetworkingOrganizerMeetingSchema;
+
+/** NetworkingAdminController.reports */
+export const NetworkingAdminReportsResponseSchema = z.object({
+  items: z.array(NetworkingReportRowSchema.extend({
+    reporter: NetworkingStoredProfileSchema.nullable(),
+    profile: NetworkingStoredProfileSchema.nullable(),
+    message: NetworkingMessageRowSchema.nullable(),
+    resolvedByName: z.string().nullable(),
+  })),
+  total: z.number(),
+});
+
+/** NetworkingAdminController.moderate */
+export const NetworkingAdminModerateResponseSchema = NetworkingReportRowSchema.extend({ accessUndoId: z.string().optional() });
+
+/** NetworkingAdminController.audit */
+export const NetworkingAdminAuditResponseSchema = z.object({
+  items: z.array(z.object({
+    id: z.string(),
+    eventId: z.string(),
+    actorId: z.string(),
+    actorName: z.string().nullable(),
+    action: z.string(),
+    targetId: z.string().nullable(),
+    data: z.record(z.string(), z.unknown()),
+    createdAt: z.date(),
+  })),
+  total: z.number(),
+});
+
+/** NetworkingAdminController.verifyBadge */
+export const NetworkingAdminVerifyBadgeResponseSchema = z.object({
+  accessAllowed: z.boolean(),
+  profile: NetworkingVisibleProfileSchema,
+  accessId: z.string().nullable(),
+});
+
+/** NetworkingAdminController.regeneratePostEventReport */
+export const NetworkingAdminRegeneratePostEventReportResponseSchema = z.object({
+  deliveryId: z.string(),
+  availableAt: z.date(),
+  version: z.string(),
+});
+
+/** NetworkingAdminController.postEventReport */
+export const NetworkingAdminPostEventReportResponseSchema = z.object({
+  available: z.boolean(),
+  url: z.string().optional(),
+  generatedAt: z.string().optional(),
+  summary: z.record(z.string(), z.number()).optional(),
+});
+
+/** NetworkingAdminController.analytics */
+export const NetworkingAdminAnalyticsResponseSchema = z.object({
+  emailSent: z.number().optional(),
+  emailDelivered: z.number().optional(),
+  emailOpened: z.number().optional(),
+  emailClicked: z.number().optional(),
+  emailFailed: z.number().optional(),
+  profileViews: z.number(),
+  activationRate: z.number(),
+  conversations: z.number(),
+  responseRate: z.number(),
+  meetingConversionRate: z.number(),
+  profiles: z.number(),
+  activeProfiles: z.number(),
+  visibleProfiles: z.number(),
+  likes: z.number(),
+  passes: z.number(),
+  matches: z.number(),
+  matchRate: z.number(),
+  interestReciprocityRate: z.number(),
+  matchedParticipantsRate: z.number(),
+  messagedParticipantsRate: z.number(),
+  messages: z.number(),
+  meetings: z.number(),
+  plannedMeetings: z.number(),
+  todayMeetings: z.number(),
+  confirmedMeetings: z.number(),
+  completedMeetings: z.number(),
+  cancelledMeetings: z.number(),
+  noShowMeetings: z.number(),
+  pendingMeetings: z.number(),
+  awaitingAllocationCount: z.number().int().min(0),
+  tableOccupancyRate: z.number(),
+  tableUsage: z.array(z.object({
+    tableId: z.string(),
+    name: z.string(),
+    location: z.string(),
+    active: z.boolean(),
+    meetings: z.number(),
+    availableMinutes: z.number(),
+    occupiedMinutes: z.number(),
+    occupancyRate: z.number(),
+  })),
+  peakSlots: z.array(z.object({
+    date: z.string(),
+    time: z.string(),
+    meetings: z.number(),
+  })),
+  zones: z.array(z.object({
+    zone: z.string(),
+    meetings: z.number(),
+  })),
+  engagementTenSwipes: z.number(),
+  engagementTenSwipesRate: z.number(),
+  punctuality: z.object({
+    checkins: z.number(),
+    onTime: z.number(),
+    onTimeRate: z.number(),
+    averageDelayMinutes: z.number(),
+  }),
+  reports: z.number(),
+  openReports: z.number().int().min(0),
+  hourlyActivity: z.array(z.object({
+    hour: z.string(),
+    activity: z.number(),
+  })).optional(),
+  timeSeries: z.array(z.object({
+    date: z.string(),
+    bookingRequests: z.number().optional(),
+    matches: z.number(),
+    messages: z.number(),
+    meetings: z.number(),
+  })),
+  sectors: z.array(z.object({
+    sector: z.string(),
+    participants: z.number(),
+    matches: z.number(),
+    meetings: z.number(),
+  })),
+  engagement: z.array(z.object({
+    profileId: z.string(),
+    name: z.string(),
+    matches: z.number(),
+    messages: z.number(),
+    meetings: z.number(),
+  })),
+  engagementTotal: z.number().optional(),
+});
+
+export const NetworkingAdminRestoreAccessResponseSchema = z.object({
+  profile: NetworkingStoredProfileSchema, restoredMeetings: z.array(z.string()), alreadyRestored: z.boolean(),
+});
+
+export const NetworkingAdminProfileResponseSchema = NetworkingAdminProfilesResponseSchema.shape.items.element;
+export const NetworkingAdminMeetingResponseSchema = NetworkingAdminUpdateMeetingResponseSchema;
+export const NetworkingAdminReportResponseSchema = NetworkingAdminReportsResponseSchema.shape.items.element;

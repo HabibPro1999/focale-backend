@@ -1,0 +1,664 @@
+import { assertMoneyPrecision } from "../../core/money-input";
+import { pickDefined } from "@app/shared";
+import { Injectable } from "@nestjs/common";
+import { ErrorCodes, buildFieldOptionIndex, findInvalidOptionConditions } from "@app/contracts";
+import type {
+  CreateEventAccessInput,
+  UpdateEventAccessInput,
+  AccessSelection,
+  GroupedAccessResponse,
+} from "@app/contracts";
+import {
+  getDb,
+  findRegistrationFormSchema,
+  withTxn,
+  withLockingTxn,
+  lockEventAccessRowsForUpdate,
+  type DbExecutor,
+  type EventAccessWithPrereqs,
+  type NewEventAccessValues,
+  getEventDatesForAccess,
+  getEventAccessById as getEventAccessByIdQuery,
+  getEventAccessForUpdate,
+  listEventAccessRows,
+  findExistingAccessIdsInEvent,
+  listEventAccessIds,
+  getEventPrereqEdges,
+  getActiveAccessForGrouping,
+  getAccessByIdsForValidation,
+  getIncludedInBaseAccess,
+  insertEventAccess,
+  updateEventAccessRow,
+  setAccessPrerequisites,
+  countRegistrationsWithAccess,
+  countActiveSponsorshipsWithAccess,
+  getAccessDependentIds,
+  removePrerequisiteEdge,
+  deleteEventAccessById,
+  casIncrementAccessRegisteredCount,
+  casDecrementAccessRegisteredCount,
+  getAccessCapacityInfo,
+  getAccessRegisteredCount,
+  applyPaidAccessDelta,
+  AccessCapacityExceededError,
+  AccessNotFoundError,
+  AccessPaidCountUnderflowError,
+  type PaidAccessState,
+  getRegistrationCoveredAccessIds,
+  enqueueAccessDrops,
+} from "@app/db";
+import { AppException, badRequest, notFound } from "../../core/app-exception";
+import { groupAccess } from "./access-grouping";
+import { validateSelections } from "./access-validation";
+
+// ---------------------------------------------------------------------------
+// Date-boundary validation (pure) — ported verbatim.
+// ---------------------------------------------------------------------------
+
+function validateAccessDatesAgainstEvent(
+  accessDates: {
+    startsAt?: Date | null;
+    endsAt?: Date | null;
+    availableFrom?: Date | null;
+    availableTo?: Date | null;
+  },
+  eventDates: { startDate: Date; endDate: Date },
+): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  const { startDate } = eventDates;
+
+  const endDate = new Date(eventDates.endDate);
+  endDate.setUTCHours(23, 59, 59, 999);
+
+  const formatDate = (d: Date) =>
+    d.toLocaleDateString("fr-FR", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    });
+  const range = `${formatDate(startDate)} - ${formatDate(endDate)}`;
+
+  const boundaries = [
+    ["startsAt", "L'heure de début"],
+    ["endsAt", "L'heure de fin"],
+    ["availableFrom", "La date de disponibilité"],
+    ["availableTo", "La date limite"],
+  ] as const;
+  for (const [field, label] of boundaries) {
+    const date = accessDates[field];
+    if (date && (date < startDate || date > endDate)) {
+      errors.push(`${label} doit être dans la plage de l'événement (${range})`);
+    }
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
+/**
+ * The access paid-count errors of @app/db as the API's AppExceptions (same
+ * codes, messages and details as before the counters moved to @app/db).
+ */
+export function toAccessAppException(err: unknown): unknown {
+  if (err instanceof AccessNotFoundError) {
+    return new AppException(ErrorCodes.ACCESS_NOT_FOUND, "Access not found", 404);
+  }
+  if (err instanceof AccessCapacityExceededError) {
+    return new AppException(ErrorCodes.ACCESS_CAPACITY_EXCEEDED, err.message, 409, {
+      remaining: err.remaining,
+      requested: err.requested,
+    });
+  }
+  if (err instanceof AccessPaidCountUnderflowError) {
+    return new AppException(ErrorCodes.VALIDATION_ERROR, err.message, 409, {
+      paidCount: err.paidCount,
+      requested: err.requested,
+    });
+  }
+  return err;
+}
+
+function rethrowAsAccessException(err: unknown): never {
+  throw toAccessAppException(err);
+}
+
+@Injectable()
+export class AccessService {
+  private async assertValidOptionConditions(
+    eventId: string,
+    accessName: string,
+    conditions: CreateEventAccessInput["conditions"],
+    accessId?: string,
+  ): Promise<void> {
+    if (!conditions?.length) return;
+    const form = await findRegistrationFormSchema(eventId);
+    if (!form) return;
+    const bad = findInvalidOptionConditions(
+      conditions,
+      buildFieldOptionIndex(form.schema),
+    );
+    if (!bad.length) return;
+    const f = bad[0];
+    throw new AppException(
+      ErrorCodes.ACCESS_CONDITION_INVALID_OPTION,
+      `Access item "${accessName}": value "${String(f.value)}" for field "${f.fieldLabel}" is not one of the field's option ids (e.g. ${f.exampleOptionIds.map((id) => `"${id}"`).join(", ")}). Pick the option in the rule editor.`,
+      400,
+      { accessId, accessName, ...f },
+    );
+  }
+
+  async assertAccessSelectionRequirement(
+    eventId: string,
+    formData: Record<string, unknown>,
+    selections: AccessSelection[],
+    settings: { accessSelectionRequired?: boolean } | null | undefined,
+    db?: DbExecutor,
+  ): Promise<void> {
+    if (settings?.accessSelectionRequired !== true) return;
+    const ids = selections.filter((s) => s.quantity > 0).map((s) => s.accessId);
+    if (ids.length) {
+      const items = await getAccessByIdsForValidation(ids, eventId, db);
+      if (items.some((item) => !item.includedInBase)) return;
+    }
+    const grouped = await this.getGroupedAccess(eventId, formData, ids, db);
+    const items = [
+      ...grouped.groups.flatMap((g) => g.slots.flatMap((s) => s.items)),
+      ...(grouped.addonGroup?.slots.flatMap((s) => s.items) ?? []),
+    ] as Array<{ includedInBase: boolean; isFull: boolean }>;
+    if (items.some((item) => !item.includedInBase && !item.isFull)) {
+      throw new AppException(
+        ErrorCodes.ACCESS_SELECTION_REQUIRED,
+        "Veuillez sélectionner au moins une option",
+        400,
+      );
+    }
+  }
+
+  // =========================================================================
+  // CRUD
+  // =========================================================================
+
+  /**
+   * Create an access item. The row and its prerequisite edges are written in
+   * one transaction, so a failed edge insert leaves no access row behind.
+   */
+  async createEventAccess(
+    input: CreateEventAccessInput,
+  ): Promise<EventAccessWithPrereqs> {
+    const { eventId, requiredAccessIds, ...data } = input;
+
+    const event = await getEventDatesForAccess(eventId);
+    if (!event) {
+      throw notFound("Event not found");
+    }
+
+    const dateValidation = validateAccessDatesAgainstEvent(
+      {
+        startsAt: data.startsAt,
+        endsAt: data.endsAt,
+        availableFrom: data.availableFrom,
+        availableTo: data.availableTo,
+      },
+      { startDate: event.startDate, endDate: event.endDate },
+    );
+    if (!dateValidation.valid) {
+      throw new AppException(
+        ErrorCodes.ACCESS_DATE_OUT_OF_BOUNDS,
+        dateValidation.errors.join("; "),
+        400,
+      );
+    }
+
+    const requiredIds = requiredAccessIds ?? [];
+    if (requiredIds.length > 0) {
+      const existing = await findExistingAccessIdsInEvent(requiredIds, eventId);
+      if (existing.length !== requiredIds.length) {
+        throw new AppException(
+          ErrorCodes.BAD_REQUEST,
+          "One or more prerequisite access items not found or belong to different event",
+          400,
+        );
+      }
+    }
+
+    await this.assertValidOptionConditions(eventId, data.name, data.conditions);
+
+    const currency = data.currency ?? event.currency ?? "TND";
+    assertMoneyPrecision(currency, data.price, data.companionPrice);
+    const values: NewEventAccessValues = {
+      eventId,
+      type: data.type ?? "OTHER",
+      name: data.name,
+      description: data.description ?? null,
+      location: data.location ?? null,
+      startsAt: data.startsAt ?? null,
+      endsAt: data.endsAt ?? null,
+      price: data.price ?? 0,
+      currency,
+      maxCapacity: data.maxCapacity ?? null,
+      availableFrom: data.availableFrom ?? null,
+      availableTo: data.availableTo ?? null,
+      conditions: data.conditions ?? null,
+      conditionLogic: data.conditionLogic ?? "AND",
+      sortOrder: data.sortOrder ?? 0,
+      active: data.active ?? true,
+      groupLabel: data.groupLabel ?? null,
+      allowCompanion: data.allowCompanion ?? false,
+      includedInBase: data.includedInBase ?? false,
+      companionPrice: data.companionPrice ?? 0,
+    };
+
+    return withTxn((tx) => insertEventAccess(values, requiredIds, tx));
+  }
+
+  /**
+   * Update an access item. The field checks run on a first read; the rest
+   * runs in one locking transaction (ADR 0001 rule 2) that locks the item's
+   * row, re-reads it and decides from that read: the capacity check, the
+   * prerequisite checks, the row update, the prerequisite replacement and the
+   * capacity/deactivation drop enqueue. A failure leaves the item and its
+   * prerequisites unchanged.
+   *
+   * - Capacity: the paid-count CAS waits on the row lock, so no payment lands
+   *   between the `maxCapacity >= paidCount` check and the write. A payment
+   *   queued behind the edit then meets the new capacity and is refused.
+   * - Prerequisites: a cycle can close through any item of the event, so an
+   *   edit that sets prerequisites locks every access row of the event, in
+   *   ascending id order, and checks the graph as the previous edit committed
+   *   it. Of two edits that together would form a cycle, the second is refused.
+   */
+  async updateEventAccess(
+    id: string,
+    input: UpdateEventAccessInput,
+  ): Promise<EventAccessWithPrereqs> {
+    const access = await getEventAccessForUpdate(id);
+    if (!access) {
+      throw new AppException(
+        ErrorCodes.ACCESS_NOT_FOUND,
+        "Access item not found",
+        404,
+      );
+    }
+
+    const { requiredAccessIds, ...data } = input;
+
+    const mergedDates = {
+      startsAt: data.startsAt !== undefined ? data.startsAt : access.startsAt,
+      endsAt: data.endsAt !== undefined ? data.endsAt : access.endsAt,
+      availableFrom:
+        data.availableFrom !== undefined ? data.availableFrom : access.availableFrom,
+      availableTo:
+        data.availableTo !== undefined ? data.availableTo : access.availableTo,
+    };
+
+    const dateValidation = validateAccessDatesAgainstEvent(mergedDates, {
+      startDate: access.event.startDate,
+      endDate: access.event.endDate,
+    });
+    if (!dateValidation.valid) {
+      throw new AppException(
+        ErrorCodes.ACCESS_DATE_OUT_OF_BOUNDS,
+        dateValidation.errors.join("; "),
+        400,
+      );
+    }
+
+    if (
+      mergedDates.startsAt &&
+      mergedDates.endsAt &&
+      mergedDates.startsAt > mergedDates.endsAt
+    ) {
+      throw badRequest("Access start time must be before end time");
+    }
+
+    await this.assertValidOptionConditions(
+      access.eventId,
+      data.name ?? access.name,
+      data.conditions,
+      id,
+    );
+
+    assertMoneyPrecision(data.currency ?? access.currency, data.price, data.companionPrice);
+    const updateData: Partial<NewEventAccessValues> = pickDefined(data, [
+      "type",
+      "name",
+      "description",
+      "location",
+      "startsAt",
+      "endsAt",
+      "price",
+      "currency",
+      "maxCapacity",
+      "availableFrom",
+      "availableTo",
+      "conditions",
+      "conditionLogic",
+      "sortOrder",
+      "active",
+      "groupLabel",
+      "allowCompanion",
+      "includedInBase",
+      "companionPrice",
+    ]);
+
+    const eventId = access.eventId;
+    const setsPrerequisites =
+      requiredAccessIds !== undefined && requiredAccessIds.length > 0;
+
+    return withLockingTxn(async (tx) => {
+      // event_id never changes, so the first read's eventId picks the rows.
+      const lockIds = setsPrerequisites ? await listEventAccessIds(eventId, tx) : [];
+      const locked = await lockEventAccessRowsForUpdate(tx, [id, ...lockIds]);
+      // Re-read under the lock: counts and flags from the first read are stale.
+      const current = locked.includes(id) ? await getEventAccessForUpdate(id, tx) : null;
+      if (!current) {
+        throw new AppException(
+          ErrorCodes.ACCESS_NOT_FOUND,
+          "Access item not found",
+          404,
+        );
+      }
+
+      if (setsPrerequisites) {
+        const existing = await findExistingAccessIdsInEvent(
+          requiredAccessIds,
+          eventId,
+          tx,
+        );
+        if (existing.length !== requiredAccessIds.length) {
+          throw new AppException(
+            ErrorCodes.BAD_REQUEST,
+            "One or more prerequisite access items not found",
+            400,
+          );
+        }
+        const hasCycle = await this.detectCircularPrerequisites(
+          eventId,
+          id,
+          requiredAccessIds,
+          tx,
+        );
+        if (hasCycle) {
+          throw new AppException(
+            ErrorCodes.ACCESS_CIRCULAR_DEPENDENCY,
+            "Circular prerequisite dependency detected",
+            400,
+          );
+        }
+      }
+
+      if (
+        data.maxCapacity !== undefined &&
+        data.maxCapacity !== null &&
+        data.maxCapacity < current.paidCount
+      ) {
+        throw new AppException(
+          ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
+          "Max capacity cannot be lower than settled paid access count",
+          409,
+          { paidCount: current.paidCount, requestedMaxCapacity: data.maxCapacity },
+        );
+      }
+
+      const isCapacityChanging =
+        data.maxCapacity !== undefined && data.maxCapacity !== current.maxCapacity;
+      const isBeingDeactivated = data.active === false && current.active === true;
+
+      await updateEventAccessRow(id, updateData, tx);
+      if (requiredAccessIds !== undefined) {
+        await setAccessPrerequisites(id, requiredAccessIds, tx);
+      }
+      if (isBeingDeactivated) {
+        await enqueueAccessDrops(tx, eventId, [id], "deactivated");
+      } else if (
+        isCapacityChanging &&
+        data.maxCapacity !== null &&
+        current.paidCount === data.maxCapacity
+      ) {
+        await this.handleCapacityReached(eventId, [id], tx);
+      }
+      return (await getEventAccessByIdQuery(id, tx))!;
+    });
+  }
+
+  /**
+   * Delete an access item. The dependents' prerequisite edges and the row are
+   * removed in one transaction.
+   */
+  async deleteEventAccess(id: string): Promise<void> {
+    const access = await getEventAccessByIdQuery(id);
+    if (!access) {
+      throw new AppException(
+        ErrorCodes.ACCESS_NOT_FOUND,
+        "Access item not found",
+        404,
+      );
+    }
+
+    const registrationCount = await countRegistrationsWithAccess(id);
+    if (registrationCount > 0) {
+      throw new AppException(
+        ErrorCodes.ACCESS_HAS_REGISTRATIONS,
+        "Cannot delete access item with existing registrations",
+        409,
+      );
+    }
+
+    const sponsorshipCount = await countActiveSponsorshipsWithAccess(id);
+    if (sponsorshipCount > 0) {
+      throw new AppException(
+        ErrorCodes.ACCESS_HAS_SPONSORSHIPS,
+        "Cannot delete access item referenced by active sponsorships",
+        409,
+      );
+    }
+
+    const dependents = await getAccessDependentIds(id);
+    await withTxn(async (tx) => {
+      for (const dependentId of dependents) {
+        await removePrerequisiteEdge(dependentId, id, tx);
+      }
+      await deleteEventAccessById(id, tx);
+    });
+  }
+
+  listEventAccess(
+    eventId: string,
+    options?: { active?: boolean; type?: string },
+  ): Promise<EventAccessWithPrereqs[]> {
+    return listEventAccessRows(eventId, options);
+  }
+
+  getEventAccessById(id: string): Promise<EventAccessWithPrereqs | null> {
+    return getEventAccessByIdQuery(id);
+  }
+
+
+
+  // =========================================================================
+  // Grouping & validation
+  // =========================================================================
+
+  async getGroupedAccess(
+    eventId: string,
+    formData: Record<string, unknown>,
+    selectedAccessIds: string[] = [],
+    exec: DbExecutor = getDb(),
+  ): Promise<GroupedAccessResponse> {
+    const allAccess = await getActiveAccessForGrouping(eventId, exec);
+    return groupAccess(allAccess, formData, selectedAccessIds, new Date());
+  }
+
+  async validateAccessSelections(
+    eventId: string,
+    selections: AccessSelection[],
+    formData: Record<string, unknown>,
+    existingAccessIds?: Set<string>,
+    exec: DbExecutor = getDb(),
+  ): Promise<{ valid: boolean; errors: string[] }> {
+    const [selectedItems, includedAccesses] = await Promise.all([
+      selections.length > 0
+        ? getAccessByIdsForValidation(
+            selections.map((s) => s.accessId),
+            eventId,
+            exec,
+          )
+        : Promise.resolve([]),
+      getIncludedInBaseAccess(eventId, exec),
+    ]);
+    return validateSelections(
+      selectedItems,
+      includedAccesses,
+      selections,
+      formData,
+      existingAccessIds,
+      new Date(),
+    );
+  }
+
+  // =========================================================================
+  // Capacity counters (consumed by registrations/sponsorships, inside their txns)
+  // =========================================================================
+
+  /** Reporting counter bump — still refuses to exceed capacity relative to paidCount. */
+  async incrementAccessRegisteredCountTx(
+    accessId: string,
+    quantity = 1,
+    exec: DbExecutor = getDb(),
+  ): Promise<void> {
+    if (await casIncrementAccessRegisteredCount(accessId, quantity, exec)) return;
+
+    const access = await getAccessCapacityInfo(accessId, exec);
+    if (!access) {
+      throw new AppException(
+        ErrorCodes.ACCESS_NOT_FOUND,
+        "Access not found",
+        404,
+      );
+    }
+    const remaining =
+      access.maxCapacity === null
+        ? null
+        : Math.max(0, access.maxCapacity - access.paidCount);
+    throw new AppException(
+      ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
+      `${access.name} has insufficient capacity (${remaining ?? "unlimited"} spots remaining, requested ${quantity})`,
+      409,
+      { remaining, requested: quantity },
+    );
+  }
+
+  async decrementAccessRegisteredCountTx(
+    accessId: string,
+    quantity = 1,
+    exec: DbExecutor = getDb(),
+  ): Promise<void> {
+    if (await casDecrementAccessRegisteredCount(accessId, quantity, exec)) return;
+
+    const access = await getAccessRegisteredCount(accessId, exec);
+    if (!access) {
+      throw new AppException(
+        ErrorCodes.ACCESS_NOT_FOUND,
+        "Access not found",
+        404,
+      );
+    }
+    throw new AppException(
+      ErrorCodes.VALIDATION_ERROR,
+      "Registered access count cannot be decremented below zero",
+      409,
+      { registeredCount: access.registeredCount, requested: quantity },
+    );
+  }
+
+  /**
+   * Single integration point for registrations/sponsorships when payment
+   * state changes: moves paid counts by the old → new delta
+   * (applyPaidAccessDelta in @app/db), then drops the access from unsettled
+   * registrations where an item became full.
+   */
+  async syncPaidCountDelta(
+    eventId: string,
+    oldState: PaidAccessState,
+    newState: PaidAccessState,
+    exec: DbExecutor,
+  ): Promise<void> {
+    const { incremented } = await applyPaidAccessDelta(exec, oldState, newState).catch(
+      rethrowAsAccessException,
+    );
+    if (incremented.length > 0) {
+      await this.handleCapacityReached(eventId, incremented, exec);
+    }
+  }
+
+  /** Access ids covered by any sponsorship linked to a registration. */
+  async getAlreadyCoveredAccessIds(
+    registrationId: string,
+    exec: DbExecutor = getDb(),
+    excludeSponsorshipId?: string,
+  ): Promise<Set<string>> {
+    const ids = await getRegistrationCoveredAccessIds(
+      registrationId,
+      exec,
+      excludeSponsorshipId,
+    );
+    return new Set(ids);
+  }
+
+  /**
+   * After paid counts went up: enqueue the drop of every item now at capacity
+   * from the unsettled registrations holding it (`access.capacityReached`,
+   * handled by the worker one registration per locking transaction, plan
+   * 2.8). Runs in the caller's transaction and changes no other registration.
+   * Returns how many items were enqueued.
+   */
+  async handleCapacityReached(
+    eventId: string,
+    accessIds: string[],
+    exec: DbExecutor,
+  ): Promise<number> {
+    return (await enqueueAccessDrops(exec, eventId, accessIds, "capacity_reached")).length;
+  }
+
+  // =========================================================================
+  // Private helpers
+  // =========================================================================
+
+  /**
+   * DFS cycle detection over the whole event's prerequisite graph, substituting
+   * `newRequiredIds` as the edges for the item being updated. Reads the edges
+   * in the caller's transaction, after it has locked the event's access rows.
+   */
+  private async detectCircularPrerequisites(
+    eventId: string,
+    accessId: string,
+    newRequiredIds: string[],
+    tx: DbExecutor,
+  ): Promise<boolean> {
+    const edges = await getEventPrereqEdges(eventId, tx);
+    const graph = new Map<string, string[]>();
+    for (const { owner, required } of edges) {
+      const deps = graph.get(owner) ?? [];
+      deps.push(required);
+      graph.set(owner, deps);
+    }
+    // The item being updated uses its proposed new prerequisites.
+    graph.set(accessId, newRequiredIds);
+
+    const visited = new Set<string>();
+    const inStack = new Set<string>();
+
+    const hasCycle = (nodeId: string): boolean => {
+      if (inStack.has(nodeId)) return true;
+      if (visited.has(nodeId)) return false;
+      visited.add(nodeId);
+      inStack.add(nodeId);
+      for (const depId of graph.get(nodeId) ?? []) {
+        if (hasCycle(depId)) return true;
+      }
+      inStack.delete(nodeId);
+      return false;
+    };
+
+    return hasCycle(accessId);
+  }
+}
