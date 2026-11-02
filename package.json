@@ -37,7 +37,7 @@
       "brace-expansion@^2": "2.1.7",
       "fast-uri": "3.1.9",
       "find-my-way": "9.9.0",
-      "follow-redirects": "1.16.1",
+      "follow-redirects": "1.16.2",
       "protobufjs": "7.6.5",
       "source-map-js": "1.2.2",
       "undici@^6": "6.29.1",
