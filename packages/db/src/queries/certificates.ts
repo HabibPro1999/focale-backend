@@ -129,6 +129,7 @@ function readTemplateWithAccess(
 
 /** The send routes' image-ready templates: an uploaded image of a real size. */
 const imageReady = [
+  isNull(certificateTemplates.deletedAt),
   ne(certificateTemplates.templateUrl, ""),
   gt(certificateTemplates.templateWidth, 0),
   gt(certificateTemplates.templateHeight, 0),
@@ -140,7 +141,7 @@ async function loadTemplateWithAccess(
   exec: DbExecutor,
 ): Promise<CertificateTemplateWithAccess | null> {
   const rows = await selectTemplatesWithAccess(exec)
-    .where(eq(certificateTemplates.id, id))
+    .where(and(eq(certificateTemplates.id, id), isNull(certificateTemplates.deletedAt)))
     .limit(1);
   const row = rows[0];
   if (!row) return null;
@@ -157,7 +158,7 @@ export async function listCertificateTemplates(
   exec: DbExecutor = getDb(),
 ): Promise<CertificateTemplateWithAccess[]> {
   const rows = await selectTemplatesWithAccess(exec)
-    .where(eq(certificateTemplates.eventId, eventId))
+    .where(and(eq(certificateTemplates.eventId, eventId), isNull(certificateTemplates.deletedAt)))
     .orderBy(desc(certificateTemplates.createdAt));
   return rows.map(readTemplateWithAccess);
 }
@@ -176,7 +177,7 @@ export async function getCertificateTemplateWithEvent(
     .from(certificateTemplates)
     .innerJoin(events, eq(events.id, certificateTemplates.eventId))
     .leftJoin(eventAccess, templateAccessJoin)
-    .where(eq(certificateTemplates.id, id))
+    .where(and(eq(certificateTemplates.id, id), isNull(certificateTemplates.deletedAt)))
     .limit(1);
   const row = rows[0];
   if (!row) return null;
@@ -202,7 +203,7 @@ export async function getCertificateTemplateImageState(
       accessId: certificateTemplates.accessId,
     })
     .from(certificateTemplates)
-    .where(eq(certificateTemplates.id, id))
+    .where(and(eq(certificateTemplates.id, id), isNull(certificateTemplates.deletedAt)))
     .limit(1);
   return row ?? null;
 }
@@ -225,7 +226,7 @@ export async function getCertificateTemplateForDelete(
       renderImageKey: certificateTemplates.renderImageKey,
     })
     .from(certificateTemplates)
-    .where(eq(certificateTemplates.id, id))
+    .where(and(eq(certificateTemplates.id, id), isNull(certificateTemplates.deletedAt)))
     .limit(1);
   return row ?? null;
 }
@@ -248,7 +249,7 @@ export async function getCertificateTemplateForUpload(
       renderImageKey: certificateTemplates.renderImageKey,
     })
     .from(certificateTemplates)
-    .where(eq(certificateTemplates.id, id))
+    .where(and(eq(certificateTemplates.id, id), isNull(certificateTemplates.deletedAt)))
     .limit(1);
   return row ?? null;
 }
@@ -333,7 +334,7 @@ export async function updateCertificateTemplate(
   await exec
     .update(certificateTemplates)
     .set(set)
-    .where(eq(certificateTemplates.id, id));
+    .where(and(eq(certificateTemplates.id, id), isNull(certificateTemplates.deletedAt)));
   return (await loadTemplateWithAccess(id, exec)) as CertificateTemplateWithAccess;
 }
 
@@ -367,7 +368,7 @@ export async function updateCertificateTemplateImage(
       renderImageWidth: data.renderImageWidth,
       renderImageHeight: data.renderImageHeight,
     })
-    .where(eq(certificateTemplates.id, id));
+    .where(and(eq(certificateTemplates.id, id), isNull(certificateTemplates.deletedAt)));
   return (await loadTemplateWithAccess(id, exec)) as CertificateTemplateWithAccess;
 }
 
@@ -401,6 +402,7 @@ export async function listCertificateTemplatesMissingRenderImage(
     gt(certificateTemplates.templateWidth, 0),
     gt(certificateTemplates.templateHeight, 0),
     isNull(certificateTemplates.renderImageKey),
+    isNull(certificateTemplates.deletedAt),
   ];
   if (options.eventId !== undefined) {
     conds.push(eq(certificateTemplates.eventId, options.eventId));
@@ -448,6 +450,7 @@ export async function setCertificateTemplateRenderImage(
         eq(certificateTemplates.id, id),
         eq(certificateTemplates.templateUrl, expectedTemplateUrl),
         isNull(certificateTemplates.renderImageKey),
+    isNull(certificateTemplates.deletedAt),
       ),
     )
     .returning({ id: certificateTemplates.id });
@@ -458,7 +461,14 @@ export async function deleteCertificateTemplateById(
   id: string,
   exec: DbExecutor,
 ): Promise<void> {
-  await exec.delete(certificateTemplates).where(eq(certificateTemplates.id, id));
+  await exec.update(certificateTemplates).set({ deletedAt: new Date() })
+    .where(and(eq(certificateTemplates.id, id), isNull(certificateTemplates.deletedAt)));
+}
+
+/** Restores the original active/draft state and retained image references. */
+export async function restoreCertificateTemplate(id: string, exec: DbExecutor) {
+  await exec.update(certificateTemplates).set({ deletedAt: null }).where(eq(certificateTemplates.id, id));
+  return loadTemplateWithAccess(id, exec);
 }
 
 // ---------------------------------------------------------------------------

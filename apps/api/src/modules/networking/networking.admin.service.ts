@@ -1,3 +1,6 @@
+import { recordNetworkingAccessUndo, restoreNetworkingAccess } from "./networking.access-undo";
+import type { NetworkingRestoreAccess } from "@app/contracts";
+import { restoreNetworkingMeeting } from "./networking.meeting-restore";
 import { validateNetworkingConfig } from "./networking.config-validation";
 import { ErrorCodes } from "@app/contracts";
 import { revokeParticipantAccess } from "./networking.revocation";
@@ -163,13 +166,30 @@ export class NetworkingAdminService {
   ) {
     return listNetworkingAdminProfiles(eventId, query);
   }
+  async getProfile(eventId: string, id: string) {
+    const { items } = await listNetworkingAdminProfiles(eventId, { id, page: 1, limit: 1 });
+    if (!items[0]) throw new NotFoundException({ code: ErrorCodes.NETWORKING_NOT_FOUND, message: "Participant not found" });
+    return items[0];
+  }
+  async getMeeting(eventId: string, id: string) {
+    const store = networkingStore(getDb());
+    const row = await store.one("meetings", { eventId, id });
+    if (!row) throw new NotFoundException({ code: ErrorCodes.NETWORKING_NOT_FOUND, message: "Meeting not found" });
+    return (await this.meetings.hydrateAdmin(eventId, [row], store))[0]!;
+  }
+  async getReport(eventId: string, id: string) {
+    const { items } = await listNetworkingAdminReports(eventId, { id, page: 1, limit: 1 });
+    if (!items[0]) throw new NotFoundException({ code: ErrorCodes.NETWORKING_NOT_FOUND, message: "Report not found" });
+    return items[0];
+  }
   async updateProfile(
     eventId: string,
     id: string,
-    input: Partial<NetworkingRow<"profiles">>,
+    patch: Partial<NetworkingRow<"profiles">> & { notify?: boolean },
     actorId: string,
   ) {
-    const { row, previousPhotoUrl, revoked } = await networkingTransaction(eventId, async (store, db) => {
+    const { notify, ...input } = patch;
+    const { row, previousPhotoUrl, revoked, accessUndoId } = await networkingTransaction(eventId, async (store, db) => {
       const profile = await store.one("profiles", { eventId, id });
       if (!profile) throw new NotFoundException("Participant not found");
       // Withdrawal is final: its scrubbed content (and later the erased tombstone) is never rewritten.
@@ -188,10 +208,14 @@ export class NetworkingAdminService {
       const [row] = await store.update(
         "profiles",
         { eventId, id },
-        { ...input, overrides: networkingProfileOverrides({ ...profile.overrides, ...input }) },
+        { ...input, updatedAt: new Date(Math.max(Date.now(), (profile.updatedAt?.getTime() ?? 0) + 1)),
+          overrides: networkingProfileOverrides({ ...profile.overrides, ...input }) },
       );
-      const revoked = !!((input.status && input.status !== "ACTIVE") || input.consent === false);
-      if (revoked) await revokeParticipantAccess(id, eventId, db);
+      const statusChanged = input.status !== undefined && input.status !== profile.status;
+      const consentRemoved = input.consent === false && profile.consent !== false;
+      const revoked = (statusChanged && input.status !== "ACTIVE") || consentRemoved;
+      const cancelled = revoked ? await revokeParticipantAccess(id, eventId, db, ...(notify === false ? [{ notify: false }] : [])) : [];
+      const accessUndoId = await recordNetworkingAccessUndo(store, actorId, profile, row, cancelled);
       await store.insert("audit", {
         eventId,
         actorId,
@@ -199,8 +223,8 @@ export class NetworkingAdminService {
         targetId: id,
         data: { fields: Object.keys(input), status: input.status },
       });
-      if(input.status==="ACTIVE" && await this.networking.eligible(row,await getNetworkingConfig(eventId,db),store))await queueNetworkingActivation(id,eventId,db);
-      else if (input.status && input.status !== profile.status)
+      if(notify !== false && statusChanged && input.status==="ACTIVE" && await this.networking.eligible(row,await getNetworkingConfig(eventId,db),store))await queueNetworkingActivation(id,eventId,db);
+      else if (notify !== false && statusChanged && input.status)
         await createNetworkingNotification(
           {
             eventId,
@@ -212,12 +236,15 @@ export class NetworkingAdminService {
           },
           db,
         );
-      return { row, previousPhotoUrl, revoked };
+      return { row, previousPhotoUrl, revoked, accessUndoId };
     });
     if (revoked)
       networkingIdentityCache.forgetProfile(id);
     if (row.photoUrl !== previousPhotoUrl) await deleteNetworkingPhoto(previousPhotoUrl, eventId, id);
-    return row;
+    return { ...row, accessUndoId };
+  }
+  restoreAccess(eventId: string, id: string, input: NetworkingRestoreAccess, actorId: string) {
+    return restoreNetworkingAccess(eventId, id, input, actorId, this.networking, this.meetings);
   }
   async calendar(eventId: string, input: NetworkingCalendarQuery) {
     const parsed = NetworkingCalendarQuerySchema.safeParse(input);
@@ -262,14 +289,16 @@ export class NetworkingAdminService {
     eventId: string,
     id: string,
     input: {
-      action: "ASSIGN" | "CANCEL" | "COMPLETED" | "NO_SHOW";
+      action: "ASSIGN" | "CANCEL" | "COMPLETED" | "NO_SHOW" | "RESTORE";
+      notify?: boolean;
+      expectedRevision?: number;
       tableId?: string;
     },
     actorId: string,
   ) {
     // Assigning claims the meeting's own slot; the other actions only release resources.
     const plan = async () => {
-      if (input.action !== "ASSIGN") return [];
+      if (input.action !== "ASSIGN" && input.action !== "RESTORE") return [];
       const row = await networkingStore(getDb()).one("meetings", { eventId, id });
       return row ? [{ startsAt: row.startsAt, endsAt: row.endsAt }] : [];
     };
@@ -285,7 +314,11 @@ export class NetworkingAdminService {
       if (!event || !profile)
         throw new NotFoundException("Participant not found");
       let saved: NetworkingRow<"meetings"> | undefined;
-      if (input.action === "ASSIGN") {
+      if (input.expectedRevision !== undefined && input.expectedRevision !== row.revision)
+        throw new ConflictException({ code: ErrorCodes.NETWORKING_MEETING_LOCKED, message: "Meeting changed; reload before editing" });
+      if (input.action === "RESTORE") {
+        saved = await restoreNetworkingMeeting(event, config, row, store, this.meetings);
+      } else if (input.action === "ASSIGN") {
         if (!networkingMeetingIs(row.status, "open"))
           throw new ConflictException("Only active meetings can be assigned");
         const allocation = await this.meetings.reserve(
@@ -319,10 +352,10 @@ export class NetworkingAdminService {
         targetId: id,
         data: input,
       });
-      await this.meetings.notify(
+      if (input.notify !== false) await this.meetings.notify(
         { event },
         saved,
-        `MEETING_${input.action}`,
+        input.action === "RESTORE" ? "MEETING_ASSIGN" : `MEETING_${input.action}`,
         [row.requesterId, row.recipientId],
         db,
         { reason: "ORGANIZER" },
@@ -342,28 +375,30 @@ export class NetworkingAdminService {
     eventId: string,
     id: string,
     input: {
-      action: "DISMISS" | "RESOLVE" | "WARN" | "SUSPEND" | "EXCLUDE";
+      action: "DISMISS" | "RESOLVE" | "WARN" | "SUSPEND" | "EXCLUDE" | "REOPEN";
+      notify?: boolean;
       note?: string;
     },
     actorId: string,
   ) {
-    const { resolved, revokedProfileId } = await networkingTransaction(eventId, async (store, db) => {
+    const { resolved, revokedProfileId, accessUndoId } = await networkingTransaction(eventId, async (store, db) => {
       let revokedProfileId: string | undefined;
+      let accessUndoId: string | undefined;
       const report = await store.one("reports", { eventId, id });
       if (!report) throw new NotFoundException("Report not found");
       if (input.action === "SUSPEND" || input.action === "EXCLUDE") {
-        await store.update(
-          "profiles",
-          { eventId, id: report.profileId },
-          {
-            status: input.action === "SUSPEND" ? "SUSPENDED" : "EXCLUDED",
-            visible: false,
-          },
-        );
-        await revokeParticipantAccess(report.profileId, eventId, db);
-        revokedProfileId = report.profileId;
+        const before = await store.one("profiles", { eventId, id: report.profileId });
+        if (!before || before.withdrawnAt) throw new ConflictException("Participant has withdrawn");
+        const status = input.action === "SUSPEND" ? "SUSPENDED" : "EXCLUDED";
+        const [after] = await store.update("profiles", { eventId, id: report.profileId }, {
+          status, visible: false, updatedAt: new Date(Math.max(Date.now(), before.updatedAt.getTime() + 1)),
+        });
+        const cancelled = before.status !== status
+          ? await revokeParticipantAccess(report.profileId, eventId, db, { notify: input.notify }) : [];
+        accessUndoId = await recordNetworkingAccessUndo(store, actorId, before, after, cancelled);
+        if (before.status !== status) revokedProfileId = report.profileId;
       }
-      if (input.action === "WARN")
+      if (input.action === "WARN" && input.notify !== false)
         await createNetworkingNotification(
           {
             eventId,
@@ -380,10 +415,10 @@ export class NetworkingAdminService {
         "reports",
         { eventId, id },
         {
-          status: input.action === "DISMISS" ? "DISMISSED" : "RESOLVED",
+          status: input.action === "REOPEN" ? "OPEN" : input.action === "DISMISS" ? "DISMISSED" : "RESOLVED",
           note: input.note ?? null,
-          resolvedBy: actorId,
-          resolvedAt: new Date(),
+          resolvedBy: input.action === "REOPEN" ? null : actorId,
+          resolvedAt: input.action === "REOPEN" ? null : new Date(),
         },
       );
       await store.insert("audit", {
@@ -393,10 +428,10 @@ export class NetworkingAdminService {
         targetId: id,
         data: { note: input.note },
       });
-      return { resolved: saved, revokedProfileId };
+      return { resolved: saved, revokedProfileId, accessUndoId };
     });
     if (revokedProfileId) networkingIdentityCache.forgetProfile(revokedProfileId);
-    return resolved;
+    return { ...resolved, accessUndoId };
   }
   async regeneratePostEventReport(eventId: string, actorId: string) {
     return networkingTransaction(eventId, async (store) => {

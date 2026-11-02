@@ -68,3 +68,12 @@ export const UserIdParamSchema = z.strictObject({
 export type CreateUserInput = z.infer<typeof CreateUserSchema>;
 export type UpdateUserInput = z.infer<typeof UpdateUserSchema>;
 export type ListUsersQuery = z.infer<typeof ListUsersQuerySchema>;
+
+export const UserResponseSchema = z.object({
+  id: z.string(), email: z.string(), name: z.string(), role: UserRoleSchema,
+  clientId: z.string().nullable(), active: z.boolean(),
+  createdAt: z.date(), updatedAt: z.date(),
+  /** Verified sign-in time; null until the first observed login. Not last request/activity. */
+  lastLoginAt: z.date().nullable(),
+});
+export type UserResponse = z.infer<typeof UserResponseSchema>;

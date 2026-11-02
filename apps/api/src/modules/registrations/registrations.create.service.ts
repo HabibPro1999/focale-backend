@@ -193,7 +193,7 @@ export class RegistrationCreateService {
         quantity: s.quantity,
       })),
       sponsorshipCodes: [],
-    });
+    }, undefined, { formSchema: form.schema });
     const priceBreakdown: PriceBreakdown = {
       ...calculated,
       accessItems: calculated.accessItems.map((item) => ({
@@ -544,8 +544,9 @@ export class RegistrationCreateService {
     }
     // Admin answers: visible fields only, type-checked, required not enforced;
     // stored and priced as returned.
+    const formSchema = (await getRegistrationFormSchemaForEvent(eventId))?.schema;
     const formData = prepareFormDataForPricing(
-      (await getRegistrationFormSchemaForEvent(eventId))?.schema,
+      formSchema,
       rawFormData,
       { enforceRequired: false },
     );
@@ -571,7 +572,7 @@ export class RegistrationCreateService {
         quantity: s.quantity,
       })),
       sponsorshipCodes: [],
-    });
+    }, undefined, { formSchema });
 
     let createdId!: string;
     try {

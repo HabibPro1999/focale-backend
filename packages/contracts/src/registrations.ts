@@ -1,3 +1,4 @@
+import { MoneyAmountSchema } from "./money";
 import { PaymentStatusSchema, RegistrationRoleSchema } from "./registration-enums";
 export { PaymentStatusSchema, RegistrationRoleSchema } from "./registration-enums";
 import { z } from "zod";
@@ -106,7 +107,7 @@ export type SelectPaymentMethodInput = z.infer<typeof SelectPaymentMethodSchema>
 
 export const UpdatePaymentSchema = z.strictObject({
   paymentStatus: PaymentStatusSchema,
-  paidAmount: z.number().int().min(0).optional(),
+  paidAmount: MoneyAmountSchema.optional(),
   paymentMethod: PaymentMethodSchema.optional(),
   paymentReference: z.string().max(200).optional(),
   paymentProofUrl: PaymentProofLocationSchema.optional(),
@@ -114,7 +115,7 @@ export const UpdatePaymentSchema = z.strictObject({
 
 export const UpdateRegistrationSchema = z.strictObject({
   paymentStatus: PaymentStatusSchema.optional(),
-  paidAmount: z.number().int().min(0).optional(),
+  paidAmount: MoneyAmountSchema.optional(),
   paymentMethod: PaymentMethodSchema.optional(),
   paymentReference: z.string().max(200).optional(),
   paymentProofUrl: PaymentProofLocationSchema.optional(),
@@ -156,7 +157,7 @@ export const AdminEditRegistrationSchema = z
     role: RegistrationRoleSchema.optional(),
     accessSelections: z.array(AccessSelectionSchema).optional(),
     paymentStatus: PaymentStatusSchema.optional(),
-    paidAmount: z.number().int().min(0).optional(),
+    paidAmount: MoneyAmountSchema.optional(),
     paymentMethod: PaymentMethodSchema.nullable().optional(),
     paymentReference: z.string().max(200).nullable().optional(),
     paymentProofUrl: PaymentProofLocationSchema.nullable().optional(),
@@ -172,6 +173,8 @@ export const AdminEditRegistrationSchema = z
 // ============================================================================
 
 export const ListRegistrationsQuerySchema = z.strictObject({
+  sort: z.enum(["name", "amount", "date"]).optional(),
+  sortOrder: z.enum(["asc", "desc"]).optional(),
   ...paginationQueryShape(),
   paymentStatus: PaymentStatusSchema.optional(),
   paymentMethod: PaymentMethodSchema.optional(),
@@ -432,3 +435,9 @@ export type AdminCreateRegistrationInput = z.infer<
 export type AdminEditRegistrationInput = z.infer<
   typeof AdminEditRegistrationSchema
 >;
+
+/** GET /api/registrations, restricted to SUPER_ADMIN. */
+export const PlatformRegistrationsQuerySchema = ListRegistrationsQuerySchema.extend({
+  eventId: z.string().uuid().optional(), clientId: z.string().uuid().optional(),
+});
+export type PlatformRegistrationsQuery = z.infer<typeof PlatformRegistrationsQuerySchema>;

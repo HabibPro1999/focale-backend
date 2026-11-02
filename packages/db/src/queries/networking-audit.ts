@@ -1,5 +1,6 @@
-import { and, count, desc, eq, inArray } from "drizzle-orm";
+import { and, count, desc, eq, inArray, getTableColumns } from "drizzle-orm";
 import { getDb, type DbExecutor } from "../client";
+import { users } from "../schema/users-clients";
 import { networkingAudit } from "../schema/networking";
 
 /**
@@ -11,8 +12,10 @@ import { networkingAudit } from "../schema/networking";
 export const NETWORKING_ADMIN_AUDIT_ACTIONS = [
   "CONFIG_UPDATED",
   "PROFILE_UPDATED",
+  "PROFILE_ACCESS_RESTORED",
   "MEETING_ASSIGN",
   "MEETING_CANCEL",
+  "MEETING_RESTORE",
   "MEETING_COMPLETED",
   "MEETING_NO_SHOW",
   "REPORT_DISMISS",
@@ -20,6 +23,7 @@ export const NETWORKING_ADMIN_AUDIT_ACTIONS = [
   "REPORT_WARN",
   "REPORT_SUSPEND",
   "REPORT_EXCLUDE",
+  "REPORT_REOPEN",
   "SPACE_CREATED",
   "SPACE_UPDATED",
   "SPACE_REMOVED",
@@ -42,8 +46,9 @@ export async function listNetworkingAdminAudit(
   );
   const [items, [total]] = await Promise.all([
     db
-      .select()
+      .select({ ...getTableColumns(networkingAudit), actorName: users.name })
       .from(networkingAudit)
+      .leftJoin(users, eq(users.id, networkingAudit.actorId))
       .where(where)
       .orderBy(desc(networkingAudit.createdAt), desc(networkingAudit.id))
       .limit(page.limit)

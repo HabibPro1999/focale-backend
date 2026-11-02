@@ -5,10 +5,10 @@ import type {
   PriceBreakdown,
 } from "@app/contracts";
 import { isFullySettled, type SettlementStatus } from "./payment-status";
+import { sumMoney, subtractMoney, withBreakdownMoney } from "./money";
 
-// Registration settlement math. All amounts are integer minor units (e.g.
-// millimes for TND): plain ints, no floats, no rounding, as in the legacy app
-// (see sponsorship-math.ts).
+// Legacy fields remain major units. Arithmetic uses exact integer units via
+// money.ts, and additive snapshots expose currency-specific minor units.
 //
 // Vocabulary:
 // - gross: `total_amount`, the price after pricing rules and before any
@@ -31,11 +31,11 @@ export function calculateSettlement(reg: {
   paidAmount: number;
   sponsorshipAmount: number;
 }) {
-  const covered = reg.paidAmount + reg.sponsorshipAmount;
-  const amountDue = Math.max(0, reg.totalAmount - covered);
+  const covered = sumMoney(reg.paidAmount, reg.sponsorshipAmount);
+  const amountDue = Math.max(0, subtractMoney(reg.totalAmount, covered));
   return {
     amountDue,
-    netAmount: Math.max(0, reg.totalAmount - reg.sponsorshipAmount),
+    netAmount: Math.max(0, subtractMoney(reg.totalAmount, reg.sponsorshipAmount)),
     isSettled: amountDue === 0 && reg.totalAmount >= 0,
     isPartiallyPaid: covered > 0 && amountDue > 0,
   };
@@ -98,9 +98,10 @@ export interface DerivedSettlement {
 }
 
 function assertAmount(name: string, value: number): void {
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new RangeError(`${name} must be a non-negative integer amount, got ${value}`);
+  if (!Number.isFinite(value) || value < 0 || value !== Number(value.toFixed(4))) {
+    throw new RangeError(`${name} must be a non-negative exact money amount, got ${value}`);
   }
+  sumMoney(value);
 }
 
 /**
@@ -124,8 +125,8 @@ export function deriveSettlement(input: SettlementInput): DerivedSettlement {
 
   const gross = input.gross;
   const sponsorship = Math.min(input.sponsorship, gross);
-  const net = gross - sponsorship;
-  const due = Math.max(0, net - input.paid);
+  const net = subtractMoney(gross, sponsorship);
+  const due = Math.max(0, subtractMoney(net, input.paid));
   const amounts = { gross, sponsorship, net, due };
 
   if (isStickySettlementStatus(input.currentStatus)) {
@@ -135,7 +136,7 @@ export function deriveSettlement(input: SettlementInput): DerivedSettlement {
   let status: SettlementStatus;
   if (gross > 0 && sponsorship >= gross) status = "SPONSORED";
   else if (input.paid > 0 && due === 0) status = "PAID";
-  else if (input.paid + sponsorship > 0 && due > 0) status = "PARTIAL";
+  else if (sumMoney(input.paid, sponsorship) > 0 && due > 0) status = "PARTIAL";
   else status = "PENDING";
 
   const paidAt = status === "PAID" || status === "SPONSORED" ? (input.paidAt ?? input.now) : null;
@@ -156,17 +157,22 @@ export function netBreakdown<T extends Pick<PriceBreakdown, "subtotal">>(
   sponsorship: number,
 ): T & Pick<PriceBreakdown, "sponsorshipTotal" | "total"> {
   const sponsorshipTotal = Math.min(sponsorship, breakdown.subtotal);
-  return {
+  const next = {
     ...breakdown,
     sponsorshipTotal,
-    total: Math.max(0, breakdown.subtotal - sponsorshipTotal),
+    total: Math.max(0, subtractMoney(breakdown.subtotal, sponsorshipTotal)),
   };
+  // Partial breakdowns are used by older callers; only full snapshots carry money.
+  if ("money" in next && "currency" in next && "basePrice" in next && "calculatedBasePrice" in next && "accessTotal" in next) {
+    return withBreakdownMoney(next as typeof next & PriceBreakdown);
+  }
+  return next;
 }
 
 /** The parts of a breakdown dropping an access item reads. */
 export type DroppableBreakdown = Pick<
   PriceBreakdown,
-  "calculatedBasePrice" | "accessItems" | "droppedAccessItems"
+  "calculatedBasePrice" | "accessItems" | "droppedAccessItems" | "optionModifiersTotal"
 >;
 
 export interface DroppedAccessItemResult<T extends DroppableBreakdown> {
@@ -201,8 +207,8 @@ export function dropAccessItem<T extends DroppableBreakdown>(
   const dropped = breakdown.accessItems.find((item) => item.accessId === accessId);
   if (!dropped) return null;
   const accessItems = breakdown.accessItems.filter((item) => item.accessId !== accessId);
-  const accessTotal = accessItems.reduce((sum, item) => sum + item.subtotal, 0);
-  const subtotal = breakdown.calculatedBasePrice + accessTotal;
+  const accessTotal = sumMoney(...accessItems.map((item) => item.subtotal));
+  const subtotal = Math.max(0, sumMoney(breakdown.calculatedBasePrice, accessTotal, breakdown.optionModifiersTotal ?? 0));
   const next = netBreakdown(
     {
       ...breakdown,
@@ -211,7 +217,7 @@ export function dropAccessItem<T extends DroppableBreakdown>(
       subtotal,
       droppedAccessItems: [...(breakdown.droppedAccessItems ?? []), { ...dropped, reason }],
     },
-    sponsorship,
+    Math.min(sponsorship, Math.max(0, sumMoney(breakdown.calculatedBasePrice, accessTotal))),
   );
   return {
     breakdown: next,
@@ -258,9 +264,5 @@ export function paidAccessQuantities(
 
 /** discount_amount: the absolute sum of the applied pricing rules' negative effects. */
 export function calculateDiscountAmount(appliedRules: ReadonlyArray<{ effect: number }>): number {
-  return Math.abs(
-    appliedRules
-      .filter((rule) => rule.effect < 0)
-      .reduce((sum, rule) => sum + rule.effect, 0),
-  );
+  return Math.abs(sumMoney(...appliedRules.filter((rule) => rule.effect < 0).map((rule) => rule.effect)));
 }

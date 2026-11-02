@@ -1,7 +1,11 @@
+import { MoneyAmountSchema } from "./money";
 import { z } from "zod";
 import { hasUpdateField } from "./zod-helpers";
 import { findConditionConflicts } from "./condition-satisfiability";
 import { ConditionSchema } from "./condition.schema";
+import { MoneySnapshotSchema } from "./money";
+
+export const MAX_PRICING_RULES = 10;
 
 
 // ============================================================================
@@ -17,7 +21,7 @@ export const EmbeddedPricingRuleSchema = z.strictObject({
   priority: z.number().int().min(0).default(0),
   conditions: z.array(ConditionSchema).min(1),
   conditionLogic: z.enum(["AND", "OR"]).default("AND"),
-  price: z.number().int().min(0), // Fixed price when conditions match
+  price: MoneyAmountSchema, // Fixed price when conditions match
   active: z.boolean().default(true),
 });
 
@@ -56,7 +60,7 @@ export const UpdateEmbeddedRuleSchema = z
     priority: z.number().int().min(0).optional(),
     conditions: z.array(ConditionSchema).min(1).optional(),
     conditionLogic: z.enum(["AND", "OR"]).optional(),
-    price: z.number().int().min(0).optional(),
+    price: MoneyAmountSchema.optional(),
     active: z.boolean().optional(),
   })
   .refine(hasUpdateField, {
@@ -69,9 +73,9 @@ export const UpdateEmbeddedRuleSchema = z
 
 export const UpdateEventPricingSchema = z
   .strictObject({
-    basePrice: z.number().int().min(0).nullable().optional(),
+    basePrice: MoneyAmountSchema.nullable().optional(),
     currency: z.string().length(3).optional(),
-    rules: z.array(EmbeddedPricingRuleSchema).max(10).optional(),
+    rules: z.array(EmbeddedPricingRuleSchema).max(MAX_PRICING_RULES).optional(),
     // Payment Methods
     onlinePaymentEnabled: z.boolean().optional(),
     onlinePaymentUrl: z.string().url().optional().nullable(),
@@ -144,6 +148,13 @@ export const SponsorshipLineSchema = z.object({
   valid: z.boolean(),
 });
 
+export const OptionModifierLineSchema = z.object({
+  fieldId: z.string(),
+  optionId: z.string(),
+  label: z.string(),
+  amount: z.number(),
+});
+
 /** Why an access item left a registration: its paid capacity filled up, or it was deactivated. */
 export const AccessDropReasonSchema = z.enum(["capacity_reached", "deactivated"]);
 
@@ -171,6 +182,10 @@ export const PriceBreakdownSchema = z.object({
   total: z.number(),
   currency: z.string(),
   droppedAccessItems: z.array(DroppedAccessItemSchema).optional(),
+  /** Absent on legacy snapshots, which must never be back-charged. */
+  optionModifiers: z.array(OptionModifierLineSchema).optional(),
+  optionModifiersTotal: z.number().optional(),
+  money: MoneySnapshotSchema.optional(),
 });
 
 // ============================================================================
@@ -191,6 +206,7 @@ export type SponsorshipLine = z.infer<typeof SponsorshipLineSchema>;
 export type AccessDropReason = z.infer<typeof AccessDropReasonSchema>;
 export type DroppedAccessItem = z.infer<typeof DroppedAccessItemSchema>;
 export type SelectedAccessItem = z.infer<typeof SelectedAccessItemSchema>;
+export type OptionModifierLine = z.infer<typeof OptionModifierLineSchema>;
 
 /**
  * EventPricing row with its `rules` JSON column parsed into typed rules.

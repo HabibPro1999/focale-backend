@@ -34,10 +34,11 @@ const meeting = {
   id: "meeting", eventId: "event", requesterId: profile.id, recipientId: "other", tableId: table.id,
   message: "Meet?", status: "CONFIRMED", createdAt: date, updatedAt: date, expiresAt: date,
   startsAt: date, endsAt: date, cancellationNote: "", proposedStartsAt: null, proposalBy: null,
-  revision: 1, requesterCheckedInAt: null, recipientCheckedInAt: null,
+  cancellationState: null, revision: 1, requesterCheckedInAt: null, recipientCheckedInAt: null,
 } satisfies NetworkingRow<"meetings">;
-const adminMeeting = { ...meeting, requester: profile, recipient: null, table: tableWithSpace };
-const participantMeeting = { ...meeting, requester: visible, recipient: null, table: tableWithSpace };
+const { cancellationState: _internalCancellation, ...meetingPayload } = meeting;
+const adminMeeting = { ...meetingPayload, requester: profile, recipient: null, table: tableWithSpace };
+const participantMeeting = { ...meetingPayload, requester: visible, recipient: null, table: tableWithSpace };
 const message = { id: "message", eventId: "event", connectionId: "connection", senderId: profile.id, body: "Hello", clientMessageId: "client-message", createdAt: date } satisfies NetworkingRow<"messages">;
 const report = { id: "report", eventId: "event", profileId: "other", reporterId: profile.id, messageId: message.id, reason: "Spam", status: "OPEN", note: null, resolvedBy: null, resolvedAt: null, createdAt: date, updatedAt: date } satisfies NetworkingRow<"reports">;
 const connection = { id: "connection", profile: visible, createdAt: date, unreadCount: 1, lastMessage: { id: message.id, connectionId: message.connectionId, senderId: message.senderId, body: message.body, createdAt: date } };
@@ -67,13 +68,16 @@ const payloads: [Controller, Record<string, unknown>][] = [
   [NetworkingAdminController, {
     config, updateConfig: config, uploadLogo: { url: "https://example.test/logo", resource: config },
     sync, syncState: sync, profiles: page({ ...profile, matchCount: 1, meetingCount: 2 }),
-    updateProfile: profile, spaces: page({ ...space, allocatedCount: 1 }), createSpace: space, updateSpace: space,
+    profile: { ...profile, matchCount: 1, meetingCount: 2 },
+    meeting: adminMeeting, report: { ...report, reporter: profile, profile: null, message, resolvedByName: null },
+    updateProfile: profile,
+    restoreAccess: { profile, restoredMeetings: [], alreadyRestored: false }, spaces: page({ ...space, allocatedCount: 1 }), createSpace: space, updateSpace: space,
     removeSpace: { deleted: true }, tables: page(tableWithPeople),
     table: { ...tableWithSpace, representativeIds: [profile.id] }, updateTable: { ...tableWithSpace, representativeIds: [] },
     removeTable: { deleted: true }, meetings: page(adminMeeting), updateMeeting: adminMeeting,
     calendar: { date: "2026-09-01", timezone: "UTC", items: [{ ...adminMeeting, table: tableWithPeople }] },
-    reports: page({ ...report, reporter: profile, profile: null, message }), moderate: report,
-    audit: page({ id: "audit", eventId: "event", actorId: profile.id, action: "UPDATE", targetId: null, data: { field: { old: null, next: "new" } }, createdAt: date }),
+    reports: page({ ...report, reporter: profile, profile: null, message, resolvedByName: null }), moderate: report,
+    audit: page({ id: "audit", eventId: "event", actorId: profile.id, actorName: null, action: "UPDATE", targetId: null, data: { field: { old: null, next: "new" } }, createdAt: date }),
     verifyBadge: { accessAllowed: true, profile: visible, accessId: null },
     regeneratePostEventReport: { deliveryId: "delivery", availableAt: date, version: "v1" },
     postEventReport: { available: true, url: "https://example.test/report", generatedAt: date.toISOString(), summary: { profiles: 1 } },
@@ -82,11 +86,11 @@ const payloads: [Controller, Record<string, unknown>][] = [
       profiles: 1, activeProfiles: 1, visibleProfiles: 1, likes: 1, passes: 0, matches: 1, matchRate: 1,
       interestReciprocityRate: 1, matchedParticipantsRate: 1, messagedParticipantsRate: 1,
       messages: 1, meetings: 1, plannedMeetings: 1, todayMeetings: 1, confirmedMeetings: 1, completedMeetings: 0, cancelledMeetings: 0,
-      noShowMeetings: 0, pendingMeetings: 0, tableOccupancyRate: 1,
+      noShowMeetings: 0, pendingMeetings: 0, awaitingAllocationCount: 0, tableOccupancyRate: 1,
       tableUsage: [{ tableId: table.id, name: table.name, location: table.location, active: true, meetings: 1, availableMinutes: 60, occupiedMinutes: 15, occupancyRate: 0.25 }],
       peakSlots: [{ date: "2026-09-01", time: "12:30", meetings: 1 }], zones: [{ zone: space.name, meetings: 1 }],
       engagementTenSwipes: 1, engagementTenSwipesRate: 1,
-      punctuality: { checkins: 2, onTime: 1, onTimeRate: 0.5, averageDelayMinutes: 3 }, reports: 0,
+      punctuality: { checkins: 2, onTime: 1, onTimeRate: 0.5, averageDelayMinutes: 3 }, reports: 0, openReports: 0,
       emailSent: 1, emailDelivered: 1, emailOpened: 1, emailClicked: 0, emailFailed: 0,
       hourlyActivity: [{ hour: "12", activity: 1 }], timeSeries: [{ date: "2026-09-01", bookingRequests: 1, matches: 1, messages: 1, meetings: 1 }],
       sectors: [{ sector: "Health", participants: 1, matches: 1, meetings: 1 }],
@@ -134,7 +138,7 @@ describe("networking response compatibility", () => {
     vi.spyOn(service, "publicContext").mockResolvedValue({ event: { id: "event", name: "Event", slug: "event", startDate: date, endDate: date, location: null, bannerUrl: null }, config: contracts.NetworkingConfigSchema.parse({ enabled: true }) } as never);
     const result = await service.publicConfig("event");
     assertPayload(NetworkingPublicController, "config", result);
-    expect(Object.values(Object.fromEntries(payloads.map(([c, p]) => [c.name, p]))).reduce((sum, p) => sum + Object.keys(p).length, 1)).toBe(74);
+    expect(Object.values(Object.fromEntries(payloads.map(([c, p]) => [c.name, p]))).reduce((sum, p) => sum + Object.keys(p).length, 1)).toBe(78);
   });
 
   it("preserves omitted optionals, disabled and empty branches", () => {
@@ -176,7 +180,7 @@ it("covers all networking JSON routes, with an explicit raw-download/SSE exempti
     }
   }
   expect(missing).toEqual([]);
-  expect(covered).toHaveLength(74);
+  expect(covered).toHaveLength(78);
   expect(raw.sort()).toEqual([
     "NetworkingAdminController.export", "NetworkingPublicController.calendar",
     "NetworkingPublicController.exportConnections", "NetworkingPublicController.exportMe",

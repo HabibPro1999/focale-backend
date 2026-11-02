@@ -304,6 +304,7 @@ describe("getEventAnalytics", () => {
           name: "VIP",
           type: "WORKSHOP",
           registeredCount: 75,
+          paidCount: 60,
           maxCapacity: 100,
         },
         {
@@ -311,6 +312,7 @@ describe("getEventAnalytics", () => {
           name: "General",
           type: "CONFERENCE",
           registeredCount: 50,
+          paidCount: 40,
           maxCapacity: null,
         },
       ],
@@ -336,6 +338,7 @@ describe("getEventAnalytics", () => {
           name: "Free",
           type: "OTHER",
           registeredCount: 10,
+          paidCount: 8,
           maxCapacity: 0,
         },
       ],
@@ -520,11 +523,13 @@ describe("exportRegistrations", () => {
     const result = await service.exportRegistrations(eventId, {
       format: "csv",
       search: "Mehdi",
+      role: "SPEAKER",
       startDate: "2025-01-01T00:00:00.000Z",
       endDate: "2025-01-31T23:59:59.000Z",
     });
     const filters = expect.objectContaining({
       search: "Mehdi",
+      role: "SPEAKER",
       startDate: "2025-01-01T00:00:00.000Z",
       endDate: "2025-01-31T23:59:59.000Z",
     });

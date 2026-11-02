@@ -11,6 +11,7 @@ import {
   networkingReports as reports,
   networkingTables,
 } from "../schema/networking";
+import { users } from "../schema/users-clients";
 import { listedProfile } from "../policy/networking-eligibility";
 import { networkingMeetingStatusSql } from "./networking-meetings";
 import { networkingParticipantEngagement, type NetworkingEngagementCounts } from "./networking-metrics";
@@ -36,6 +37,7 @@ const idList = (ids: readonly string[]) => sql.join(ids.map((id) => sql`${id}`),
 // ---------------------------------------------------------------------------
 
 export type NetworkingAdminProfileQuery = Page & {
+  id?: string;
   /** Case-insensitive substring of "first last company role email". */
   q?: string;
   sector?: string;
@@ -72,6 +74,7 @@ function adminProfileWhere(eventId: string, query: NetworkingAdminProfileQuery, 
   return and(
     eq(profiles.eventId, eventId),
     listedProfile(profiles),
+    query.id ? eq(profiles.id, query.id) : undefined,
     query.q
       ? sql`strpos(lower(${profiles.firstName}||' '||${profiles.lastName}||' '||${profiles.company}||' '||${profiles.jobTitle}||' '||${profiles.email}), lower(${query.q}))>0`
       : undefined,
@@ -223,16 +226,18 @@ const reported = alias(profiles, "reported");
  */
 export async function listNetworkingAdminReports(
   eventId: string,
-  query: Partial<Page> & { status?: string },
+  query: Partial<Page> & { status?: string; id?: string },
   db: DbExecutor = getDb(),
 ) {
   const where = and(
     eq(reports.eventId, eventId),
+    query.id ? eq(reports.id, query.id) : undefined,
     query.status ? eq(reports.status, query.status as (typeof reports.$inferSelect)["status"]) : undefined,
   );
   const page = db
-    .select({ report: reports, reporter, profile: reported, message: messages })
+    .select({ report: reports, reporter, profile: reported, message: messages, resolvedByName: users.name })
     .from(reports)
+    .leftJoin(users, eq(users.id, reports.resolvedBy))
     .leftJoin(reporter, and(eq(reporter.id, reports.reporterId), eq(reporter.eventId, reports.eventId)))
     .leftJoin(reported, and(eq(reported.id, reports.profileId), eq(reported.eventId, reports.eventId)))
     .leftJoin(messages, and(eq(messages.id, reports.messageId), eq(messages.eventId, reports.eventId)))
@@ -244,7 +249,7 @@ export async function listNetworkingAdminReports(
     db.select({ total }).from(reports).where(where),
   ]);
   return {
-    items: rows.map((row) => ({ ...row.report, reporter: row.reporter, profile: row.profile, message: row.message })),
+    items: rows.map((row) => ({ ...row.report, reporter: row.reporter, profile: row.profile, message: row.message, resolvedByName: row.resolvedByName })),
     total: count?.total ?? 0,
   };
 }

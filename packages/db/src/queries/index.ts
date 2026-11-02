@@ -10,6 +10,7 @@ export * from "./email-resend";
 export * from "./email-retention";
 export * from "./sponsorships";
 export * from "./registrations";
+export * from "./platform-registrations";
 export * from "./abstracts";
 export * from "./certificates";
 export * from "./checkin";
@@ -58,3 +59,7 @@ export * from "./networking-audit";
 export * from "./storage-delete";
 
 export * from "./worker-heartbeats";
+
+export * from "./checkin-undo";
+
+export * from "./sponsorships/undo";

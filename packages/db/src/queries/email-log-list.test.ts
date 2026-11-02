@@ -8,7 +8,7 @@ vi.mock("../client", () => ({ getDb: () => undefined }));
 import type { DbExecutor } from "../client";
 import { EMAIL_LOG_LIST_COUNT_CAP, listEventEmailLogs } from "./email";
 
-// 3.6b: the event email-log list is two index-backed branches (by
+// 3.6b: the event email-log list is four index-backed branches (by
 // registration, by template) glued with UNION ALL, plus a capped count. The
 // real drizzle builders render the SQL; awaiting one resolves canned rows.
 
@@ -73,7 +73,7 @@ function logRow(id: string, queuedAt: string) {
 }
 
 describe("listEventEmailLogs (3.6b)", () => {
-  it("unions two index-backed branches, each cut to offset + limit rows, then pages", async () => {
+  it("unions four index-backed branches, each cut to offset + limit rows, then pages", async () => {
     const { exec, selects } = makeExec({ page: [], rows: [], count: 0 });
     await listEventEmailLogs("event-1", { offset: 40, limit: 20 }, exec);
 
@@ -95,14 +95,14 @@ describe("listEventEmailLogs (3.6b)", () => {
     for (const branch of [byRegistration, byTemplate]) {
       expect(branch).toContain(`order by "email_logs"."queued_at" desc, "email_logs"."id" desc limit $`);
     }
-    expect(page.params.filter((p) => p === 60)).toHaveLength(2);
+    expect(page.params.filter((p) => p === 60)).toHaveLength(4);
     // The union is ordered the same way, then paged.
     expect(page.sql).toMatch(/\) order by "queued_at" DESC, "id" DESC\s+limit \$\d+ offset \$\d+$/);
     expect(page.params.slice(-2)).toEqual([20, 40]);
-    expect(page.params.filter((p) => p === "event-1")).toHaveLength(3);
+    expect(page.params.filter((p) => p === "event-1")).toHaveLength(10);
   });
 
-  it("applies the status and trigger filters in both branches", async () => {
+  it("applies the status and trigger filters in all branches", async () => {
     const { exec, selects, executes } = makeExec({ page: [], rows: [], count: 0 });
     await listEventEmailLogs("event-1", { offset: 0, limit: 50, status: "UNCERTAIN", trigger: "PAYMENT_CONFIRMED" }, exec);
 
@@ -111,12 +111,12 @@ describe("listEventEmailLogs (3.6b)", () => {
       expect(branch).toContain(`"email_logs"."status" = $`);
       expect(branch).toContain(`"email_logs"."trigger" = $`);
     }
-    expect(page.params.filter((p) => p === "UNCERTAIN")).toHaveLength(2);
+    expect(page.params.filter((p) => p === "UNCERTAIN")).toHaveLength(4);
     // No offset for the first page.
     expect(page.sql).not.toMatch(/offset/i);
 
     const [count] = executes;
-    expect(count!.params.filter((p) => p === "UNCERTAIN")).toHaveLength(2);
+    expect(count!.params.filter((p) => p === "UNCERTAIN")).toHaveLength(4);
   });
 
   it("counts each branch up to the cap + 1 and reports a capped total", async () => {
@@ -124,11 +124,11 @@ describe("listEventEmailLogs (3.6b)", () => {
     const result = await listEventEmailLogs("event-1", { offset: 0, limit: 50 }, exec);
 
     const [count] = executes;
-    // The derived table is the parenthesized UNION ALL of the two capped branches.
-    expect(count!.sql).toMatch(/select count\(\*\) as "n"\s+from \(\(select "id" from "email_logs"/i);
+    // The derived table is the parenthesized UNION ALL of the four capped branches.
+    expect(count!.sql).toMatch(/select count\(\*\) as "n"\s+from \(\(\(\(select "id" from "email_logs"/i);
     expect(count!.sql).toMatch(/limit \$\d+\)\) as "capped"/i);
     expect(count!.sql).toMatch(/\) union all \(/i);
-    expect(count!.params.filter((p) => p === EMAIL_LOG_LIST_COUNT_CAP + 1)).toHaveLength(2);
+    expect(count!.params.filter((p) => p === EMAIL_LOG_LIST_COUNT_CAP + 1)).toHaveLength(4);
     expect(result).toMatchObject({ total: EMAIL_LOG_LIST_COUNT_CAP, totalCapped: true });
   });
 

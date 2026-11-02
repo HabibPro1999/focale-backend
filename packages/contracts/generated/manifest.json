@@ -33,6 +33,10 @@
       "module": "packages/contracts/src/abstracts.ts",
       "type": "AbstractSlugParam"
     },
+    "AbstractStatusCountsSchema": {
+      "module": "packages/contracts/src/abstracts.responses.ts",
+      "type": "AbstractStatusCounts"
+    },
     "AbstractSubmittedResponseSchema": {
       "module": "packages/contracts/src/abstracts.responses.ts",
       "type": "AbstractSubmittedResponse"
@@ -88,6 +92,10 @@
     "AdditionalFieldsSchema": {
       "module": "packages/contracts/src/abstracts.ts",
       "type": "AdditionalFields"
+    },
+    "AdminAbstractListMetaSchema": {
+      "module": "packages/contracts/src/abstracts.responses.ts",
+      "type": "AdminAbstractListMeta"
     },
     "AdminCreateRegistrationSchema": {
       "module": "packages/contracts/src/registrations.ts",
@@ -149,6 +157,10 @@
       "module": "packages/contracts/src/forms.ts",
       "type": "BeneficiaryTemplate"
     },
+    "BulkSendCountResponseSchema": {
+      "module": "packages/contracts/src/email.ts",
+      "type": "BulkSendCountResponse"
+    },
     "BulkSendEmailSchema": {
       "module": "packages/contracts/src/email.ts",
       "type": "BulkSendEmail"
@@ -181,6 +193,10 @@
       "module": "packages/contracts/src/certificates.ts",
       "type": "CertificateRegistrationRole"
     },
+    "CertificateSendPreviewSchema": {
+      "module": "packages/contracts/src/certificates.ts",
+      "type": "CertificateSendPreview"
+    },
     "CertificateTemplateScopeSchema": {
       "module": "packages/contracts/src/certificates.ts",
       "type": "CertificateTemplateScope"
@@ -201,9 +217,17 @@
       "module": "packages/contracts/src/checkin.ts",
       "type": "CheckInRegistrationsQuery"
     },
+    "CheckInStatsResponseSchema": {
+      "module": "packages/contracts/src/checkin.ts",
+      "type": "CheckInStatsResponse"
+    },
     "ClientIdParamSchema": {
       "module": "packages/contracts/src/clients.ts",
       "type": "ClientIdParam"
+    },
+    "ClientListRowResponseSchema": {
+      "module": "packages/contracts/src/clients.ts",
+      "type": "ClientListRowResponse"
     },
     "CommitteeAbstractsQuerySchema": {
       "module": "packages/contracts/src/abstracts.ts",
@@ -325,6 +349,22 @@
       "module": "packages/contracts/src/registrations.ts",
       "type": "DeleteRegistrationQuery"
     },
+    "DeleteUnusedThemeParamSchema": {
+      "module": "packages/contracts/src/abstracts.ts",
+      "type": "DeleteUnusedThemeParam"
+    },
+    "DraftEmailPreviewResponseSchema": {
+      "module": "packages/contracts/src/email.ts",
+      "type": "DraftEmailPreviewResponse"
+    },
+    "DraftEmailPreviewSchema": {
+      "module": "packages/contracts/src/email.ts",
+      "type": "DraftEmailPreview"
+    },
+    "DraftEmailTestSendSchema": {
+      "module": "packages/contracts/src/email.ts",
+      "type": "DraftEmailTestSend"
+    },
     "DroppedAccessItemSchema": {
       "module": "packages/contracts/src/pricing.ts",
       "type": "DroppedAccessItem"
@@ -332,6 +372,10 @@
     "DuplicateEmailTemplateSchema": {
       "module": "packages/contracts/src/email.ts",
       "type": "DuplicateEmailTemplate"
+    },
+    "DuplicateFormSchema": {
+      "module": "packages/contracts/src/forms.ts",
+      "type": "DuplicateForm"
     },
     "EditAbstractSchema": {
       "module": "packages/contracts/src/abstracts.ts",
@@ -369,9 +413,17 @@
       "module": "packages/contracts/src/email.ts",
       "type": "EmailTextAlign"
     },
+    "EmailVariablesQuerySchema": {
+      "module": "packages/contracts/src/email.ts",
+      "type": "EmailVariablesQuery"
+    },
     "EmbeddedPricingRuleSchema": {
       "module": "packages/contracts/src/pricing.ts",
       "type": "EmbeddedPricingRule"
+    },
+    "ErrorCodeSchema": {
+      "module": "packages/contracts/src/errors.ts",
+      "type": "ErrorCode"
     },
     "EventAccessIdParamSchema": {
       "module": "packages/contracts/src/access.ts",
@@ -389,9 +441,25 @@
       "module": "packages/contracts/src/reports.ts",
       "type": "EventAnalyticsResponse"
     },
+    "EventEmailLogResponseSchema": {
+      "module": "packages/contracts/src/email.ts",
+      "type": "EventEmailLogResponse"
+    },
     "EventIdParamSchema": {
       "module": "packages/contracts/src/events.ts",
       "type": "EventIdParam"
+    },
+    "EventListPaginationMetaSchema": {
+      "module": "packages/contracts/src/events.responses.ts",
+      "type": "EventListPaginationMeta"
+    },
+    "EventListResponseSchema": {
+      "module": "packages/contracts/src/events.responses.ts",
+      "type": "EventListResponse"
+    },
+    "EventListRowResponseSchema": {
+      "module": "packages/contracts/src/events.responses.ts",
+      "type": "EventListRowResponse"
     },
     "EventPricingRowResponseSchema": {
       "module": "packages/contracts/src/forms.responses.ts",
@@ -494,6 +562,10 @@
       "module": "packages/contracts/src/forms.ts",
       "type": "FormStep"
     },
+    "GetEmailLogParamSchema": {
+      "module": "packages/contracts/src/email.ts",
+      "type": "GetEmailLogParam"
+    },
     "GetGroupedAccessBodySchema": {
       "module": "packages/contracts/src/access.ts",
       "type": "GetGroupedAccessBody"
@@ -586,6 +658,14 @@
       "module": "packages/contracts/src/abstracts.ts",
       "type": "MarkAbstractPresented"
     },
+    "MoneyAmountSchema": {
+      "module": "packages/contracts/src/money.ts",
+      "type": "MoneyAmount"
+    },
+    "MoneySnapshotSchema": {
+      "module": "packages/contracts/src/money.ts",
+      "type": "MoneySnapshot"
+    },
     "NetworkingAdminAnalyticsResponseSchema": {
       "module": "packages/contracts/src/networking.admin.responses.ts",
       "type": "NetworkingAdminAnalyticsResponse"
@@ -606,6 +686,10 @@
       "module": "packages/contracts/src/networking.admin.responses.ts",
       "type": "NetworkingAdminCreateSpaceResponse"
     },
+    "NetworkingAdminMeetingResponseSchema": {
+      "module": "packages/contracts/src/networking.admin.responses.ts",
+      "type": "NetworkingAdminMeetingResponse"
+    },
     "NetworkingAdminMeetingUpdateSchema": {
       "module": "packages/contracts/src/networking.ts",
       "type": "NetworkingAdminMeetingUpdate"
@@ -622,6 +706,10 @@
       "module": "packages/contracts/src/networking.admin.responses.ts",
       "type": "NetworkingAdminPostEventReportResponse"
     },
+    "NetworkingAdminProfileResponseSchema": {
+      "module": "packages/contracts/src/networking.admin.responses.ts",
+      "type": "NetworkingAdminProfileResponse"
+    },
     "NetworkingAdminProfileUpdateSchema": {
       "module": "packages/contracts/src/networking.ts",
       "type": "NetworkingAdminProfileUpdate"
@@ -629,6 +717,10 @@
     "NetworkingAdminProfilesResponseSchema": {
       "module": "packages/contracts/src/networking.admin.responses.ts",
       "type": "NetworkingAdminProfilesResponse"
+    },
+    "NetworkingAdminRecordParamSchema": {
+      "module": "packages/contracts/src/networking.ts",
+      "type": "NetworkingAdminRecordParam"
     },
     "NetworkingAdminRegeneratePostEventReportResponseSchema": {
       "module": "packages/contracts/src/networking.admin.responses.ts",
@@ -643,9 +735,17 @@
       "type": "NetworkingAdminRemoveTableResponse",
       "aliasOf": "NetworkingAdminRemoveSpaceResponseSchema"
     },
+    "NetworkingAdminReportResponseSchema": {
+      "module": "packages/contracts/src/networking.admin.responses.ts",
+      "type": "NetworkingAdminReportResponse"
+    },
     "NetworkingAdminReportsResponseSchema": {
       "module": "packages/contracts/src/networking.admin.responses.ts",
       "type": "NetworkingAdminReportsResponse"
+    },
+    "NetworkingAdminRestoreAccessResponseSchema": {
+      "module": "packages/contracts/src/networking.admin.responses.ts",
+      "type": "NetworkingAdminRestoreAccessResponse"
     },
     "NetworkingAdminSpacesResponseSchema": {
       "module": "packages/contracts/src/networking.admin.responses.ts",
@@ -675,7 +775,8 @@
     },
     "NetworkingAdminUpdateMeetingResponseSchema": {
       "module": "packages/contracts/src/networking.admin.responses.ts",
-      "type": "NetworkingAdminUpdateMeetingResponse"
+      "type": "NetworkingAdminUpdateMeetingResponse",
+      "aliasOf": "NetworkingAdminMeetingResponseSchema"
     },
     "NetworkingAdminUpdateProfileResponseSchema": {
       "module": "packages/contracts/src/networking.admin.responses.ts",
@@ -865,8 +966,7 @@
     },
     "NetworkingPublicMeResponseSchema": {
       "module": "packages/contracts/src/networking.public.responses.ts",
-      "type": "NetworkingPublicMeResponse",
-      "aliasOf": "NetworkingAdminUpdateProfileResponseSchema"
+      "type": "NetworkingPublicMeResponse"
     },
     "NetworkingPublicMeetingResponseSchema": {
       "module": "packages/contracts/src/networking.public.responses.ts",
@@ -916,8 +1016,7 @@
     },
     "NetworkingPublicReportResponseSchema": {
       "module": "packages/contracts/src/networking.public.responses.ts",
-      "type": "NetworkingPublicReportResponse",
-      "aliasOf": "NetworkingAdminModerateResponseSchema"
+      "type": "NetworkingPublicReportResponse"
     },
     "NetworkingPublicRepresentativesResponseSchema": {
       "module": "packages/contracts/src/networking.public.responses.ts",
@@ -955,7 +1054,7 @@
     "NetworkingPublicUpdateMeResponseSchema": {
       "module": "packages/contracts/src/networking.public.responses.ts",
       "type": "NetworkingPublicUpdateMeResponse",
-      "aliasOf": "NetworkingAdminUpdateProfileResponseSchema"
+      "aliasOf": "NetworkingPublicMeResponseSchema"
     },
     "NetworkingPublicUploadPhotoResponseSchema": {
       "module": "packages/contracts/src/networking.public.responses.ts",
@@ -993,6 +1092,10 @@
       "module": "packages/contracts/src/networking.ts",
       "type": "NetworkingReport"
     },
+    "NetworkingRestoreAccessSchema": {
+      "module": "packages/contracts/src/networking.ts",
+      "type": "NetworkingRestoreAccess"
+    },
     "NetworkingSpaceSchema": {
       "module": "packages/contracts/src/networking.ts",
       "type": "NetworkingSpace"
@@ -1008,6 +1111,10 @@
     "NetworkingTableUpdateSchema": {
       "module": "packages/contracts/src/networking.ts",
       "type": "NetworkingTableUpdate"
+    },
+    "OptionModifierLineSchema": {
+      "module": "packages/contracts/src/pricing.ts",
+      "type": "OptionModifierLine"
     },
     "OptionTranslationEntrySchema": {
       "module": "packages/contracts/src/forms.ts",
@@ -1040,6 +1147,18 @@
     "PaymentStatusSchema": {
       "module": "packages/contracts/src/registrations.ts",
       "type": "PaymentStatus"
+    },
+    "PlatformRegistrationAggregateResponseSchema": {
+      "module": "packages/contracts/src/registrations.responses.ts",
+      "type": "PlatformRegistrationAggregateResponse"
+    },
+    "PlatformRegistrationsQuerySchema": {
+      "module": "packages/contracts/src/registrations.ts",
+      "type": "PlatformRegistrationsQuery"
+    },
+    "PlatformRegistrationsResponseSchema": {
+      "module": "packages/contracts/src/registrations.responses.ts",
+      "type": "PlatformRegistrationsResponse"
     },
     "PriceBreakdownSchema": {
       "module": "packages/contracts/src/pricing.ts",
@@ -1129,6 +1248,10 @@
       "module": "packages/contracts/src/registrations.responses.ts",
       "type": "RegistrationAccessSelectionResponse"
     },
+    "RegistrationAmountsResponseSchema": {
+      "module": "packages/contracts/src/registrations.responses.ts",
+      "type": "RegistrationAmountsResponse"
+    },
     "RegistrationAuditLogListResponseSchema": {
       "module": "packages/contracts/src/registrations.responses.ts",
       "type": "RegistrationAuditLogListResponse"
@@ -1177,13 +1300,26 @@
       "module": "packages/contracts/src/registrations.responses.ts",
       "type": "RegistrationTableColumnsResponse"
     },
+    "ReorderAbstractThemesSchema": {
+      "module": "packages/contracts/src/abstracts.ts",
+      "type": "ReorderAbstractThemes"
+    },
     "ReportQuerySchema": {
       "module": "packages/contracts/src/reports.ts",
       "type": "ReportQuery"
     },
     "ResendEmailLogParamSchema": {
       "module": "packages/contracts/src/email.ts",
-      "type": "ResendEmailLogParam"
+      "type": "ResendEmailLogParam",
+      "aliasOf": "GetEmailLogParamSchema"
+    },
+    "RestoreCertificateBodySchema": {
+      "module": "packages/contracts/src/certificates.ts",
+      "type": "RestoreCertificateBody"
+    },
+    "RestoreSponsorshipBodySchema": {
+      "module": "packages/contracts/src/sponsorships.ts",
+      "type": "RestoreSponsorshipBody"
     },
     "ReviewAbstractSchema": {
       "module": "packages/contracts/src/abstracts.ts",
@@ -1305,9 +1441,21 @@
       "module": "packages/contracts/src/forms.ts",
       "type": "StoredFormSchemaJson"
     },
+    "StoredNetworkingAccessUndoSchema": {
+      "module": "packages/contracts/src/networking.ts",
+      "type": "StoredNetworkingAccessUndo"
+    },
+    "StoredNetworkingMeetingCancellationSchema": {
+      "module": "packages/contracts/src/networking.ts",
+      "type": "StoredNetworkingMeetingCancellation"
+    },
     "StoredPricingRulesSchema": {
       "module": "packages/contracts/src/pricing.ts",
       "type": "StoredPricingRules"
+    },
+    "StoredSponsorshipCancellationUndoSchema": {
+      "module": "packages/contracts/src/sponsorships.ts",
+      "type": "StoredSponsorshipCancellationUndo"
     },
     "StreamQuerySchema": {
       "module": "packages/contracts/src/realtime.ts",
@@ -1341,13 +1489,22 @@
       "module": "packages/contracts/src/registrations.ts",
       "type": "TableColumnType"
     },
+    "TestCertificateBodySchema": {
+      "module": "packages/contracts/src/certificates.ts",
+      "type": "TestCertificateBody"
+    },
+    "TestCertificateResultSchema": {
+      "module": "packages/contracts/src/certificates.ts",
+      "type": "TestCertificateResult"
+    },
     "TestSendEmailSchema": {
       "module": "packages/contracts/src/email.ts",
       "type": "TestSendEmail"
     },
     "ThemeIdParamSchema": {
       "module": "packages/contracts/src/abstracts.ts",
-      "type": "ThemeIdParam"
+      "type": "ThemeIdParam",
+      "aliasOf": "DeleteUnusedThemeParamSchema"
     },
     "ThemeTranslationsSchema": {
       "module": "packages/contracts/src/abstracts.ts",
@@ -1376,6 +1533,14 @@
     "TransactionTypeSchema": {
       "module": "packages/contracts/src/registrations.ts",
       "type": "TransactionType"
+    },
+    "UndoCheckInBodySchema": {
+      "module": "packages/contracts/src/checkin.ts",
+      "type": "UndoCheckInBody"
+    },
+    "UndoCheckInResultSchema": {
+      "module": "packages/contracts/src/checkin.ts",
+      "type": "UndoCheckInResult"
     },
     "UpdateCertificateTemplateSchema": {
       "module": "packages/contracts/src/certificates.ts",
@@ -1441,6 +1606,10 @@
       "module": "packages/contracts/src/identity.ts",
       "type": "UserIdParam"
     },
+    "UserResponseSchema": {
+      "module": "packages/contracts/src/identity.ts",
+      "type": "UserResponse"
+    },
     "ValidateAccessSelectionsBodySchema": {
       "module": "packages/contracts/src/access.ts",
       "type": "ValidateAccessSelectionsBody"
@@ -1480,6 +1649,16 @@
     {
       "direction": "input",
       "pointer": "/$defs/AdminRegistrationResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/ClientListRowResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/ClientListRowResponseSchema/properties/updatedAt",
       "reason": "date"
     },
     {
@@ -1590,6 +1769,26 @@
     {
       "direction": "input",
       "pointer": "/$defs/EventAccessRowResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/EventListRowResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/EventListRowResponseSchema/properties/endDate",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/EventListRowResponseSchema/properties/startDate",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/EventListRowResponseSchema/properties/updatedAt",
       "reason": "date"
     },
     {
@@ -1709,6 +1908,56 @@
     },
     {
       "direction": "input",
+      "pointer": "/$defs/NetworkingAdminMeetingResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/NetworkingAdminMeetingResponseSchema/properties/endsAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/NetworkingAdminMeetingResponseSchema/properties/expiresAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/NetworkingAdminMeetingResponseSchema/properties/proposedStartsAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/NetworkingAdminMeetingResponseSchema/properties/recipientCheckedInAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/NetworkingAdminMeetingResponseSchema/properties/requesterCheckedInAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/NetworkingAdminMeetingResponseSchema/properties/startsAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/NetworkingAdminMeetingResponseSchema/properties/table/anyOf/0/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/NetworkingAdminMeetingResponseSchema/properties/table/anyOf/0/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/NetworkingAdminMeetingResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
       "pointer": "/$defs/NetworkingAdminModerateResponseSchema/properties/createdAt",
       "reason": "date"
     },
@@ -1724,32 +1973,32 @@
     },
     {
       "direction": "input",
-      "pointer": "/$defs/NetworkingAdminProfilesResponseSchema/properties/items/items/properties/consentAt/anyOf/0",
+      "pointer": "/$defs/NetworkingAdminProfileResponseSchema/properties/consentAt/anyOf/0",
       "reason": "date"
     },
     {
       "direction": "input",
-      "pointer": "/$defs/NetworkingAdminProfilesResponseSchema/properties/items/items/properties/createdAt",
+      "pointer": "/$defs/NetworkingAdminProfileResponseSchema/properties/createdAt",
       "reason": "date"
     },
     {
       "direction": "input",
-      "pointer": "/$defs/NetworkingAdminProfilesResponseSchema/properties/items/items/properties/erasedAt/anyOf/0",
+      "pointer": "/$defs/NetworkingAdminProfileResponseSchema/properties/erasedAt/anyOf/0",
       "reason": "date"
     },
     {
       "direction": "input",
-      "pointer": "/$defs/NetworkingAdminProfilesResponseSchema/properties/items/items/properties/lastActiveAt/anyOf/0",
+      "pointer": "/$defs/NetworkingAdminProfileResponseSchema/properties/lastActiveAt/anyOf/0",
       "reason": "date"
     },
     {
       "direction": "input",
-      "pointer": "/$defs/NetworkingAdminProfilesResponseSchema/properties/items/items/properties/updatedAt",
+      "pointer": "/$defs/NetworkingAdminProfileResponseSchema/properties/updatedAt",
       "reason": "date"
     },
     {
       "direction": "input",
-      "pointer": "/$defs/NetworkingAdminProfilesResponseSchema/properties/items/items/properties/withdrawnAt/anyOf/0",
+      "pointer": "/$defs/NetworkingAdminProfileResponseSchema/properties/withdrawnAt/anyOf/0",
       "reason": "date"
     },
     {
@@ -1759,17 +2008,17 @@
     },
     {
       "direction": "input",
-      "pointer": "/$defs/NetworkingAdminReportsResponseSchema/properties/items/items/properties/createdAt",
+      "pointer": "/$defs/NetworkingAdminReportResponseSchema/properties/createdAt",
       "reason": "date"
     },
     {
       "direction": "input",
-      "pointer": "/$defs/NetworkingAdminReportsResponseSchema/properties/items/items/properties/resolvedAt/anyOf/0",
+      "pointer": "/$defs/NetworkingAdminReportResponseSchema/properties/resolvedAt/anyOf/0",
       "reason": "date"
     },
     {
       "direction": "input",
-      "pointer": "/$defs/NetworkingAdminReportsResponseSchema/properties/items/items/properties/updatedAt",
+      "pointer": "/$defs/NetworkingAdminReportResponseSchema/properties/updatedAt",
       "reason": "date"
     },
     {
@@ -1810,56 +2059,6 @@
     {
       "direction": "input",
       "pointer": "/$defs/NetworkingAdminTablesResponseSchema/properties/items/items/properties/updatedAt",
-      "reason": "date"
-    },
-    {
-      "direction": "input",
-      "pointer": "/$defs/NetworkingAdminUpdateMeetingResponseSchema/properties/createdAt",
-      "reason": "date"
-    },
-    {
-      "direction": "input",
-      "pointer": "/$defs/NetworkingAdminUpdateMeetingResponseSchema/properties/endsAt",
-      "reason": "date"
-    },
-    {
-      "direction": "input",
-      "pointer": "/$defs/NetworkingAdminUpdateMeetingResponseSchema/properties/expiresAt",
-      "reason": "date"
-    },
-    {
-      "direction": "input",
-      "pointer": "/$defs/NetworkingAdminUpdateMeetingResponseSchema/properties/proposedStartsAt/anyOf/0",
-      "reason": "date"
-    },
-    {
-      "direction": "input",
-      "pointer": "/$defs/NetworkingAdminUpdateMeetingResponseSchema/properties/recipientCheckedInAt/anyOf/0",
-      "reason": "date"
-    },
-    {
-      "direction": "input",
-      "pointer": "/$defs/NetworkingAdminUpdateMeetingResponseSchema/properties/requesterCheckedInAt/anyOf/0",
-      "reason": "date"
-    },
-    {
-      "direction": "input",
-      "pointer": "/$defs/NetworkingAdminUpdateMeetingResponseSchema/properties/startsAt",
-      "reason": "date"
-    },
-    {
-      "direction": "input",
-      "pointer": "/$defs/NetworkingAdminUpdateMeetingResponseSchema/properties/table/anyOf/0/properties/createdAt",
-      "reason": "date"
-    },
-    {
-      "direction": "input",
-      "pointer": "/$defs/NetworkingAdminUpdateMeetingResponseSchema/properties/table/anyOf/0/properties/updatedAt",
-      "reason": "date"
-    },
-    {
-      "direction": "input",
-      "pointer": "/$defs/NetworkingAdminUpdateMeetingResponseSchema/properties/updatedAt",
       "reason": "date"
     },
     {
@@ -1979,6 +2178,36 @@
     },
     {
       "direction": "input",
+      "pointer": "/$defs/NetworkingPublicMeResponseSchema/properties/consentAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/NetworkingPublicMeResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/NetworkingPublicMeResponseSchema/properties/erasedAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/NetworkingPublicMeResponseSchema/properties/lastActiveAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/NetworkingPublicMeResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/NetworkingPublicMeResponseSchema/properties/withdrawnAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
       "pointer": "/$defs/NetworkingPublicMessageResponseSchema/properties/createdAt",
       "reason": "date"
     },
@@ -2010,6 +2239,21 @@
     {
       "direction": "input",
       "pointer": "/$defs/NetworkingPublicProfileResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/NetworkingPublicReportResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/NetworkingPublicReportResponseSchema/properties/resolvedAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/NetworkingPublicReportResponseSchema/properties/updatedAt",
       "reason": "date"
     },
     {
@@ -2223,6 +2467,21 @@
       "reason": "opaque"
     },
     {
+      "direction": "input",
+      "pointer": "/$defs/UserResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/UserResponseSchema/properties/lastLoginAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/UserResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
       "direction": "output",
       "pointer": "/$defs/AdminRegistrationResponseSchema/properties/accessCheckIns/items/properties/checkedInAt",
       "reason": "date"
@@ -2255,6 +2514,16 @@
     {
       "direction": "output",
       "pointer": "/$defs/AdminRegistrationResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/ClientListRowResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/ClientListRowResponseSchema/properties/updatedAt",
       "reason": "date"
     },
     {
@@ -2394,6 +2663,26 @@
     },
     {
       "direction": "output",
+      "pointer": "/$defs/EventListRowResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/EventListRowResponseSchema/properties/endDate",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/EventListRowResponseSchema/properties/startDate",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/EventListRowResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
       "pointer": "/$defs/EventPricingRowResponseSchema/properties/createdAt",
       "reason": "date"
     },
@@ -2519,6 +2808,56 @@
     },
     {
       "direction": "output",
+      "pointer": "/$defs/NetworkingAdminMeetingResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/NetworkingAdminMeetingResponseSchema/properties/endsAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/NetworkingAdminMeetingResponseSchema/properties/expiresAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/NetworkingAdminMeetingResponseSchema/properties/proposedStartsAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/NetworkingAdminMeetingResponseSchema/properties/recipientCheckedInAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/NetworkingAdminMeetingResponseSchema/properties/requesterCheckedInAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/NetworkingAdminMeetingResponseSchema/properties/startsAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/NetworkingAdminMeetingResponseSchema/properties/table/anyOf/0/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/NetworkingAdminMeetingResponseSchema/properties/table/anyOf/0/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/NetworkingAdminMeetingResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
       "pointer": "/$defs/NetworkingAdminModerateResponseSchema/properties/createdAt",
       "reason": "date"
     },
@@ -2534,32 +2873,32 @@
     },
     {
       "direction": "output",
-      "pointer": "/$defs/NetworkingAdminProfilesResponseSchema/properties/items/items/properties/consentAt/anyOf/0",
+      "pointer": "/$defs/NetworkingAdminProfileResponseSchema/properties/consentAt/anyOf/0",
       "reason": "date"
     },
     {
       "direction": "output",
-      "pointer": "/$defs/NetworkingAdminProfilesResponseSchema/properties/items/items/properties/createdAt",
+      "pointer": "/$defs/NetworkingAdminProfileResponseSchema/properties/createdAt",
       "reason": "date"
     },
     {
       "direction": "output",
-      "pointer": "/$defs/NetworkingAdminProfilesResponseSchema/properties/items/items/properties/erasedAt/anyOf/0",
+      "pointer": "/$defs/NetworkingAdminProfileResponseSchema/properties/erasedAt/anyOf/0",
       "reason": "date"
     },
     {
       "direction": "output",
-      "pointer": "/$defs/NetworkingAdminProfilesResponseSchema/properties/items/items/properties/lastActiveAt/anyOf/0",
+      "pointer": "/$defs/NetworkingAdminProfileResponseSchema/properties/lastActiveAt/anyOf/0",
       "reason": "date"
     },
     {
       "direction": "output",
-      "pointer": "/$defs/NetworkingAdminProfilesResponseSchema/properties/items/items/properties/updatedAt",
+      "pointer": "/$defs/NetworkingAdminProfileResponseSchema/properties/updatedAt",
       "reason": "date"
     },
     {
       "direction": "output",
-      "pointer": "/$defs/NetworkingAdminProfilesResponseSchema/properties/items/items/properties/withdrawnAt/anyOf/0",
+      "pointer": "/$defs/NetworkingAdminProfileResponseSchema/properties/withdrawnAt/anyOf/0",
       "reason": "date"
     },
     {
@@ -2569,17 +2908,17 @@
     },
     {
       "direction": "output",
-      "pointer": "/$defs/NetworkingAdminReportsResponseSchema/properties/items/items/properties/createdAt",
+      "pointer": "/$defs/NetworkingAdminReportResponseSchema/properties/createdAt",
       "reason": "date"
     },
     {
       "direction": "output",
-      "pointer": "/$defs/NetworkingAdminReportsResponseSchema/properties/items/items/properties/resolvedAt/anyOf/0",
+      "pointer": "/$defs/NetworkingAdminReportResponseSchema/properties/resolvedAt/anyOf/0",
       "reason": "date"
     },
     {
       "direction": "output",
-      "pointer": "/$defs/NetworkingAdminReportsResponseSchema/properties/items/items/properties/updatedAt",
+      "pointer": "/$defs/NetworkingAdminReportResponseSchema/properties/updatedAt",
       "reason": "date"
     },
     {
@@ -2620,56 +2959,6 @@
     {
       "direction": "output",
       "pointer": "/$defs/NetworkingAdminTablesResponseSchema/properties/items/items/properties/updatedAt",
-      "reason": "date"
-    },
-    {
-      "direction": "output",
-      "pointer": "/$defs/NetworkingAdminUpdateMeetingResponseSchema/properties/createdAt",
-      "reason": "date"
-    },
-    {
-      "direction": "output",
-      "pointer": "/$defs/NetworkingAdminUpdateMeetingResponseSchema/properties/endsAt",
-      "reason": "date"
-    },
-    {
-      "direction": "output",
-      "pointer": "/$defs/NetworkingAdminUpdateMeetingResponseSchema/properties/expiresAt",
-      "reason": "date"
-    },
-    {
-      "direction": "output",
-      "pointer": "/$defs/NetworkingAdminUpdateMeetingResponseSchema/properties/proposedStartsAt/anyOf/0",
-      "reason": "date"
-    },
-    {
-      "direction": "output",
-      "pointer": "/$defs/NetworkingAdminUpdateMeetingResponseSchema/properties/recipientCheckedInAt/anyOf/0",
-      "reason": "date"
-    },
-    {
-      "direction": "output",
-      "pointer": "/$defs/NetworkingAdminUpdateMeetingResponseSchema/properties/requesterCheckedInAt/anyOf/0",
-      "reason": "date"
-    },
-    {
-      "direction": "output",
-      "pointer": "/$defs/NetworkingAdminUpdateMeetingResponseSchema/properties/startsAt",
-      "reason": "date"
-    },
-    {
-      "direction": "output",
-      "pointer": "/$defs/NetworkingAdminUpdateMeetingResponseSchema/properties/table/anyOf/0/properties/createdAt",
-      "reason": "date"
-    },
-    {
-      "direction": "output",
-      "pointer": "/$defs/NetworkingAdminUpdateMeetingResponseSchema/properties/table/anyOf/0/properties/updatedAt",
-      "reason": "date"
-    },
-    {
-      "direction": "output",
-      "pointer": "/$defs/NetworkingAdminUpdateMeetingResponseSchema/properties/updatedAt",
       "reason": "date"
     },
     {
@@ -2789,6 +3078,36 @@
     },
     {
       "direction": "output",
+      "pointer": "/$defs/NetworkingPublicMeResponseSchema/properties/consentAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/NetworkingPublicMeResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/NetworkingPublicMeResponseSchema/properties/erasedAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/NetworkingPublicMeResponseSchema/properties/lastActiveAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/NetworkingPublicMeResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/NetworkingPublicMeResponseSchema/properties/withdrawnAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
       "pointer": "/$defs/NetworkingPublicMessageResponseSchema/properties/createdAt",
       "reason": "date"
     },
@@ -2820,6 +3139,21 @@
     {
       "direction": "output",
       "pointer": "/$defs/NetworkingPublicProfileResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/NetworkingPublicReportResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/NetworkingPublicReportResponseSchema/properties/resolvedAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/NetworkingPublicReportResponseSchema/properties/updatedAt",
       "reason": "date"
     },
     {
@@ -3041,6 +3375,21 @@
       "direction": "output",
       "pointer": "/$defs/UpdateNetworkingConfigSchema",
       "reason": "transform"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/UserResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/UserResponseSchema/properties/lastLoginAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/UserResponseSchema/properties/updatedAt",
+      "reason": "date"
     }
   ]
 }

@@ -44,3 +44,21 @@ export type BatchSyncBody = z.infer<typeof BatchSyncBodySchema>;
 export type CheckInRegistrationsQuery = z.infer<
   typeof CheckInRegistrationsQuerySchema
 >;
+
+/** GET /api/events/:eventId/checkin/stats. Counts are JSON numbers on every engine. */
+export const CheckInStatsResponseSchema = z.object({
+  total: z.number().int().min(0),
+  checkedIn: z.number().int().min(0),
+  byAccess: z.array(z.object({
+    accessId: z.string(), name: z.string(), type: z.string(),
+    total: z.number().int().min(0), checkedIn: z.number().int().min(0),
+  })),
+});
+export type CheckInStatsResponse = z.infer<typeof CheckInStatsResponseSchema>;
+
+/** POST /api/events/:eventId/checkin/undo. Supply the original timestamp for stale-undo protection. */
+export const UndoCheckInBodySchema = CheckInBodySchema.extend({
+  expectedCheckedInAt: z.string().datetime().optional(),
+});
+export const UndoCheckInResultSchema = z.object({ outcome: z.enum(["UNDONE", "ALREADY_UNDONE"]) });
+export type UndoCheckInBody = z.infer<typeof UndoCheckInBodySchema>;

@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import type { PriceBreakdown } from "@app/contracts";
-import { calculateDiscountAmount } from "@app/shared";
+import { calculateDiscountAmount, sumMoney, subtractMoney } from "@app/shared";
 import type { DbExecutor } from "../client";
 import { registrations } from "../schema/registrations";
 import { isTransactionExecutor } from "../txn";
@@ -75,7 +75,8 @@ const AMOUNT_COLUMNS = [
 ] as const;
 
 function isAmount(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 &&
+    value <= 900_000_000_000 && value === Number(value.toFixed(4));
 }
 
 /** The money state as the write stored it (RETURNING). */
@@ -108,19 +109,19 @@ export function settlementInvariantViolations(
     const fields = ["calculatedBasePrice", "accessTotal", "subtotal", "sponsorshipTotal", "total"] as const;
     const bad = fields.filter((field) => !isAmount(pb?.[field]));
     if (!pb || bad.length) {
-      violations.push(`price_breakdown ${bad.join(", ") || "is missing"} not a non-negative integer`);
+      violations.push(`price_breakdown ${bad.join(", ") || "is missing"} not a non-negative money amount`);
     } else {
-      const accessSum = (pb.accessItems ?? []).reduce((sum, item) => sum + item.subtotal, 0);
+      const accessSum = sumMoney(...(pb.accessItems ?? []).map((item) => item.subtotal));
       if (pb.accessTotal !== accessSum) {
         violations.push(`price_breakdown accessTotal ${pb.accessTotal} is not the sum of its items (${accessSum})`);
       }
-      if (pb.subtotal !== pb.calculatedBasePrice + pb.accessTotal) {
-        violations.push(`price_breakdown subtotal ${pb.subtotal} is not calculatedBasePrice + accessTotal`);
+      if (pb.subtotal !== Math.max(0, sumMoney(pb.calculatedBasePrice, pb.accessTotal, pb.optionModifiersTotal ?? 0))) {
+        violations.push(`price_breakdown subtotal ${pb.subtotal} is not calculatedBasePrice + accessTotal + optionModifiersTotal (floored at zero)`);
       }
       if (pb.sponsorshipTotal > pb.subtotal) {
         violations.push(`price_breakdown sponsorshipTotal ${pb.sponsorshipTotal} exceeds subtotal ${pb.subtotal}`);
       }
-      if (pb.total !== pb.subtotal - pb.sponsorshipTotal) {
+      if (pb.total !== subtractMoney(pb.subtotal, pb.sponsorshipTotal)) {
         violations.push(`price_breakdown total ${pb.total} is not subtotal − sponsorshipTotal`);
       }
       if (pb.sponsorshipTotal !== row.sponsorshipAmount) {
@@ -134,7 +135,7 @@ export function settlementInvariantViolations(
     }
   }
   if (written.has("paidAmount")) {
-    const net = Math.max(0, row.totalAmount - row.sponsorshipAmount);
+    const net = Math.max(0, subtractMoney(row.totalAmount, row.sponsorshipAmount));
     if (row.paidAmount > net) {
       violations.push(`paid_amount ${row.paidAmount} exceeds the net ${net}`);
     }
@@ -183,7 +184,7 @@ export async function applyRegistrationSettlement(
   if (badAmounts.length) {
     throw new SettlementInvariantError(
       registrationId,
-      badAmounts.map((column) => `${column} ${String(set[column])} is not a non-negative integer`),
+      badAmounts.map((column) => `${column} ${String(set[column])} is not a non-negative money amount`),
     );
   }
 

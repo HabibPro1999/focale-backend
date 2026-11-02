@@ -114,6 +114,14 @@ export const SendCertificatesBodySchema = z.strictObject({
   abstractIds: z.array(z.string().uuid()).optional(),
 });
 
+/** POST .../certificates/send/dry-run accepts SendCertificatesBodySchema. */
+export const CertificateSendPreviewSchema = z.object({
+  recipientCount: z.number().int().min(0), certificateCount: z.number().int().min(0),
+  alreadySent: z.number().int().min(0), ineligibleCount: z.number().int().min(0), total: z.number().int().min(0),
+  breakdown: z.record(z.string(), z.number().int().min(0)),
+});
+export type CertificateSendPreview = z.infer<typeof CertificateSendPreviewSchema>;
+
 // ============================================================================
 // Type Exports
 // ============================================================================
@@ -127,3 +135,12 @@ export type UpdateCertificateTemplateInput = z.infer<
   typeof UpdateCertificateTemplateSchema
 >;
 export type SendCertificatesBody = z.infer<typeof SendCertificatesBodySchema>;
+
+/** Test delivery always targets the authenticated administrator. */
+export const TestCertificateBodySchema = z.strictObject({});
+export const TestCertificateResultSchema = z.object({
+  success: z.literal(true), messageId: z.string().optional(),
+});
+
+/** POST /api/events/certificates/:id/restore; returns the restored template. */
+export const RestoreCertificateBodySchema = z.strictObject({});

@@ -19,6 +19,9 @@ const state = vi.hoisted(() => ({
   delete: vi.fn(),
   sync: vi.fn(),
   listProfiles: vi.fn(),
+  revoke: vi.fn(),
+  notify: vi.fn(),
+  activate: vi.fn(),
   tail: Promise.resolve() as Promise<unknown>,
 }));
 vi.mock("@app/db", async (original) => {
@@ -36,6 +39,10 @@ vi.mock("@app/db", async (original) => {
     },
     all: async (kind: string) => kind === "deliveries" ? state.deliveries : kind === "forms" ? state.forms : kind === "profiles" ? state.profiles : [],
     update: async (_kind: string, _where: unknown, values: object) => {
+      if (_kind === "profiles") {
+        state.profile = { ...state.profile, ...values };
+        return [state.profile];
+      }
       state.row = { ...state.row!, ...values };
       return [state.row];
     },
@@ -55,6 +62,8 @@ vi.mock("@app/db", async (original) => {
     transitionNetworkingMeetings: state.transition,
     requestNetworkingEventSync: state.sync,
     listNetworkingAdminProfiles: state.listProfiles,
+    createNetworkingNotification: state.notify,
+    queueNetworkingActivation: state.activate,
     networkingFormField: (schema: { fields?: { id: string }[] }, id: string) => schema.fields?.find((field) => field.id === id),
     networkingStore: () => store,
     getNetworkingConfig: async () => NetworkingConfigSchema.parse({}),
@@ -69,6 +78,7 @@ vi.mock("@app/db", async (original) => {
     },
   };
 });
+vi.mock("./networking.revocation", () => ({ revokeParticipantAccess: state.revoke }));
 vi.mock("../clients/module-gates", () => ({ assertClientModuleEnabled: vi.fn() }));
 vi.mock("@app/integrations", async (original) => ({
   ...(await original<typeof import("@app/integrations")>()),
@@ -95,6 +105,9 @@ beforeEach(() => {
   vi.mocked(assertClientModuleEnabled).mockClear();
   state.delete.mockReset();
   state.sync.mockReset();
+  state.revoke.mockReset();
+  state.notify.mockReset();
+  state.activate.mockReset();
   state.tail = Promise.resolve();
 });
 afterEach(() => vi.useRealTimers());
@@ -259,6 +272,34 @@ describe("NetworkingAdminService profile photo removal", () => {
     expect(row).toMatchObject({ photoUrl: null, overrides: { photoUrl: null } });
     if (key) expect(state.delete).toHaveBeenCalledWith(key);
     else expect(state.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe("NetworkingAdminService access transitions", () => {
+  it("does not enqueue activation for an unchanged ACTIVE status", async () => {
+    state.profile = { id: "p", eventId: "event", status: "ACTIVE", consent: true, language: "en", photoUrl: null, overrides: {} };
+    await service.updateProfile("event", "p", { status: "ACTIVE" }, "admin");
+    expect(state.activate).not.toHaveBeenCalled();
+    expect(state.notify).not.toHaveBeenCalled();
+  });
+  it("does not revoke sessions or notify again when saving the same inactive status", async () => {
+    state.profile = { id: "p", eventId: "event", status: "SUSPENDED", consent: false, language: "en", photoUrl: null, overrides: {} };
+    await service.updateProfile("event", "p", { status: "SUSPENDED", consent: false, bio: "Updated" }, "admin");
+    expect(state.revoke).not.toHaveBeenCalled();
+    expect(state.notify).not.toHaveBeenCalled();
+  });
+  it("revokes and notifies once on suspension, then leaves repeated saves alone", async () => {
+    state.profile = { id: "p", eventId: "event", status: "ACTIVE", consent: true, language: "en", photoUrl: null, overrides: {} };
+    await service.updateProfile("event", "p", { status: "SUSPENDED" }, "admin");
+    await service.updateProfile("event", "p", { status: "SUSPENDED" }, "admin");
+    expect(state.revoke).toHaveBeenCalledExactlyOnceWith("p", "event", state.tx);
+    expect(state.notify).toHaveBeenCalledTimes(1);
+  });
+  it("revokes once when consent is removed without a status change", async () => {
+    state.profile = { id: "p", eventId: "event", status: "ACTIVE", consent: true, language: "en", photoUrl: null, overrides: {} };
+    await service.updateProfile("event", "p", { consent: false }, "admin");
+    await service.updateProfile("event", "p", { consent: false }, "admin");
+    expect(state.revoke).toHaveBeenCalledTimes(1);
   });
 });
 

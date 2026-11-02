@@ -261,3 +261,16 @@ export interface CreateBatchResult {
   batchId: string;
   count: number;
 }
+
+/** Undo replays only links captured by this version of cancellation. */
+export const RestoreSponsorshipBodySchema = z.strictObject({});
+export const StoredSponsorshipCancellationUndoSchema = z.object({
+  version: z.literal(1),
+  coverageFingerprint: z.string(),
+  links: z.array(z.object({
+    registrationId: z.string(), afterFingerprint: z.string(),
+    clearedPaymentMethod: z.string().nullable(), clearedSponsorshipCode: z.string().nullable(),
+    amountApplied: z.number(),
+  })),
+});
+export type StoredSponsorshipCancellationUndo = z.infer<typeof StoredSponsorshipCancellationUndoSchema>;

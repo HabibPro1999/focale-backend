@@ -11,6 +11,7 @@ const TX = vi.hoisted(() => ({ __tx: true }));
 const db = vi.hoisted(() => {
   const fns = [
     "getDb",
+    "saveSponsorshipCancellationUndo",
     "listSponsorships",
     "getSponsorshipById",
     "getLinkedSponsorships",

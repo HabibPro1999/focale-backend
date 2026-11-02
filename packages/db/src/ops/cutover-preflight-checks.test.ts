@@ -30,6 +30,7 @@ describe("cutover preflight data checks", () => {
         "0018": ["networking_tables", "networking_profiles", "networking_reservations"],
         "0030": ["registrations"],
         "0033": ["abstract_code_sequences"],
+        "0036": ["event_pricing", "event_access", "registrations", "payment_transaction", "sponsorships", "sponsorship_usages"],
       });
       const checked = new Set(DATA_CHECKS.map((check) => check.migrationId));
       expect(Object.keys(modifying).filter((id) => !checked.has(id))).toEqual(["0018"]);

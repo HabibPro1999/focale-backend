@@ -95,7 +95,7 @@ describe("admin edit HTTP refusal precedence", () => {
   it.each([
     ["missing route event", "missing", 404, ErrorCodes.NOT_FOUND, "Event not found"],
     ["foreign route event", "foreign", 403, ErrorCodes.FORBIDDEN, "Insufficient permissions"],
-    ["archived route event", "archived", 400, ErrorCodes.INVALID_STATUS_TRANSITION, "Archived events cannot be modified"],
+    ["archived route event", "archived", 400, ErrorCodes.EVENT_ARCHIVED, "Archived events cannot be modified"],
     ["disabled registration module", "disabled", 403, ErrorCodes.MODULE_DISABLED, "Registrations module is disabled for this client"],
   ] as const)("%s wins before the registration/event mismatch", async (_label, condition, status, code, message) => {
     if (condition === "missing") vi.mocked(db.getEventTenantScope).mockResolvedValue(null);

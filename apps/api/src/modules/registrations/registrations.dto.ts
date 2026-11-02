@@ -4,6 +4,7 @@ import {
   RegistrationIdPublicParamSchema,
   EditTokenQuerySchema,
   ListRegistrationsQuerySchema,
+  PlatformRegistrationsQuerySchema,
   SearchRegistrantsQuerySchema,
   DeleteRegistrationQuerySchema,
   AdminCreateRegistrationSchema,
@@ -72,3 +73,5 @@ export class CreateRegistrationBodyDto extends createZodDto(
 export class PublicEditRegistrationDto extends createZodDto(
   PublicEditRegistrationSchema,
 ) {}
+
+export class PlatformRegistrationsQueryDto extends createZodDto(PlatformRegistrationsQuerySchema) {}

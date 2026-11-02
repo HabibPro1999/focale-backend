@@ -1,6 +1,7 @@
 import { ABSTRACT_STATUSES } from "./abstracts";
 import { PaymentStatusSchema, RegistrationRoleSchema } from "./registration-enums";
 import { z } from "zod";
+import { LanguageCodeSchema } from "./i18n.schema";
 import { paginationQueryShape } from "./zod-helpers";
 
 // ============================================================================
@@ -218,6 +219,7 @@ export const UpdateEmailTemplateSchema = z
   });
 
 export const ListEmailTemplatesQuerySchema = z.strictObject({
+  scope: z.enum(["event", "client", "all"]).optional(),
   ...paginationQueryShape(),
   category: EmailTemplateCategorySchema.optional(),
   trigger: AutomaticEmailTriggerSchema.optional(),
@@ -274,6 +276,11 @@ export const BulkSendEmailSchema = z
       path: ["abstractIds"],
     },
   );
+
+/** POST .../email-templates/:templateId/send/count uses BulkSendEmailSchema. No queue/provider side effects. */
+export const BulkSendCountResponseSchema = z.object({
+  recipientCount: z.number().int().min(0), skipped: z.number().int().min(0),
+});
 
 // ============================================================================
 // Test Send + Custom Send Schemas
@@ -371,3 +378,23 @@ export type AbstractBulkSendFilter = z.infer<typeof AbstractBulkSendFilterSchema
 export type BulkSendEmailInput = z.infer<typeof BulkSendEmailSchema>;
 export type TestSendEmailInput = z.infer<typeof TestSendEmailSchema>;
 export type SendCustomEmailInput = z.infer<typeof SendCustomEmailSchema>;
+
+/** GET /api/events/:eventId/email-logs/:emailLogId. No context snapshot or delivery secrets. */
+export const GetEmailLogParamSchema = ResendEmailLogParamSchema;
+export const EventEmailLogResponseSchema = z.object({
+  abstractTrigger: z.string().nullable(), origin: z.enum(["automatic", "networking", "manual"]),
+  id: z.string(), subject: z.string(), status: z.string(), trigger: z.string().nullable(), templateName: z.string().nullable(),
+  recipientEmail: z.string(), recipientName: z.string().nullable(), errorMessage: z.string().nullable(),
+  queuedAt: z.string(), sentAt: z.string().nullable(), deliveredAt: z.string().nullable(), openedAt: z.string().nullable(),
+  clickedAt: z.string().nullable(), bouncedAt: z.string().nullable(), failedAt: z.string().nullable(),
+});
+
+export const DraftEmailPreviewSchema = SendCustomEmailSchema.extend({ language: LanguageCodeSchema.optional() });
+export const DraftEmailTestSendSchema = DraftEmailPreviewSchema.extend({
+  recipientEmail: z.string().email(), recipientName: z.string().max(200).optional(),
+});
+export const DraftEmailPreviewResponseSchema = z.object({ subject: z.string(), html: z.string(), plain: z.string() });
+export type DraftEmailPreview = z.infer<typeof DraftEmailPreviewSchema>;
+export type DraftEmailTestSend = z.infer<typeof DraftEmailTestSendSchema>;
+
+export const EmailVariablesQuerySchema = z.strictObject({ language: LanguageCodeSchema.optional() });

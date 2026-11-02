@@ -265,7 +265,7 @@ export async function cancelNetworkingParticipantMeetings(
   profileId: string,
   eventId: string,
   db: DbExecutor,
-  options: { counterpartId?: string; slug?: string } = {},
+  options: { counterpartId?: string; slug?: string; notify?: boolean } = {},
 ) {
   const m = networkingMeetings;
   const rows = await transitionNetworkingMeetings(
@@ -283,7 +283,7 @@ export async function cancelNetworkingParticipantMeetings(
     )!,
     { proposedStartsAt: null, proposalBy: null },
   );
-  if (!rows.length) return [];
+  if (!rows.length || options.notify === false) return rows;
   const slug = options.slug ?? (
     await db.select({ slug: events.slug }).from(events).where(eq(events.id, eventId))
   )[0]?.slug ?? "";

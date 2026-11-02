@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { PriceBreakdownSchema } from "./pricing";
+import { MoneySnapshotSchema } from "./money";
 import {
   PaymentMethodSchema,
   PaymentStatusSchema,
@@ -24,6 +25,21 @@ const PaginationMetaSchema = z.object({
   hasNext: z.boolean(),
   hasPrev: z.boolean(),
 });
+
+/** GET /api/registrations/aggregate, SUPER_ADMIN only. */
+export const PlatformRegistrationAggregateResponseSchema = z.object({
+  total: z.number().int().min(0),
+  byPaymentStatus: z.array(z.object({ paymentStatus: PaymentStatusSchema, count: z.number().int().min(0) })),
+});
+export type PlatformRegistrationAggregateResponse = z.infer<typeof PlatformRegistrationAggregateResponseSchema>;
+
+export const RegistrationAmountsResponseSchema = z.object({
+  amountDue: z.number().min(0),
+  /** Saved catalogue base before the rule; null if a legacy snapshot did not record it. */
+  catalogueBasePrice: z.number().nullable(),
+  money: MoneySnapshotSchema,
+});
+export type RegistrationAmountsResponse = z.infer<typeof RegistrationAmountsResponseSchema>;
 
 /** One selected access line, enriched with the access item's display fields. */
 export const RegistrationAccessSelectionResponseSchema = z.object({
@@ -54,6 +70,7 @@ export const RegistrationDroppedAccessSelectionResponseSchema =
  * registrant's own edit token, is present on the create response only.
  */
 export const PublicRegistrationResponseSchema = z.object({
+  ...RegistrationAmountsResponseSchema.shape,
   id: z.string(),
   formId: z.string(),
   eventId: z.string(),
@@ -154,6 +171,7 @@ export const PaymentProofUploadResponseSchema = z.object({
  * enriched access selections. Check-ins come with the detail route only.
  */
 export const AdminRegistrationResponseSchema = z.object({
+  ...RegistrationAmountsResponseSchema.shape,
   id: z.string(),
   formId: z.string(),
   eventId: z.string(),
@@ -320,3 +338,6 @@ export type PublicRegistrationResponse = z.infer<
 export type AdminRegistrationResponse = z.infer<
   typeof AdminRegistrationResponseSchema
 >;
+
+/** Cross-event listing intentionally has no mixed-currency amount aggregate. */
+export const PlatformRegistrationsResponseSchema = AdminRegistrationListResponseSchema.omit({ stats: true });

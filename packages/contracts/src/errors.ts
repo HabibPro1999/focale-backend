@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export const ErrorCodes = {
   // Participant networking errors
   NETWORKING_MFA_REQUIRED: "NETWORKING_MFA_REQUIRED",
@@ -33,6 +35,8 @@ export const ErrorCodes = {
   UNAUTHORIZED: "AUTH_1001",
   INVALID_TOKEN: "AUTH_1002",
   FORBIDDEN: "AUTH_1004",
+  USER_INACTIVE: "AUTH_1005",
+  USER_SELF_DELETE: "AUTH_1006",
 
   // Validation (2xxx)
   VALIDATION_ERROR: "VAL_2001",
@@ -59,6 +63,7 @@ export const ErrorCodes = {
   PRICING_NOT_FOUND: "PRC_6005",
   PRICING_RULE_UNSATISFIABLE: "PRC_6006",
   PRICING_CONDITION_INVALID_OPTION: "PRC_6007",
+  CURRENCY_LOCKED: "PRC_6008",
 
   // Access (7xxx)
   ACCESS_NOT_FOUND: "ACC_7001",
@@ -77,6 +82,7 @@ export const ErrorCodes = {
   EVENT_HAS_REGISTRATIONS: "EVT_8000",
   EVENT_NOT_OPEN: "EVT_8001",
   EVENT_FULL: "EVT_8002",
+  EVENT_ARCHIVED: "EVT_8003",
 
   // Registration (8xxx — shared numeric range with Events, use string prefix to disambiguate)
   REGISTRATION_NOT_FOUND: "REG_8001",
@@ -141,6 +147,7 @@ export const ErrorCodes = {
 
   // Email (15xxx)
   MJML_COMPILATION_ERROR: "EML_15001",
+  EMAIL_TEMPLATE_INACTIVE: "EML_15002",
 
   // Concurrency (16xxx)
   CONCURRENT_MODIFICATION: "CON_16001",
@@ -185,6 +192,8 @@ export const ErrorCodes = {
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
+/** Exported in generated artifacts so consumers can map every stable code. */
+export const ErrorCodeSchema = z.enum(Object.values(ErrorCodes));
 
 /** Default HTTP status -> error code map for HttpExceptions without an explicit code. */
 export function statusToCode(status: number): ErrorCode {

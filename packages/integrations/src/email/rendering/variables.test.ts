@@ -81,3 +81,14 @@ describe("getAvailableVariables", () => {
     expect(formVar?.example).toBe("42");
   });
 });
+
+it("localizes labels/descriptions and translated form labels without changing variable IDs", async () => {
+  vi.mocked(getRegistrationFormSchema).mockResolvedValue({ steps: [{ fields: [{ id: "city", type: "text", label: "City", translations: { fr: { label: "Ville" }, ar: { label: "المدينة" } } }] }] } as never);
+  const fr = await getAvailableVariables("event", "fr");
+  const ar = await getAvailableVariables("event", "ar");
+  expect(fr.find(v => v.id === "firstName")).toMatchObject({ label: "Prénom", description: "Prénom de la personne inscrite" });
+  expect(ar.find(v => v.id === "firstName")?.label).toBe("الاسم الأول");
+  expect(fr.find(v => v.id === "form_city")?.label).toBe("Ville");
+  expect(ar.find(v => v.id === "form_city")?.label).toBe("المدينة");
+  for (const list of [fr, ar]) expect(list.slice(0, BASE_VARIABLES.length).map(v => v.id)).toEqual(BASE_VARIABLES.map(v => v.id));
+});

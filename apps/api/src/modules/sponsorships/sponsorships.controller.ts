@@ -31,6 +31,7 @@ import {
 import { ResponseContract } from "../../core/response-contract";
 import { SponsorshipsAdminService } from "./sponsorships.admin.service";
 import {
+  RestoreSponsorshipDto,
   ListSponsorshipsQueryDto,
   LinkSponsorshipByCodeDto,
   LinkSponsorshipDto,
@@ -93,6 +94,15 @@ export class SponsorshipDetailController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.service.updateSponsorship(id, body, user.id);
+  }
+
+  @Post(":id/restore")
+  @HttpCode(200)
+  @SponsorshipScoped({ module: "sponsorships", write: true })
+  @ResponseContract(SponsorshipDetailResponseSchema)
+  restore(@Param() { id }: SponsorshipIdParamDto, @Body() _body: RestoreSponsorshipDto,
+    @CurrentUser() user: AuthUser) {
+    return this.service.restoreSponsorship(id, user.id);
   }
 
   @Delete(":id")

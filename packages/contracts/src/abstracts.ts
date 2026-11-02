@@ -405,3 +405,10 @@ export const ABSTRACT_STATUS_LABELS_FR: Record<AbstractStatus, string> = {
   REJECTED: "Refusé",
   PENDING: "En attente",
 };
+
+/** DELETE /api/events/:eventId/abstracts/themes/:themeId/permanent. 204 on deletion; 409 if referenced. */
+export const DeleteUnusedThemeParamSchema = ThemeIdParamSchema;
+
+/** PUT .../abstracts/themes/order: every active theme exactly once, in display order. */
+export const ReorderAbstractThemesSchema = z.strictObject({ themeIds: z.array(z.string().uuid()).max(1000) });
+export type ReorderAbstractThemesInput = z.infer<typeof ReorderAbstractThemesSchema>;

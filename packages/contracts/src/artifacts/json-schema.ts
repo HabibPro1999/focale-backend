@@ -22,6 +22,7 @@ import * as checkin from "../checkin";
 import * as clients from "../clients";
 import * as conditionSchema from "../condition.schema";
 import * as email from "../email";
+import * as errors from "../errors";
 import * as events from "../events";
 import * as eventsResponses from "../events.responses";
 import * as forms from "../forms";
@@ -33,6 +34,7 @@ import * as networking from "../networking";
 import * as networkingAdminResponses from "../networking.admin.responses";
 import * as networkingPublicResponses from "../networking.public.responses";
 import * as networkingAuthResponses from "../networking.auth-recommendations.responses";
+import * as money from "../money";
 import * as pricing from "../pricing";
 import * as realtime from "../realtime";
 import * as registrations from "../registrations";
@@ -55,6 +57,7 @@ export const CONTRACT_MODULES: Readonly<Record<string, Record<string, unknown>>>
   clients,
   "condition.schema": conditionSchema,
   email,
+  errors,
   events,
   "events.responses": eventsResponses,
   forms,
@@ -67,6 +70,7 @@ export const CONTRACT_MODULES: Readonly<Record<string, Record<string, unknown>>>
   "networking.public.responses": networkingPublicResponses,
   "networking.auth-recommendations.responses": networkingAuthResponses,
   pricing,
+  money,
   realtime,
   registrations,
   "registrations.responses": registrationsResponses,

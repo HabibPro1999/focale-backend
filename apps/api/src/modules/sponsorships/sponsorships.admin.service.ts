@@ -1,7 +1,9 @@
+import { sumMoney } from "@app/shared";
 import { queueRegistrantSponsorshipEmail, sponsorshipEventForEmail } from "./sponsorships.emails";
 import { Injectable } from "@nestjs/common";
 import {
   ErrorCodes,
+  PaymentMethodSchema,
   type AppEvent,
   type AvailableSponsorship,
   type LinkSponsorshipResult,
@@ -16,6 +18,12 @@ import {
   paginate,
 } from "@app/shared";
 import {
+  saveSponsorshipCancellationUndo,
+  getSponsorshipCancellationUndo,
+  clearSponsorshipCancellationUndo,
+  sponsorshipCoverageFingerprint,
+  sponsorshipRegistrationFingerprint,
+  lockRegistrationsForUpdate,
   changeSponsorshipCoverageTxn,
   deleteSponsorshipRow,
   emitSettlementEvents,
@@ -46,7 +54,7 @@ import { buildLinkedSponsorshipContext } from "@app/integrations";
 import { assertEventWritable } from "../events";
 import { assertModuleEnabledForClient } from "../clients/module-gates";
 import { AccessService } from "../access/access.service";
-import { AppException, notFound } from "../../core/app-exception";
+import { AppException, conflict, notFound } from "../../core/app-exception";
 import {
   detectCoverageOverlap,
   validateCoveredAccessTimeOverlap,
@@ -244,7 +252,7 @@ export class SponsorshipsAdminService {
         nextTotalAmount += (await getEventPricingForBatch(tx, sponsorship.eventId))?.basePrice ?? 0;
       }
       if (nextCoveredAccessIds.length > 0) {
-        nextTotalAmount += accessRows.reduce((sum, item) => sum + item.price, 0);
+        nextTotalAmount = sumMoney(nextTotalAmount, ...accessRows.map((item) => item.price));
       }
     }
 
@@ -322,6 +330,46 @@ export class SponsorshipsAdminService {
     return (await getSponsorshipById(id)) as SponsorshipWithUsages;
   }
 
+  async restoreSponsorship(id: string, performedBy: string): Promise<SponsorshipWithUsages> {
+    await withLockingTxn(async (tx) => {
+      const sponsorship = await this.lockSponsorshipForMutation(tx, id);
+      if (sponsorship.status !== "CANCELLED") return;
+      const snapshot = await getSponsorshipCancellationUndo(tx, id);
+      if (!snapshot) throw conflict("This cancellation has no restorable link history");
+      if (snapshot.coverageFingerprint !== sponsorshipCoverageFingerprint(sponsorship)) {
+        throw conflict("Sponsorship coverage changed after cancellation");
+      }
+      await lockRegistrationsForUpdate(tx, snapshot.links.map(link => link.registrationId));
+      for (const link of snapshot.links) {
+        if (await sponsorshipRegistrationFingerprint(tx, link.registrationId) !== link.afterFingerprint) {
+          throw conflict("A former beneficiary changed after cancellation");
+        }
+      }
+      await updateSponsorshipRow(tx, id, { status: "PENDING" });
+      const pending: AppEvent[] = [];
+      const settled = [];
+      for (const link of snapshot.links) {
+        const result = await linkSponsorshipToRegistrationTxn(tx, { sponsorshipId: id,
+          registrationId: link.registrationId, appliedBy: performedBy,
+          fields: { ...(link.clearedPaymentMethod ? { paymentMethod: PaymentMethodSchema.parse(link.clearedPaymentMethod) } : {}),
+            ...(link.clearedSponsorshipCode ? { sponsorshipCode: link.clearedSponsorshipCode } : {}) },
+        }).catch(rethrowSponsorshipException);
+        if (result.usage.amountApplied !== link.amountApplied) throw conflict("Sponsorship amount changed since cancellation");
+        await this.access.handleCapacityReached(sponsorship.eventId, result.settled.paidAccess.incremented, tx);
+        settled.push(result.settled);
+        pending.push(...registrationEvents(sponsorship.event.clientId, link.registrationId, result.settled));
+      }
+      await clearSponsorshipCancellationUndo(tx, id);
+      await insertAuditLog({ entityType: "Sponsorship", entityId: id, action: "RESTORE", performedBy,
+        changes: { status: { old: "CANCELLED", new: snapshot.links.length ? "USED" : "PENDING" } } }, tx);
+      if (settled.length) pending.push(countsChanged(sponsorship.event.clientId, sponsorship.eventId, settled));
+      pending.push({ type: "sponsorship.updated", clientId: sponsorship.event.clientId,
+        eventId: sponsorship.eventId, payload: { id }, ts: Date.now() });
+      await emitSettlementEvents(tx, pending);
+    });
+    return (await getSponsorshipById(id)) as SponsorshipWithUsages;
+  }
+
   async deleteSponsorship(id: string, performedBy?: string): Promise<void> {
     await withLockingTxn((tx) => this.releaseSponsorshipCore(tx, id, "delete", performedBy));
   }
@@ -362,6 +410,7 @@ export class SponsorshipsAdminService {
 
     if (mode === "cancel") {
       if (sponsorship.status !== "CANCELLED") {
+        await saveSponsorshipCancellationUndo(tx, sponsorship, unlinked);
         await updateSponsorshipRow(tx, id, { status: "CANCELLED" });
         await insertAuditLog(
           {

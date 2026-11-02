@@ -1,6 +1,7 @@
 import { Injectable } from "@nestjs/common";
-import { ErrorCodes } from "@app/contracts";
+import { ErrorCodes, type UndoCheckInBody } from "@app/contracts";
 import {
+  undoCheckIn,
   batchCheckIn,
   CHECK_IN_BATCH_TX_SIZE,
   checkInRegistration,
@@ -20,7 +21,7 @@ import {
   type CheckInRegistration,
 } from "@app/db";
 import { createLogger, isFullySettled } from "@app/shared";
-import { AppException } from "../../core/app-exception";
+import { AppException, conflict, notFound } from "../../core/app-exception";
 
 const logger = createLogger({ name: "checkin" });
 
@@ -88,6 +89,14 @@ type SyncOutcome = "SYNCED" | "ALREADY_CHECKED_IN" | { error: string };
 
 @Injectable()
 export class CheckinService {
+  async undo(eventId: string, body: UndoCheckInBody, actorId: string) {
+    const result = await undoCheckIn({ ...body, eventId, actorId,
+      expectedCheckedInAt: body.expectedCheckedInAt ? new Date(body.expectedCheckedInAt) : undefined });
+    if (result.outcome === "NOT_FOUND") throw notFound("Registration not found in this event");
+    if (result.outcome === "CONFLICT") throw conflict("Check-in changed after the original scan");
+    return { outcome: result.outcome };
+  }
+
   /**
    * Check-in a registration (event- or access-level). Check ORDER is
    * load-bearing: registration-exists → event-mismatch → payment-status →

@@ -1,3 +1,4 @@
+import { MoneyAmountSchema } from "./money";
 import { z } from "zod";
 import { hasUpdateField } from "./zod-helpers";
 import { ConditionSchema } from "./condition.schema";
@@ -57,8 +58,8 @@ const CreateEventAccessObject = z.strictObject({
   endsAt: z.coerce.date().optional().nullable(),
 
   // Pricing
-  price: z.number().int().min(0).default(0),
-  currency: z.string().length(3).default("TND"),
+  price: MoneyAmountSchema.default(0),
+  currency: z.string().length(3).optional().describe("Defaults to the event pricing currency when omitted."),
 
   // Capacity
   maxCapacity: z.number().int().positive().optional().nullable(),
@@ -84,7 +85,7 @@ const CreateEventAccessObject = z.strictObject({
   // Companion option (show +1 question in registration form)
   allowCompanion: z.boolean().default(false),
   includedInBase: z.boolean().default(false),
-  companionPrice: z.number().int().min(0).default(0),
+  companionPrice: MoneyAmountSchema.default(0),
 });
 
 export const CreateEventAccessSchema = CreateEventAccessObject.refine(
@@ -105,7 +106,7 @@ export const UpdateEventAccessSchema = z
     location: z.string().max(500).optional().nullable(),
     startsAt: z.coerce.date().optional().nullable(),
     endsAt: z.coerce.date().optional().nullable(),
-    price: z.number().int().min(0).optional(),
+    price: MoneyAmountSchema.optional(),
     currency: z.string().length(3).optional(),
     maxCapacity: z.number().int().positive().optional().nullable(),
     availableFrom: z.coerce.date().optional().nullable(),
@@ -118,7 +119,7 @@ export const UpdateEventAccessSchema = z
     groupLabel: z.string().max(100).optional().nullable(),
     allowCompanion: z.boolean().optional(),
     includedInBase: z.boolean().optional(),
-    companionPrice: z.number().int().min(0).optional(),
+    companionPrice: MoneyAmountSchema.optional(),
   })
   .refine(hasUpdateField, {
     message: "At least one field must be provided for update",

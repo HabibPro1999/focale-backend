@@ -88,7 +88,7 @@ describe.runIf(dbTestsEnabled())("networking writes under concurrency", () => {
     const results = await settle(range(10).map((i) => () =>
       meetings.create(people[i], { profileId: people[i + 10].profile.id, startsAt: firstSlot.toISOString() })));
     expect(failures(results)).toEqual([]);
-    const booked = results.map((result) => (result as PromiseFulfilledResult<NetworkingRow<"meetings">>).value);
+    const booked = results.map((result) => (result as PromiseFulfilledResult<Omit<NetworkingRow<"meetings">, "cancellationState">>).value);
     expect(new Set(booked.map((row) => row.tableId)).size).toBe(10);
     const accepted = await settle(booked.map((row, i) => () => meetings.respond(people[i + 10], row.id, { action: "ACCEPT" })));
     expect(failures(accepted)).toEqual([]);

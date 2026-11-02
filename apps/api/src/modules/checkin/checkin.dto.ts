@@ -1,4 +1,5 @@
 import {
+  UndoCheckInBodySchema,
   BatchSyncBodySchema,
   CheckInBodySchema,
   CheckInEventParamSchema,
@@ -12,3 +13,5 @@ export class BatchSyncBodyDto extends createZodDto(BatchSyncBodySchema) {}
 export class CheckInRegistrationsQueryDto extends createZodDto(
   CheckInRegistrationsQuerySchema,
 ) {}
+
+export class UndoCheckInBodyDto extends createZodDto(UndoCheckInBodySchema) {}

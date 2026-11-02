@@ -4,6 +4,9 @@ import {
   calculateApplicableAmount,
   deriveSettlement,
   netBreakdown,
+  sumMoney,
+  subtractMoney,
+  sponsorshipLimit,
   type SettlementStatus,
 } from "@app/shared";
 import type { DbExecutor } from "../client";
@@ -154,12 +157,12 @@ export async function recomputeRegistrationSponsorship(
       accessTypeIds,
       priceBreakdown,
     });
-    sponsorship += amountApplied;
+    sponsorship = sumMoney(sponsorship, amountApplied);
     if (amountApplied !== usage.amountApplied) {
       await updateUsageAmount(tx, usage.id, amountApplied);
     }
   }
-  return { sponsorship: Math.min(sponsorship, priceBreakdown.subtotal), coveredAccessIds: [...covered] };
+  return { sponsorship: Math.min(sponsorship, sponsorshipLimit(priceBreakdown)), coveredAccessIds: [...covered] };
 }
 
 /**
@@ -218,7 +221,7 @@ export async function settleRegistrationTxn(
     before,
     gross: totalAmount,
     sponsorship,
-    net: Math.max(0, totalAmount - sponsorship),
+    net: Math.max(0, subtractMoney(totalAmount, sponsorship)),
   });
   const chosen: SettlementDecision = decision ?? {
     paymentStatus: options.paymentStatus,

@@ -1,3 +1,4 @@
+import { assertMoneyPrecision } from "../../core/money-input";
 import { lockRegistrationForPublicAction } from "./registrations.loaders";
 import { lockRegistrationForMutation } from "./registrations.loaders";
 import { Injectable } from "@nestjs/common";
@@ -105,6 +106,7 @@ export class RegistrationPaymentsService {
           ? calculateSettlement(registration).netAmount
           : undefined);
       if (paidAmount !== undefined) {
+        assertMoneyPrecision(registration.currency, paidAmount);
         assertPaidAmountWithinNet(paidAmount, calculateSettlement(registration).netAmount);
         settlement.paidAmount = paidAmount;
       }
@@ -215,6 +217,7 @@ export class RegistrationPaymentsService {
       const settled = await settleRegistrationTxn(tx, id, {
         decide: ({ net }) => {
           const paidAmount = input.paidAmount ?? net;
+          assertMoneyPrecision(old.currency, paidAmount);
           assertPaidAmountWithinNet(paidAmount, net);
           if (newStatus === "PAID") assertPaidInFull(paidAmount, net);
           return {

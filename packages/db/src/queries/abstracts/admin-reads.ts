@@ -9,6 +9,7 @@ import {
   abstracts,
 } from "../../schema/abstracts";
 import { users } from "../../schema/users-clients";
+import { ABSTRACT_STATUSES, type AbstractStatusCounts } from "@app/contracts";
 import {
   loadActiveReviews,
   loadThemesWithSort,
@@ -86,9 +87,9 @@ export function buildAdminAbstractsWhere(
 export async function listAdminAbstracts(
   eventId: string,
   filters: ListAdminAbstractsFilters,
-): Promise<{ items: AdminAbstractRow[]; total: number }> {
+): Promise<{ items: AdminAbstractRow[]; total: number; countsByStatus: AbstractStatusCounts }> {
   const where = buildAdminAbstractsWhere(eventId, filters);
-  const [rows, totalRows] = await Promise.all([
+  const [rows, totalRows, statusRows] = await Promise.all([
     getDb()
       .select()
       .from(abstracts)
@@ -97,6 +98,9 @@ export async function listAdminAbstracts(
       .limit(filters.limit)
       .offset(filters.offset),
     getDb().select({ n: count() }).from(abstracts).where(where),
+    getDb().select({ status: abstracts.status, n: count() }).from(abstracts)
+      .where(buildAdminAbstractsWhere(eventId, { ...filters, status: undefined }))
+      .groupBy(abstracts.status),
   ]);
 
   const ids = rows.map((r) => r.id);
@@ -110,7 +114,9 @@ export async function listAdminAbstracts(
     themes: themeMap.get(row.id) ?? [],
     reviews: reviewMap.get(row.id) ?? [],
   }));
-  return { items, total: totalRows[0]?.n ?? 0 };
+  const counts = new Map(statusRows.map((row) => [row.status, Number(row.n)]));
+  const countsByStatus = Object.fromEntries(ABSTRACT_STATUSES.map((status) => [status, counts.get(status) ?? 0])) as AbstractStatusCounts;
+  return { items, total: Number(totalRows[0]?.n ?? 0), countsByStatus };
 }
 
 /** Detail read: null when not found OR event mismatch (caller 404s either way). */

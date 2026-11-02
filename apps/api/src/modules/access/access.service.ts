@@ -1,3 +1,4 @@
+import { assertMoneyPrecision } from "../../core/money-input";
 import { pickDefined } from "@app/shared";
 import { Injectable } from "@nestjs/common";
 import { ErrorCodes, buildFieldOptionIndex, findInvalidOptionConditions } from "@app/contracts";
@@ -221,6 +222,8 @@ export class AccessService {
 
     await this.assertValidOptionConditions(eventId, data.name, data.conditions);
 
+    const currency = data.currency ?? event.currency ?? "TND";
+    assertMoneyPrecision(currency, data.price, data.companionPrice);
     const values: NewEventAccessValues = {
       eventId,
       type: data.type ?? "OTHER",
@@ -230,7 +233,7 @@ export class AccessService {
       startsAt: data.startsAt ?? null,
       endsAt: data.endsAt ?? null,
       price: data.price ?? 0,
-      currency: data.currency ?? "TND",
+      currency,
       maxCapacity: data.maxCapacity ?? null,
       availableFrom: data.availableFrom ?? null,
       availableTo: data.availableTo ?? null,
@@ -314,6 +317,7 @@ export class AccessService {
       id,
     );
 
+    assertMoneyPrecision(data.currency ?? access.currency, data.price, data.companionPrice);
     const updateData: Partial<NewEventAccessValues> = pickDefined(data, [
       "type",
       "name",

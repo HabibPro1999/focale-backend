@@ -23,6 +23,7 @@ import { FormsService } from "./forms.service";
 import type { PaginatedResult } from "@app/shared";
 import {
   CreateFormDto,
+  DuplicateFormDto,
   UpdateFormDto,
   ListFormsQueryDto,
   FormIdParamDto,
@@ -115,6 +116,18 @@ export class FormsController {
   @FormScoped({ moduleOfFormType: true })
   async getOne(@Param() params: FormIdParamDto): Promise<FormWithEvent> {
     return this.loadForm(params.id);
+  }
+
+  @Post(":id/duplicate")
+  @HttpCode(201)
+  @FormScoped({ moduleOfFormType: true })
+  async duplicate(@Param() params: FormIdParamDto, @Body() body: DuplicateFormDto,
+    @CurrentUser() user: AuthUser): Promise<Form> {
+    const source = await this.loadForm(params.id);
+    await requireTenantScope(user, "event", body.targetEventId, {
+      module: source.type === "SPONSOR" ? "sponsorships" : "registrations", write: true,
+    });
+    return this.forms.duplicateForm(params.id, body);
   }
 
   @Get(":id/sponsorship-mode-locked")

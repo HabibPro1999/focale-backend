@@ -35,6 +35,8 @@ export {
 } from "./abstracts/config";
 
 export {
+  deleteUnusedAbstractTheme,
+  reorderAbstractThemes,
   countCodedAbstractsByTheme,
   findThemeWithEventId,
   insertTheme,

@@ -42,7 +42,7 @@ export const NetworkingAdminProfilesResponseSchema = z.object({
 });
 
 /** NetworkingAdminController.updateProfile */
-export const NetworkingAdminUpdateProfileResponseSchema = NetworkingStoredProfileSchema;
+export const NetworkingAdminUpdateProfileResponseSchema = NetworkingStoredProfileSchema.extend({ accessUndoId: z.string().optional() });
 
 /** NetworkingAdminController.spaces */
 export const NetworkingAdminSpacesResponseSchema = z.object({
@@ -102,12 +102,13 @@ export const NetworkingAdminReportsResponseSchema = z.object({
     reporter: NetworkingStoredProfileSchema.nullable(),
     profile: NetworkingStoredProfileSchema.nullable(),
     message: NetworkingMessageRowSchema.nullable(),
+    resolvedByName: z.string().nullable(),
   })),
   total: z.number(),
 });
 
 /** NetworkingAdminController.moderate */
-export const NetworkingAdminModerateResponseSchema = NetworkingReportRowSchema;
+export const NetworkingAdminModerateResponseSchema = NetworkingReportRowSchema.extend({ accessUndoId: z.string().optional() });
 
 /** NetworkingAdminController.audit */
 export const NetworkingAdminAuditResponseSchema = z.object({
@@ -115,6 +116,7 @@ export const NetworkingAdminAuditResponseSchema = z.object({
     id: z.string(),
     eventId: z.string(),
     actorId: z.string(),
+    actorName: z.string().nullable(),
     action: z.string(),
     targetId: z.string().nullable(),
     data: z.record(z.string(), z.unknown()),
@@ -176,6 +178,7 @@ export const NetworkingAdminAnalyticsResponseSchema = z.object({
   cancelledMeetings: z.number(),
   noShowMeetings: z.number(),
   pendingMeetings: z.number(),
+  awaitingAllocationCount: z.number().int().min(0),
   tableOccupancyRate: z.number(),
   tableUsage: z.array(z.object({
     tableId: z.string(),
@@ -205,6 +208,7 @@ export const NetworkingAdminAnalyticsResponseSchema = z.object({
     averageDelayMinutes: z.number(),
   }),
   reports: z.number(),
+  openReports: z.number().int().min(0),
   hourlyActivity: z.array(z.object({
     hour: z.string(),
     activity: z.number(),
@@ -231,3 +235,11 @@ export const NetworkingAdminAnalyticsResponseSchema = z.object({
   })),
   engagementTotal: z.number().optional(),
 });
+
+export const NetworkingAdminRestoreAccessResponseSchema = z.object({
+  profile: NetworkingStoredProfileSchema, restoredMeetings: z.array(z.string()), alreadyRestored: z.boolean(),
+});
+
+export const NetworkingAdminProfileResponseSchema = NetworkingAdminProfilesResponseSchema.shape.items.element;
+export const NetworkingAdminMeetingResponseSchema = NetworkingAdminUpdateMeetingResponseSchema;
+export const NetworkingAdminReportResponseSchema = NetworkingAdminReportsResponseSchema.shape.items.element;

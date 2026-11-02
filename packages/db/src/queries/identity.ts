@@ -1,5 +1,5 @@
 import { UserRole } from "@app/contracts";
-import { and, count, desc, eq, ilike, or, type SQL } from "drizzle-orm";
+import { and, count, desc, eq, ilike, or, isNull, lt, sql, type SQL } from "drizzle-orm";
 import type { OffsetPagination } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
 import { withSerializableTxn } from "../txn";
@@ -11,6 +11,12 @@ export type UserRow = typeof users.$inferSelect;
 type ClientRow = typeof clients.$inferSelect;
 /** Legacy `UserWithClient`: the user row plus its nested client relation (or null). */
 export type UserWithClient = UserRow & { client: ClientRow | null };
+
+/** Monotonic authenticated login time; profile updatedAt is deliberately unchanged. */
+export async function recordUserLogin(id: string, at: Date, db: DbExecutor): Promise<void> {
+  await db.update(users).set({ lastLoginAt: at, updatedAt: sql`${users.updatedAt}` })
+    .where(and(eq(users.id, id), eq(users.active, true), or(isNull(users.lastLoginAt), lt(users.lastLoginAt, at))));
+}
 
 export interface ListUsersFilters {
   role?: number;

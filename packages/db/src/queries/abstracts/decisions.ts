@@ -163,7 +163,7 @@ export async function finalizeAbstractTxn(params: {
         })
         .from(abstractConfig)
         .where(eq(abstractConfig.eventId, eventId))
-        .limit(1);
+        .limit(1).for("update");
       const reviews = await tx
         .select({ comment: abstractReviews.comment, name: users.name })
         .from(abstractReviews)

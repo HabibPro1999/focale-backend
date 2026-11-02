@@ -1,3 +1,4 @@
+import { ErrorCodes } from "@app/contracts";
 import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { fileTypeFromBuffer } from "file-type";
@@ -5,9 +6,11 @@ import sharp from "sharp";
 import { getAbstractTitle } from "@app/shared";
 import type {
   CreateCertificateTemplateInput,
+  CertificateSendPreview,
   UpdateCertificateTemplateInput,
 } from "@app/contracts";
 import {
+  getRegistrationFormLanguage,
   listCertificateTemplates,
   getCertificateTemplateWithEvent,
   getCertificateTemplateImageState,
@@ -18,6 +21,7 @@ import {
   updateCertificateTemplate,
   updateCertificateTemplateImage,
   deleteCertificateTemplateById,
+  restoreCertificateTemplate,
   getDb,
   listActiveImageReadyCertificateTemplates,
   getRegistrationsForCertificateSend,
@@ -25,6 +29,9 @@ import {
   getTemplateByTrigger,
   getAbstractsForCertificateSend,
   queueCertificateEmailLogsTxn,
+  planCertificateEmailLogs,
+  getAlreadySentAbstractCertTemplateIds,
+  type PlannedCertificateEmail,
   type CertificateTemplateWithAccess,
   type CertificateTemplateWithEvent,
   type CertificateEmailCandidate,
@@ -32,6 +39,11 @@ import {
   type AbstractForCertificateSend,
 } from "@app/db";
 import {
+  getEmailProvider,
+  getSampleEmailContext,
+  resolveEmailParts,
+  generateCertificatePdf,
+  resolveCertificateVariable,
   IMAGE_INPUT_LIMITS,
   extractStorageKeyFromUrl,
   getStorageProvider,
@@ -50,7 +62,7 @@ import {
   type CertificateTemplateData,
 } from "@app/integrations";
 import { logger } from "../../core/logger.service";
-import { badRequest, notFound } from "../../core/app-exception";
+import { AppException, badRequest, notFound } from "../../core/app-exception";
 
 const ALLOWED_MIME_TYPES = new Set(["image/png", "image/jpeg"]);
 
@@ -145,6 +157,30 @@ export class CertificatesService {
   // ==========================================================================
   // Reads
   // ==========================================================================
+
+  /** Sample PDF only; recipient is supplied by CurrentUser, never by the body. */
+  async testSendCertificate(id: string, admin: { email: string; name: string }) {
+    const template = await this.getTemplate(id);
+    if (!template.templateUrl) throw badRequest("Upload a certificate image before sending a test.");
+    const emailTemplate = await getTemplateByTrigger(template.eventId, "CERTIFICATE_SENT");
+    if (!emailTemplate) throw badRequest("No CERTIFICATE_SENT email template configured.");
+    const context = getSampleEmailContext(await getRegistrationFormLanguage(template.eventId));
+    const data = toCertificateTemplateData([template])[0];
+    const values = Object.fromEntries(data.zones.map((zone) => [zone.variable,
+      resolveCertificateVariable(zone.variable, { ...context, accessName: template.access?.name })]));
+    const pdf = await generateCertificatePdf(data, values);
+    const resolved = resolveEmailParts({ subject: emailTemplate.subject,
+      html: emailTemplate.htmlContent || "", plain: emailTemplate.plainContent || "" }, context);
+    const result = await getEmailProvider().sendEmail({
+      to: admin.email, toName: admin.name, subject: `[TEST] ${resolved.subject}`,
+      html: resolved.html, plainText: resolved.plain, categories: ["test-certificate"],
+      attachments: [{ content: pdf.toString("base64"), filename: "test-certificate.pdf",
+        type: "application/pdf", disposition: "attachment" }],
+    });
+    if (!result.success) throw new AppException(ErrorCodes.INTERNAL_ERROR,
+      result.error || "Failed to send test certificate", 502);
+    return { success: true as const, messageId: result.messageId };
+  }
 
   listTemplates(eventId: string): Promise<CertificateTemplateWithAccess[]> {
     return listCertificateTemplates(eventId);
@@ -242,35 +278,21 @@ export class CertificatesService {
     }
 
     // The query writes only the fields the input defines.
-    return updateCertificateTemplate(id, input, getDb());
+    const updated = await updateCertificateTemplate(id, input, getDb());
+    if (!updated) throw templateNotFound();
+    return updated;
   }
 
-  /** Delete a template + its stored image (image delete is best-effort). */
+  /** Retain both images for Undo; normal reads and sends exclude the tombstone. */
   async deleteTemplate(id: string): Promise<void> {
-    const template = await getCertificateTemplateForDelete(id);
-    if (!template) {
-      throw templateNotFound();
-    }
-
-    if (template.templateUrl) {
-      const key = extractStorageKeyFromUrl(template.templateUrl, {
-        allowBareKey: false,
-      });
-      if (key) {
-        await deleteCertificateImageBestEffort(
-          key,
-          "Failed to delete certificate template image",
-        );
-      }
-    }
-    // 3.8: the render image, only when it lies under this event's prefix.
-    const renderKey = ownedStorageKey(
-      template.renderImageKey,
-      `${template.eventId}/certificates`,
-    );
-    if (renderKey) await deleteCertificateImageBestEffort(renderKey);
-
+    if (!await getCertificateTemplateForDelete(id)) throw templateNotFound();
     await deleteCertificateTemplateById(id, getDb());
+  }
+
+  async restoreTemplate(id: string) {
+    const template = await restoreCertificateTemplate(id, getDb());
+    if (!template) throw templateNotFound();
+    return template;
   }
 
   /**
@@ -379,11 +401,12 @@ export class CertificatesService {
   // Send (bulk-queue certificate emails)
   // ==========================================================================
 
-  async sendCertificates(
+  private async prepareCertificateSend(
     eventId: string,
     registrationIds: string[] | undefined,
     abstractIds?: string[],
-  ): Promise<SendCertificatesResult> {
+    includeEmailContext = true,
+  ) {
     // H2: abstractIds is a new, additive field on an existing endpoint. When
     // it's present but registrationIds was omitted, the caller is invoking
     // the new abstract-certificate action and did not ask to also blast every
@@ -445,7 +468,7 @@ export class CertificatesService {
     // pricing and the access items are read once for the whole send.
     const registrationCandidates: CertificateEmailCandidate[] = [];
     const contextLookups =
-      regsToQueue.length > 0
+      includeEmailContext && regsToQueue.length > 0
         ? await loadEmailContextLookups(
             eventId,
             regsToQueue.flatMap(({ reg }) => reg.accessTypeIds ?? []),
@@ -454,9 +477,9 @@ export class CertificatesService {
 
     for (let i = 0; i < regsToQueue.length; i += CONTEXT_CONCURRENCY) {
       const chunk = regsToQueue.slice(i, i + CONTEXT_CONCURRENCY);
-      const contexts = await Promise.all(
+      const contexts = includeEmailContext ? await Promise.all(
         chunk.map(({ reg }) => buildEmailContextWithAccess(reg, contextLookups)),
-      );
+      ) : chunk.map(() => ({}));
 
       for (let j = 0; j < chunk.length; j++) {
         const { reg, eligible } = chunk[j];
@@ -477,6 +500,33 @@ export class CertificatesService {
         ? await this.planAbstractCertificates(eventId, templateData, abstractIds)
         : undefined;
 
+    return { emailTemplate, registrations, eligibleRegs, registrationCandidates, alreadySentBefore, sentBefore, abstractPlan };
+  }
+
+  async dryRunCertificates(eventId: string, registrationIds: string[] | undefined, abstractIds?: string[]): Promise<CertificateSendPreview> {
+    const prepared = await this.prepareCertificateSend(eventId, registrationIds, abstractIds, false);
+    const plan = planCertificateEmailLogs({ eventId, emailTemplateId: prepared.emailTemplate.id,
+      registrations: prepared.registrationCandidates, abstracts: prepared.abstractPlan?.candidates ?? [] },
+      prepared.sentBefore, await getAlreadySentAbstractCertTemplateIds(prepared.abstractPlan?.candidates.map((c) => c.targetId) ?? []));
+    const previewOutcome = (p: PlannedCertificateEmail): CertificateEmailOutcome => p.status === "already_sent"
+      ? p : { status: "queued", emailLogId: "preview-only", certificates: p.certificates };
+    const abstracts = prepared.abstractPlan?.summarize(plan.abstracts.map(previewOutcome));
+    const ready = [...plan.registrations, ...plan.abstracts].filter((p) => p.status === "insert");
+    const breakdown: Record<string, number> = {};
+    for (const item of ready) for (const certificate of item.certificates)
+      breakdown[certificate.name] = (breakdown[certificate.name] ?? 0) + 1;
+    return {
+      recipientCount: ready.length,
+      certificateCount: ready.reduce((n, item) => n + item.certificates.length, 0),
+      alreadySent: prepared.alreadySentBefore + [...plan.registrations, ...plan.abstracts].filter((p) => p.status === "already_sent").length,
+      ineligibleCount: prepared.registrations.length - prepared.eligibleRegs.length + (abstracts?.results.filter((r) => r.status === "ineligible").length ?? 0),
+      total: prepared.registrations.length + (abstracts?.total ?? 0), breakdown,
+    };
+  }
+
+  async sendCertificates(eventId: string, registrationIds: string[] | undefined, abstractIds?: string[]): Promise<SendCertificatesResult> {
+    const { emailTemplate, registrations, registrationCandidates, alreadySentBefore, abstractPlan } =
+      await this.prepareCertificateSend(eventId, registrationIds, abstractIds);
     // 8. Queue both batches in one transaction, under the event lock, deduped
     // per certificate template against what is already queued or sent.
     const outcomes = await queueCertificateEmailLogsTxn({

@@ -1,3 +1,4 @@
+import { subtractMoney } from "@app/shared";
 import { ErrorCodes } from "@app/contracts";
 import type { DbExecutor } from "@app/db";
 import { AppException } from "../../core/app-exception";
@@ -7,7 +8,7 @@ type AccessSelection = { accessId: string; quantity: number };
 
 /** What the registrant owes in total: gross minus sponsorship, at least 0. */
 export function netOf(amounts: { totalAmount: number; sponsorshipAmount: number }): number {
-  return Math.max(0, amounts.totalAmount - amounts.sponsorshipAmount);
+  return Math.max(0, subtractMoney(amounts.totalAmount, amounts.sponsorshipAmount));
 }
 
 /** 400 when a paid amount exceeds the net (nothing is ever overpaid). */

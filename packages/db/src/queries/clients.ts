@@ -1,10 +1,11 @@
-import { and, count, desc, eq, ilike, or, type SQL } from "drizzle-orm";
+import { and, count, desc, eq, ilike, or, sql, getTableColumns, type SQL } from "drizzle-orm";
 import type { OffsetPagination } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
 import { clients, users } from "../schema/users-clients";
 import { events } from "../schema/events-access";
 
 export type ClientRow = typeof clients.$inferSelect;
+export type ClientListRow = ClientRow & { userCount: number; eventCount: number };
 export type ClientModuleGate = Pick<ClientRow, "active" | "enabledModules">;
 
 /** Resolved create payload (optional cols already coerced to null / defaulted upstream). */
@@ -84,13 +85,19 @@ function listClientsWhere(args: ListClientsArgs): SQL | undefined {
 /** Page of clients (createdAt desc) plus total matching the same filter. */
 export async function listClientsPage(
   args: ListClientsArgs,
-): Promise<{ data: ClientRow[]; total: number }> {
+): Promise<{ data: ClientListRow[]; total: number }> {
   const db = getDb();
   const where = listClientsWhere(args);
 
   const [data, totalRows] = await Promise.all([
     db
-      .select()
+      .select({
+        ...getTableColumns(clients),
+        // Keep the outer identifier qualified: Drizzle strips column qualifiers in
+        // a single-table select, which otherwise binds `id` to the inner table.
+        userCount: sql<number>`(SELECT count(*) FROM ${users} WHERE ${users.clientId} = "clients"."id")`.mapWith(Number),
+        eventCount: sql<number>`(SELECT count(*) FROM ${events} WHERE ${events.clientId} = "clients"."id")`.mapWith(Number),
+      })
       .from(clients)
       .where(where)
       .orderBy(desc(clients.createdAt))

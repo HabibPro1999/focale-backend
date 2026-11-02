@@ -258,7 +258,7 @@ export class UsersService {
   async deleteUser(id: string, requestingUserId: string): Promise<void> {
     if (id === requestingUserId) {
       throw new BadRequestException({
-        code: ErrorCodes.BAD_REQUEST,
+        code: ErrorCodes.USER_SELF_DELETE,
         message: "Cannot delete your own account",
       });
     }

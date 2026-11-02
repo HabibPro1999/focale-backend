@@ -5,6 +5,7 @@
 // ============================================================================
 
 import { z } from "zod";
+import { RegistrationRoleSchema } from "./registrations";
 import { LanguageCodeSchema } from "./i18n.schema";
 
 // ============================================================================
@@ -23,6 +24,7 @@ export const ExportQuerySchema = z.strictObject({
 });
 
 export const ExportRegistrationsQuerySchema = z.strictObject({
+  role: RegistrationRoleSchema.optional(),
   startDate: z.string().datetime().optional(),
   endDate: z.string().datetime().optional(),
   format: z.enum(["csv", "json", "xlsx"]).default("csv"),
@@ -90,6 +92,7 @@ export const ExportLanguageSchema = LanguageCodeSchema;
 export const ExportRegistrationsBodySchema = z.strictObject({
   filters: z
     .strictObject({
+      role: RegistrationRoleSchema.optional(),
       search: z.string().max(200).optional(),
       paymentStatus: z
         .enum([
@@ -204,6 +207,7 @@ export const AnalyticsAccessItemSchema = z.object({
   name: z.string(),
   type: z.string(),
   registeredCount: z.number(),
+  paidCount: z.number().int().min(0),
   maxCapacity: z.number().nullable(),
   fillPercentage: z.number().nullable(),
 });

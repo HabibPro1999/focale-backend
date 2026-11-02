@@ -1,5 +1,5 @@
 import { escapeLike } from "../like";
-import { and, desc, eq, ilike, isNotNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, isNotNull, or, sql, getTableColumns } from "drizzle-orm";
 import type { OffsetPagination } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
 import { rowCountOf } from "../helpers";
@@ -17,6 +17,7 @@ import { checkPricingRow } from "./stored-json";
 
 // Row types inferred from the drizzle schema (snake_case DB ↔ camelCase fields).
 export type EventRow = typeof events.$inferSelect;
+export type EventListRow = EventRow & { client: { id: string; name: string } };
 // event_pricing lives in the pricing schema domain — keep the row type local so
 // the db barrel doesn't collide with the pricing query module's own export.
 type EventPricingRow = typeof eventPricing.$inferSelect;
@@ -125,13 +126,14 @@ export async function getEventWithPricingAndClient(
 export async function listEvents(
   filter: ListEventsFilter,
   exec: DbExecutor = getDb(),
-): Promise<{ data: EventRow[]; total: number }> {
+): Promise<{ data: EventListRow[]; total: number }> {
   const where = buildListWhere(filter);
 
   const [data, totalRows] = await Promise.all([
     exec
-      .select()
+      .select({ ...getTableColumns(events), client: { id: clients.id, name: clients.name } })
       .from(events)
+      .innerJoin(clients, eq(clients.id, events.clientId))
       .where(where)
       .orderBy(desc(events.createdAt))
       .limit(filter.limit)
@@ -139,7 +141,7 @@ export async function listEvents(
     exec.select({ value: sql<number>`count(*)::int` }).from(events).where(where),
   ]);
 
-  return { data, total: totalRows[0]?.value ?? 0 };
+  return { data, total: Number(totalRows[0]?.value ?? 0) };
 }
 
 /** Exported for db-tier SQL assertions. Builds the same predicate listEvents uses. */
@@ -189,7 +191,7 @@ export async function countRegistrationsTx(
     .select({ value: sql<number>`count(*)::int` })
     .from(registrations)
     .where(eq(registrations.eventId, eventId));
-  return rows[0]?.value ?? 0;
+  return Number(rows[0]?.value ?? 0);
 }
 
 export type NewEventValues = typeof events.$inferInsert;

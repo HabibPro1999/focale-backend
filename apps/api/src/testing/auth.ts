@@ -31,6 +31,7 @@ export function dbUser(
     createdAt: date,
     updatedAt: date,
     client,
+    lastLoginAt: null,
     ...overrides,
   };
 }

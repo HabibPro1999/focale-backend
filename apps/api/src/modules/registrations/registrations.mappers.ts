@@ -1,4 +1,5 @@
-import type { PriceBreakdown } from "@app/contracts";
+import type { PriceBreakdown, RegistrationAmountsResponse } from "@app/contracts";
+import { calculateSettlement, moneySnapshot } from "@app/shared";
 import type {
   AccessSelectionItem,
   DroppedAccessSelectionItem,
@@ -16,13 +17,28 @@ import type {
  */
 type AdminHiddenField = "editToken" | "idempotencyKey";
 
-export type AdminView<T> = Omit<T, AdminHiddenField>;
+export type AdminView<T> = Omit<T, AdminHiddenField> & RegistrationAmountsResponse;
 
-export function toAdminRegistration<T extends object>(registration: T): AdminView<T> {
+type RegistrationMoneySource = {
+  totalAmount: number; paidAmount: number; sponsorshipAmount: number;
+  currency: string; priceBreakdown: PriceBreakdown;
+};
+
+function registrationAmounts(registration: RegistrationMoneySource): RegistrationAmountsResponse {
+  const amountDue = calculateSettlement(registration).amountDue;
+  const catalogueBasePrice = typeof registration.priceBreakdown?.basePrice === "number" ? registration.priceBreakdown.basePrice : null;
+  return { amountDue, catalogueBasePrice, money: moneySnapshot(registration.currency, {
+    totalAmount: registration.totalAmount, paidAmount: registration.paidAmount,
+    sponsorshipAmount: registration.sponsorshipAmount, amountDue,
+    ...(catalogueBasePrice === null ? {} : { catalogueBasePrice }),
+  }) };
+}
+
+export function toAdminRegistration<T extends RegistrationMoneySource>(registration: T): AdminView<T> {
   const safe = { ...registration } as Record<string, unknown>;
   delete safe.editToken;
   delete safe.idempotencyKey;
-  return safe as AdminView<T>;
+  return { ...safe, ...registrationAmounts(registration) } as AdminView<T>;
 }
 
 // ============================================================================
@@ -86,7 +102,7 @@ export interface PublicRegistrationSource {
  * URL, stored proof location, access-id arrays, tenant id). `token` (the
  * registrant's own edit token) is present only on the create response.
  */
-export type PublicRegistration = Omit<PublicRegistrationSource, "paymentProofUrl"> & {
+export type PublicRegistration = Omit<PublicRegistrationSource, "paymentProofUrl"> & RegistrationAmountsResponse & {
   hasPaymentProof: boolean;
   token?: string | null;
 };
@@ -97,6 +113,7 @@ export function toPublicRegistration(
 ): PublicRegistration {
   const { form, event } = registration;
   const dto: PublicRegistration = {
+    ...registrationAmounts(registration),
     id: registration.id,
     formId: registration.formId,
     eventId: registration.eventId,

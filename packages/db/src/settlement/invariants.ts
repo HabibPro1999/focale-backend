@@ -64,7 +64,7 @@ export interface SettlementInvariantOptions {
  * number. The field name is an inline literal (an untyped placeholder after
  * -> is ambiguous on CockroachDB); only the constants below are passed.
  */
-function num(json: SQL, field: "subtotal" | "calculatedBasePrice" | "accessTotal" | "sponsorshipTotal" | "total"): SQL {
+function num(json: SQL, field: "subtotal" | "calculatedBasePrice" | "accessTotal" | "sponsorshipTotal" | "total" | "optionModifiersTotal"): SQL {
   const key = sql.raw(`'${field}'`);
   return sql`(CASE WHEN jsonb_typeof(${json}->${key}) = 'number' THEN (${json}->>${key})::DECIMAL END)`;
 }
@@ -141,7 +141,7 @@ async function breakdownVsColumns(db: DbExecutor, eventId?: string) {
             WHEN ${sponsorshipTotal} <> r.sponsorship_amount THEN 'SPONSORSHIP_TOTAL_MISMATCH'
             WHEN ${sponsorshipTotal} > ${subtotal} THEN 'SPONSORSHIP_EXCEEDS_SUBTOTAL'
             WHEN ${total} <> ${subtotal} - ${sponsorshipTotal} THEN 'TOTAL_NOT_SUBTOTAL_MINUS_SPONSORSHIP'
-            WHEN ${subtotal} <> ${base} + ${accessTotal} THEN 'SUBTOTAL_NOT_BASE_PLUS_ACCESS'
+            WHEN ${subtotal} <> GREATEST(0, ${base} + ${accessTotal} + COALESCE(${num(PB, "optionModifiersTotal")}, 0)) THEN 'SUBTOTAL_NOT_BASE_PLUS_ACCESS'
             WHEN ${accessTotal} <> COALESCE(i.items_total, 0) THEN 'ACCESS_TOTAL_NOT_ITEMS_SUM'
             WHEN ${subtotal} > r.total_amount THEN 'SUBTOTAL_EXCEEDS_TOTAL_AMOUNT'
             WHEN ${base} <> r.base_amount THEN 'BASE_AMOUNT_MISMATCH'

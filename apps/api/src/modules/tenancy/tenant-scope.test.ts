@@ -286,7 +286,7 @@ describe("tenant scope guard (5.4)", () => {
     const res = await post(`/t/events/${EVENT}`);
     expect(res.statusCode).toBe(400);
     expect(error(res)).toMatchObject({
-      code: ErrorCodes.INVALID_STATUS_TRANSITION,
+      code: ErrorCodes.EVENT_ARCHIVED,
       message: "Archived events cannot be modified",
     });
     // Read routes do not check the event state.

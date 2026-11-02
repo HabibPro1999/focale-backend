@@ -1,7 +1,9 @@
 import { validateChangedPricingRules } from "./pricing-rule-validation";
+import { priceOptionModifiers, type OptionPricingContext } from "./option-modifiers";
 import { Injectable } from "@nestjs/common";
 import {
   ErrorCodes,
+  MAX_PRICING_RULES,
   type CalculatePriceRequest,
   type CreateEmbeddedRuleInput,
   type EmbeddedPricingRule,
@@ -30,10 +32,15 @@ import {
   evaluateRuleConditions,
   newId,
   pickDefined,
+  sumMoney,
+  subtractMoney,
+  multiplyMoney,
+  withBreakdownMoney,
 } from "@app/shared";
 import { AppException, badRequest, notFound } from "../../core/app-exception";
 import { assertEventWritable } from "../events";
 import { assertModuleEnabledForClient } from "../clients/module-gates";
+import { assertMoneyPrecision } from "../../core/money-input";
 
 // Transaction-scoped write path shared by base-pricing PATCH and rule mutations.
 // Mirrors legacy updateEventPricingTx: re-fetch event gate, re-assert
@@ -57,12 +64,15 @@ export class PricingService {
     );
   }
 
-  /** POST a single rule — appends; does NOT enforce the 10-rule cap (legacy gotcha kept). */
+  /** Append under the serializable transaction, enforcing the same cap as replacement. */
   addPricingRule(
     eventId: string,
     rule: CreateEmbeddedRuleInput,
   ): Promise<EventPricingWithRules> {
     return this.mutatePricingRules(eventId, (rules) => {
+      if (rules.length >= MAX_PRICING_RULES) {
+        throw badRequest(`An event can have at most ${MAX_PRICING_RULES} pricing rules`);
+      }
       const newRule: EmbeddedPricingRule = {
         ...rule,
         id: newId(),
@@ -137,6 +147,8 @@ export class PricingService {
     }
     assertEventWritable({ status: gate.status });
     assertModuleEnabledForClient(gate.client, "pricing");
+    assertMoneyPrecision(input.currency ?? gate.currentCurrency ?? "TND", input.basePrice,
+      ...(input.rules ?? []).map((rule) => rule.price));
 
     const createData: PricingRowInsert = {
       eventId,
@@ -153,8 +165,11 @@ export class PricingService {
       if (input.currency !== currentCurrency) {
         const registrationCount = await countRegistrations(eventId, tx);
         if (registrationCount > 0) {
-          throw badRequest("Cannot change currency after registrations exist");
+          throw new AppException(ErrorCodes.CURRENCY_LOCKED, "Cannot change currency after registrations exist", 400);
         }
+        const stored = await getEventPricing(eventId, tx);
+        assertMoneyPrecision(input.currency, input.basePrice ?? stored?.basePrice,
+          ...(input.rules ?? stored?.rules ?? []).map((rule) => rule.price));
       }
       updateData.currency = input.currency;
     }
@@ -197,6 +212,7 @@ export class PricingService {
     eventId: string,
     input: CalculatePriceRequest,
     db?: DbExecutor,
+    optionContext?: OptionPricingContext,
   ): Promise<PriceBreakdown> {
     const { formData, selectedAccessItems, sponsorshipCodes } = input;
 
@@ -225,7 +241,7 @@ export class PricingService {
         appliedRules.push({
           ruleId: rule.id,
           ruleName: rule.name,
-          effect: rule.price - basePrice,
+          effect: subtractMoney(rule.price, basePrice),
           reason: `Base price set to ${rule.price}`,
         });
         break;
@@ -237,9 +253,11 @@ export class PricingService {
       selectedAccessItems,
       db,
     );
-    const accessTotal = accessItemsDetails.reduce((s, e) => s + e.subtotal, 0);
+    const accessTotal = sumMoney(...accessItemsDetails.map((e) => e.subtotal));
+    const optionModifiers = priceOptionModifiers(optionContext, formData, currency);
+    const optionModifiersTotal = sumMoney(...optionModifiers.map((line) => line.amount));
 
-    const subtotal = calculatedBasePrice + accessTotal;
+    const subtotal = Math.max(0, sumMoney(calculatedBasePrice, accessTotal, optionModifiersTotal));
 
     const sponsorships = await this.validateSponsorshipCodes(
       sponsorshipCodes,
@@ -247,13 +265,11 @@ export class PricingService {
       { calculatedBasePrice, accessItemsDetails, subtotal },
       db,
     );
-    const sponsorshipTotal = sponsorships
-      .filter((s) => s.valid)
-      .reduce((s, x) => s + x.amount, 0);
+    const sponsorshipTotal = sumMoney(...sponsorships.filter((s) => s.valid).map((s) => s.amount));
 
-    const total = Math.max(0, subtotal - sponsorshipTotal);
+    const total = Math.max(0, subtractMoney(subtotal, sponsorshipTotal));
 
-    return {
+    return withBreakdownMoney({
       basePrice,
       appliedRules,
       calculatedBasePrice,
@@ -265,7 +281,9 @@ export class PricingService {
       total,
       currency,
       droppedAccessItems: [],
-    };
+      optionModifiers,
+      optionModifiersTotal,
+    });
   }
 
   private async calculateAccessItemsTotal(
@@ -294,7 +312,7 @@ export class PricingService {
             name: access.name,
             unitPrice: access.companionPrice,
             quantity: selected.quantity,
-            subtotal: access.companionPrice * companionCount,
+            subtotal: multiplyMoney(access.companionPrice, companionCount),
           };
         }
         // Non-included: registrant pays price, companions pay companionPrice.
@@ -303,7 +321,7 @@ export class PricingService {
           name: access.name,
           unitPrice: access.price,
           quantity: selected.quantity,
-          subtotal: access.price + access.companionPrice * companionCount,
+          subtotal: sumMoney(access.price, multiplyMoney(access.companionPrice, companionCount)),
         };
       })
       .filter((e): e is NonNullable<typeof e> => e !== null);
@@ -332,7 +350,8 @@ export class PricingService {
     const sponsorships = await findPendingSponsorshipsByCodes(eventId, upperCodes, db);
     const sponsorshipMap = new Map(sponsorships.map((s) => [s.code, s]));
 
-    let remainingAmount = context.subtotal;
+    let remainingAmount = Math.min(context.subtotal,
+      sumMoney(context.calculatedBasePrice, ...context.accessItemsDetails.map((line) => line.subtotal)));
 
     return normalizedCodes.map(([upperCode, displayCode]) => {
       const sponsorship = sponsorshipMap.get(upperCode);
@@ -360,7 +379,7 @@ export class PricingService {
         },
       );
       const amount = Math.min(applicableAmount, remainingAmount);
-      remainingAmount = Math.max(0, remainingAmount - amount);
+      remainingAmount = Math.max(0, subtractMoney(remainingAmount, amount));
 
       return { code: displayCode, amount, valid: true };
     });

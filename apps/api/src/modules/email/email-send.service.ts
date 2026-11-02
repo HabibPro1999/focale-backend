@@ -3,6 +3,8 @@ import {
   DEFAULT_LANGUAGE,
   ErrorCodes,
   type BulkSendEmailInput,
+  type DraftEmailPreview,
+  type DraftEmailTestSend,
   type TiptapDocument,
 } from "@app/contracts";
 import {
@@ -51,6 +53,8 @@ export interface BulkSendResult {
   message: string;
 }
 
+interface BulkEmailPlan { values: EmailLogInsert[]; skipped: number; emptyMessage: string }
+
 @Injectable()
 export class EmailSendService {
   // ==========================================================================
@@ -76,6 +80,21 @@ export class EmailSendService {
       sampleContext,
     );
 
+    return this.deliverTest(resolved, recipientEmail, recipientName);
+  }
+
+  async previewDraft(eventId: string, input: DraftEmailPreview) {
+    const compiled = await compileTemplateContent(input.content);
+    const language = input.language ?? await getRegistrationFormLanguage(eventId);
+    return resolveEmailParts({ subject: input.subject, html: compiled.htmlContent, plain: compiled.plainContent }, getSampleEmailContext(language));
+  }
+
+  async testSendDraft(eventId: string, input: DraftEmailTestSend) {
+    return this.deliverTest(await this.previewDraft(eventId, input), input.recipientEmail, input.recipientName);
+  }
+
+  private async deliverTest(resolved: { subject: string; html: string; plain: string }, recipientEmail: string, recipientName?: string)
+    : Promise<{ success: true; message: string; messageId?: string }> {
     const result = await getEmailProvider().sendEmail({
       to: recipientEmail,
       toName: recipientName,
@@ -103,18 +122,31 @@ export class EmailSendService {
   // ==========================================================================
   // BULK SEND (queues EmailLog rows for the worker to drain)
   // ==========================================================================
-  async bulkSend(
+  async countBulkSend(event: SendEventContext, templateId: string, body: BulkSendEmailInput) {
+    const plan = await this.planBulkSend(event, templateId, body);
+    return { recipientCount: plan.values.length, skipped: plan.skipped };
+  }
+
+  async bulkSend(event: SendEventContext, templateId: string, body: BulkSendEmailInput): Promise<BulkSendResult> {
+    const plan = await this.planBulkSend(event, templateId, body);
+    const queued = plan.values.length
+      ? (await withTxn((tx) => insertEmailLogsSkippingConflicts(plan.values, tx))).size : 0;
+    return { success: true, queued, skipped: plan.skipped,
+      message: plan.values.length ? `${queued} emails queued for sending` : plan.emptyMessage };
+  }
+
+  private async planBulkSend(
     event: SendEventContext,
     templateId: string,
     body: BulkSendEmailInput,
-  ): Promise<BulkSendResult> {
+  ): Promise<BulkEmailPlan> {
     const { audience, registrationIds, filters } = body;
 
     if (audience === "sponsors") {
-      return this.bulkSendSponsors(event, templateId);
+      return this.planSponsorSend(event, templateId);
     }
     if (audience === "abstracts") {
-      return this.bulkSendAbstracts(event, templateId, body);
+      return this.planAbstractSend(event, templateId, body);
     }
 
     let registrations: BulkRegistrationRow[];
@@ -131,10 +163,9 @@ export class EmailSendService {
 
     if (registrations.length === 0) {
       return {
-        success: true,
-        queued: 0,
+        values: [],
         skipped: 0,
-        message: "No recipients matched the criteria",
+        emptyMessage: "No recipients matched the criteria",
       };
     }
 
@@ -147,20 +178,13 @@ export class EmailSendService {
           [reg.firstName, reg.lastName].filter(Boolean).join(" ") || null,
       }),
     );
-    const queued = (await withTxn((tx) => insertEmailLogsSkippingConflicts(values, tx))).size;
-
-    return {
-      success: true,
-      queued,
-      skipped: 0,
-      message: `${queued} emails queued for sending`,
-    };
+    return { values, skipped: 0, emptyMessage: "0 emails queued for sending" };
   }
 
-  private async bulkSendSponsors(
+  private async planSponsorSend(
     event: SendEventContext,
     templateId: string,
-  ): Promise<BulkSendResult> {
+  ): Promise<BulkEmailPlan> {
     const [batches, client] = await Promise.all([
       listSponsorshipBatchesForBulk(event.id),
       getClientById(event.clientId),
@@ -208,10 +232,9 @@ export class EmailSendService {
 
     if (sponsors.length === 0) {
       return {
-        success: true,
-        queued: 0,
+        values: [],
         skipped: 0,
-        message: "No sponsors found for this event",
+        emptyMessage: "No sponsors found for this event",
       };
     }
 
@@ -224,14 +247,7 @@ export class EmailSendService {
         contextSnapshot: s.contextSnapshot,
       }),
     );
-    const queued = (await withTxn((tx) => insertEmailLogsSkippingConflicts(values, tx))).size;
-
-    return {
-      success: true,
-      queued,
-      skipped: 0,
-      message: `${queued} emails queued for sending`,
-    };
+    return { values, skipped: 0, emptyMessage: "0 emails queued for sending" };
   }
 
   /**
@@ -240,11 +256,11 @@ export class EmailSendService {
    * the worker renders the template from. `skipped` counts the abstracts left
    * out: a blank author email, or (dedupeByEmail) an author's later abstract.
    */
-  private async bulkSendAbstracts(
+  private async planAbstractSend(
     event: SendEventContext,
     templateId: string,
     { abstractIds, abstractFilters, dedupeByEmail }: BulkSendEmailInput,
-  ): Promise<BulkSendResult> {
+  ): Promise<BulkEmailPlan> {
     const { recipients, skipped } = await listAbstractsForBulkEmail(event.id, {
       abstractIds,
       filters: abstractFilters,
@@ -253,10 +269,9 @@ export class EmailSendService {
 
     if (recipients.length === 0) {
       return {
-        success: true,
-        queued: 0,
+        values: [],
         skipped,
-        message: "No abstract submitters matched the criteria",
+        emptyMessage: "No abstract submitters matched the criteria",
       };
     }
 
@@ -270,14 +285,7 @@ export class EmailSendService {
         contextSnapshot: buildAbstractBulkEmailContext(abstract),
       }),
     );
-    const queued = (await withTxn((tx) => insertEmailLogsSkippingConflicts(values, tx))).size;
-
-    return {
-      success: true,
-      queued,
-      skipped,
-      message: `${queued} emails queued for sending`,
-    };
+    return { values, skipped, emptyMessage: "No abstract submitters matched the criteria" };
   }
 
   // ==========================================================================

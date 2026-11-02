@@ -1,3 +1,4 @@
+import { MoneyAmountSchema } from "./money";
 import { z } from "zod";
 import { hasUpdateField, paginationQueryShape } from "./zod-helpers";
 import type { StoredPricingRules } from "./pricing";
@@ -7,7 +8,7 @@ import type { StoredPricingRules } from "./pricing";
 // (z.strictObject strictness, coercions, transforms, refinements preserved).
 // ============================================================================
 
-const BasePriceSchema = z.number().int().min(0).nullable();
+const BasePriceSchema = MoneyAmountSchema.nullable();
 
 
 const supportedCurrencies = new Set(

@@ -84,7 +84,7 @@ export class AbstractsAdminService {
   async listAdminAbstracts(eventId: string, query: ListAbstractsQuery = {}) {
     const limit = query.limit ?? 50;
     const offset = query.offset ?? 0;
-    const { items, total } = await listAdminAbstracts(eventId, {
+    const { items, total, countsByStatus } = await listAdminAbstracts(eventId, {
       status: query.status,
       themeId: query.themeId,
       reviewerId: query.reviewerId,
@@ -96,6 +96,7 @@ export class AbstractsAdminService {
     return {
       items: items.map(formatAdminAbstract),
       total,
+      countsByStatus,
       limit,
       offset,
     };

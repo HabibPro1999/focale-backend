@@ -1,3 +1,4 @@
+import { assertMoneyPrecision } from "../../core/money-input";
 import { registrationAlreadyExists } from "./registrations.guards";
 import { lockRegistrationForMutation } from "./registrations.loaders";
 import { isDeepStrictEqual } from "node:util";
@@ -18,6 +19,7 @@ import {
   emitSettlementEvents,
   settlementEventPair,
   getRegistrationFormSchemaForEvent,
+  getFormForPriceQuote,
   registrationExistsByEmailForm,
   findRegistrationWithFormEvent,
   type DbExecutor,
@@ -108,6 +110,8 @@ export class RegistrationRepricer {
     current: {
       id: string;
       eventId: string;
+      formId: string;
+      formData: unknown;
       totalAmount: number;
       sponsorshipAmount: number;
       priceBreakdown: PriceBreakdown;
@@ -136,6 +140,13 @@ export class RegistrationRepricer {
         sponsorshipCodes: [],
       },
       tx,
+      {
+        formSchema: (await getFormForPriceQuote(current.formId, tx))?.schema,
+        previous: {
+          formData: (current.formData ?? {}) as Record<string, unknown>,
+          optionModifiers: stored.optionModifiers ?? [],
+        },
+      },
     );
     const priceBreakdown: PriceBreakdown = {
       ...priced,
@@ -199,6 +210,7 @@ export class RegistrationRepricer {
         );
       }
       assertEventWritable(registration.event);
+      assertMoneyPrecision(registration.currency, input.paidAmount);
       assertModuleEnabledForClient(
         registration.event.client,
         "registrations",

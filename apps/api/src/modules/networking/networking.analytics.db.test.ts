@@ -152,6 +152,9 @@ describe.runIf(dbTestsEnabled())("organizer analytics as SQL aggregates (4.9)", 
   it("gives every figure of the pre-4.9 calculator on the eligibility matrix with activity", async () => {
     const before = await networkingAnalyticsV1(ids.rich, now);
     const { engagementTotal, ...after } = await networkingAnalytics(ids.rich, now);
+    expect(after.openReports).toBe(before.reports);
+    const meetings = await networkingStore(getDb()).all("meetings", { eventId: ids.rich });
+    expect(after.awaitingAllocationCount).toBe(meetings.filter((meeting) => meeting.status === "PENDING_ALLOCATION").length);
     // Non-vacuous: the fixture drives every figure.
     for (const key of [
       "profiles", "activeProfiles", "visibleProfiles", "profileViews", "activationRate", "conversations", "responseRate",

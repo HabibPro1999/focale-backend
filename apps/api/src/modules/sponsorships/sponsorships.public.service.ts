@@ -1,3 +1,4 @@
+import { sumMoney } from "@app/shared";
 import { queueRegistrantSponsorshipEmail, sponsorshipEventForEmail } from "./sponsorships.emails";
 import { Injectable } from "@nestjs/common";
 import {
@@ -73,10 +74,7 @@ function sumAccessPrices(
   coveredAccessIds: string[],
   accessPriceMap: Map<string, number>,
 ): number {
-  return coveredAccessIds.reduce(
-    (sum, id) => sum + (accessPriceMap.get(id) ?? 0),
-    0,
-  );
+  return sumMoney(...coveredAccessIds.map((id) => accessPriceMap.get(id) ?? 0));
 }
 
 interface BatchContext {
@@ -378,8 +376,7 @@ export class SponsorshipsPublicService {
     for (const b of beneficiaries) {
       const code = await generateUniqueCode((c) => sponsorshipCodeExists(tx, c));
       const totalAmount =
-        (b.coversBasePrice ? basePrice : 0) +
-        sumAccessPrices(b.coveredAccessIds, accessPriceMap);
+        sumMoney(b.coversBasePrice ? basePrice : 0, sumAccessPrices(b.coveredAccessIds, accessPriceMap));
       const sponsorship = await insertSponsorship(tx, {
         batchId,
         eventId,
@@ -457,8 +454,7 @@ export class SponsorshipsPublicService {
         coversBasePrice: linked.coversBasePrice,
         coveredAccessIds: linked.coveredAccessIds,
         totalAmount:
-          (linked.coversBasePrice ? target.baseAmount : 0) +
-          sumAccessPrices(linked.coveredAccessIds, accessPriceMap),
+          sumMoney(linked.coversBasePrice ? target.baseAmount : 0, sumAccessPrices(linked.coveredAccessIds, accessPriceMap)),
       };
       const refusal = autoApprove ? await sponsorshipLinkRefusal(tx, coverage, target) : null;
       const sponsorship = await insertSponsorship(tx, {

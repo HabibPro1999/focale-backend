@@ -74,6 +74,7 @@ export const db = {
   findUserNamesByIds: vi.fn(),
   listRegistrationEmailLogRows: vi.fn(),
   getRegistrationFormSchemaForEvent: vi.fn(),
+  getFormForPriceQuote: vi.fn(),
   pgUniqueViolation: (err: unknown) => {
     const e = err as { code?: unknown; constraint?: unknown } | null;
     return e?.code === "23505"
@@ -271,6 +272,7 @@ export function makeRegRow(overrides: Record<string, unknown> = {}) {
     paymentStatus: "PENDING",
     paidAmount: 0,
     totalAmount: 100,
+    currency: "TND",
     sponsorshipAmount: 0,
     sponsorshipCode: null,
     paidAt: null,
@@ -333,6 +335,9 @@ export const internalRow = (overrides: Record<string, unknown> = {}) =>
     ...overrides,
   });
 export const PUBLIC_KEYS = [
+  "amountDue",
+  "catalogueBasePrice",
+  "money",
   "accessAmount",
   "accessSelections",
   "baseAmount",
@@ -365,7 +370,7 @@ export const PUBLIC_KEYS = [
   "submittedAt",
   "totalAmount",
   "updatedAt",
-];
+].sort();
 export const withoutSentinels = (value: unknown, allow: string[] = []) => {
   const json = JSON.stringify(value);
   for (const sentinel of SENTINELS.filter((x) => !allow.includes(x))) {
@@ -416,6 +421,7 @@ export function installServiceMocks(): {
   db.findClientModuleState.mockResolvedValue(activeClient());
   db.findRegistrationUsagesForRecalc.mockResolvedValue([]);
   db.getRegistrationFormSchemaForEvent.mockResolvedValue({ schema: ANSWER_SCHEMA });
+  db.getFormForPriceQuote.mockResolvedValue({ schema: ANSWER_SCHEMA });
 
   ft.fileTypeFromBuffer.mockResolvedValue({ mime: "application/pdf", ext: "pdf" });
   integ.compressFile.mockResolvedValue({

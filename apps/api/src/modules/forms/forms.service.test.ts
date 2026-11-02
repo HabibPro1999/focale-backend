@@ -695,3 +695,22 @@ describe("createSponsorForm", () => {
     );
   });
 });
+
+describe("duplicateForm", () => {
+  it("copies schema and success content into another event, preserving type and resetting version", async () => {
+    const source = mockForm({ schemaVersion: 8, successTitle: "Thanks" });
+    vi.mocked(findFormById).mockResolvedValue(source);
+    vi.mocked(eventExists).mockResolvedValue(true);
+    vi.mocked(insertForm).mockResolvedValue({ ok: true, form: mockForm({ id: "copy" }) });
+    await service.duplicateForm(source.id, { targetEventId: "target", name: "Copy" });
+    expect(insertForm).toHaveBeenCalledWith({ eventId: "target", type: source.type, name: "Copy",
+      schema: source.schema, schemaVersion: 1, active: source.active,
+      successTitle: "Thanks", successMessage: source.successMessage, successTranslations: source.successTranslations });
+  });
+  it("preserves the one-form-per-type constraint as a coded conflict", async () => {
+    vi.mocked(findFormById).mockResolvedValue(mockForm());
+    vi.mocked(eventExists).mockResolvedValue(true);
+    vi.mocked(insertForm).mockResolvedValue({ ok: false, reason: "conflict" });
+    await expect(service.duplicateForm(formId, { targetEventId: "target" })).rejects.toMatchObject({ statusCode: 409 });
+  });
+});

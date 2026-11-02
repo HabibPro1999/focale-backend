@@ -120,7 +120,7 @@ describe("linkSponsorshipUsageTxn", () => {
     expect(result).toBe(usage);
     expect(queries[0].sql).toMatch(/^insert into "sponsorship_usages"/);
     // base 200 + covered gala 80, capped by the sponsorship's 300
-    expect(queries[0].params).toEqual(expect.arrayContaining(["sp1", "reg1", 280, "PUBLIC"]));
+    expect(queries[0].params).toEqual(expect.arrayContaining(["sp1", "reg1", "280", "PUBLIC"]));
     expect(queries[1].sql).toMatch(/^update "sponsorships" set "status" = \$1/);
     expect(queries[1].sql).toContain(`"sponsorships"."status" <> $`);
   });

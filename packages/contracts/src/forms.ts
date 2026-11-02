@@ -393,3 +393,7 @@ export function mergeSponsorshipSettings(
 ): SponsorFormSchemaJson {
   return { ...schema, sponsorshipSettings: { ...schema.sponsorshipSettings, ...settings } };
 }
+
+/** Copy to an event with no form of this type; one form per event/type remains enforced. */
+export const DuplicateFormSchema = z.strictObject({ targetEventId: z.string().uuid(), name: z.string().min(1).max(200).optional() });
+export type DuplicateFormInput = z.infer<typeof DuplicateFormSchema>;

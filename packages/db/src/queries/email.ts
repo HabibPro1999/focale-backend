@@ -28,6 +28,7 @@ export {
   getEmailLogRealtimeTarget,
   insertEmailLogsSkippingConflicts,
   listEventEmailLogs,
+  getEventEmailLog,
   queuedEmailLogValues,
   readEmailLogStatus,
   updateEmailLogById,

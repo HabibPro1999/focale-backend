@@ -123,21 +123,23 @@ describe("certificate template reads", () => {
     }
 
     expect(queries.map((query) => query.sql.slice(select.length))).toEqual([
-      `${TEMPLATE_FROM}${ACCESS_JOIN} where "certificate_templates"."event_id" = $1` +
+      `${TEMPLATE_FROM}${ACCESS_JOIN} where ("certificate_templates"."event_id" = $1 and "certificate_templates"."deleted_at" is null)` +
         ` order by "certificate_templates"."created_at" desc`,
       `${TEMPLATE_FROM}${ACCESS_JOIN} where ("certificate_templates"."event_id" = $1` +
         ` and "certificate_templates"."active" = $2` +
+        ` and "certificate_templates"."deleted_at" is null` +
         ` and "certificate_templates"."template_url" <> $3` +
         ` and "certificate_templates"."template_width" > $4` +
         ` and "certificate_templates"."template_height" > $5)`,
       `${TEMPLATE_FROM}${ACCESS_JOIN} where ("certificate_templates"."id" in ($1, $2)` +
         ` and "certificate_templates"."active" = $3` +
         ` and "certificate_templates"."event_id" = $4` +
+        ` and "certificate_templates"."deleted_at" is null` +
         ` and "certificate_templates"."template_url" <> $5` +
         ` and "certificate_templates"."template_width" > $6` +
         ` and "certificate_templates"."template_height" > $7)`,
       `${TEMPLATE_FROM}${ACCESS_JOIN}` +
-        ` where "certificate_templates"."id" = $1 limit $2`,
+        ` where ("certificate_templates"."id" = $1 and "certificate_templates"."deleted_at" is null) limit $2`,
     ]);
     expect(queries.map((query) => query.params)).toEqual([
       ["event-1"],
@@ -153,7 +155,7 @@ describe("certificate template reads", () => {
         sql:
           `${select}, "events"."client_id", "events"."status"${TEMPLATE_FROM}` +
           ` inner join "events" on "events"."id" = "certificate_templates"."event_id"` +
-          `${ACCESS_JOIN} where "certificate_templates"."id" = $1 limit $2`,
+          `${ACCESS_JOIN} where ("certificate_templates"."id" = $1 and "certificate_templates"."deleted_at" is null) limit $2`,
         params: ["t1", 1],
       },
     ]);
@@ -231,7 +233,7 @@ describe("certificate template update", () => {
       sql:
         `update "certificate_templates"` +
         ` set "name" = $1, "access_id" = $2, "updated_at" = $3` +
-        ` where "certificate_templates"."id" = $4`,
+        ` where ("certificate_templates"."id" = $4 and "certificate_templates"."deleted_at" is null)`,
       params: ["New", null, expect.any(String), "t1"],
     });
   });

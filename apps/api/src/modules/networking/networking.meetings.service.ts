@@ -44,6 +44,8 @@ import {
 } from "./networking.policy";
 import { networkingInventoryResource } from "./networking.inventory-policy";
 type MeetingRow = NetworkingRow<"meetings">;
+/** Cancellation provenance is internal, including for organizer responses. */
+export function meetingResponse({ cancellationState: _state, ...row }: MeetingRow) { return row; }
 /** Re-plans after the meeting moved between the lock plan's read and the lock. */
 const ALLOCATION_PLAN_ATTEMPTS = 3;
 /** The slot a meeting would occupy from `start`, or none when `start` is not a valid instant. */
@@ -178,7 +180,7 @@ export class NetworkingMeetingsService {
       return profile ? networkingPublicProfile(profile) : null;
     };
     return rows.map((row) => ({
-      ...row,
+      ...meetingResponse(row),
       requester: view(row.requesterId),
       recipient: view(row.recipientId),
       table: row.tableId ? tables.get(row.tableId) ?? null : null,
@@ -198,7 +200,7 @@ export class NetworkingMeetingsService {
     ]);
     const byId = new Map(profiles.map((profile) => [profile.id, profile]));
     return rows.map((row) => ({
-      ...row,
+      ...meetingResponse(row),
       requester: byId.get(row.requesterId) ?? null,
       recipient: byId.get(row.recipientId) ?? null,
       table: row.tableId ? tables.get(row.tableId) ?? null : null,
@@ -227,7 +229,7 @@ export class NetworkingMeetingsService {
     return rows.map(row => {
       const table = row.tableId ? tables.get(row.tableId) ?? null : null;
       return {
-        ...row,
+        ...meetingResponse(row),
         requester: profiles.get(row.requesterId) ?? null,
         recipient: profiles.get(row.recipientId) ?? null,
         table: table ? { ...table, space: table.spaceId ? spaces.get(table.spaceId) ?? null : null } : null,

@@ -104,6 +104,21 @@ export class NetworkingAdminController {
   ) {
     return this.service.profiles(eventId, query);
   }
+  @Get("profiles/:id")
+  @EventScoped({ module: "networking" })
+  @ResponseContract(responses.NetworkingAdminProfileResponseSchema)
+  profile(@Param() params: dto.NetworkingAdminRecordParamDto) { return this.service.getProfile(params.eventId, params.id); }
+
+  @Get("meetings/:id")
+  @EventScoped({ module: "networking" })
+  @ResponseContract(responses.NetworkingAdminMeetingResponseSchema)
+  meeting(@Param() params: dto.NetworkingAdminRecordParamDto) { return this.service.getMeeting(params.eventId, params.id); }
+
+  @Get("reports/:id")
+  @EventScoped({ module: "networking" })
+  @ResponseContract(responses.NetworkingAdminReportResponseSchema)
+  report(@Param() params: dto.NetworkingAdminRecordParamDto) { return this.service.getReport(params.eventId, params.id); }
+
   @ResponseContract(responses.NetworkingAdminUpdateProfileResponseSchema)
   @EventScoped({ module: "networking", write: true })
   @Patch("profiles/:id") async updateProfile(
@@ -113,6 +128,14 @@ export class NetworkingAdminController {
     @Body() body: dto.NetworkingAdminProfileDto,
   ) {
     return this.service.updateProfile(eventId, id, body, user.id);
+  }
+  @Post("profiles/:id/access/restore")
+  @HttpCode(200)
+  @EventScoped({ module: "networking", write: true })
+  @ResponseContract(responses.NetworkingAdminRestoreAccessResponseSchema)
+  restoreAccess(@CurrentUser() user: AuthUser, @Param("eventId") eventId: string, @Param("id") id: string,
+    @Body() body: dto.NetworkingRestoreAccessDto) {
+    return this.service.restoreAccess(eventId, id, body, user.id);
   }
   @ResponseContract(responses.NetworkingAdminSpacesResponseSchema)
   @EventScoped({ module: "networking" })

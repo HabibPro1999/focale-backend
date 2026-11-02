@@ -47,6 +47,6 @@ export class PricingPublicController {
 
     // Same input as create/edit, so the quote equals the charge.
     const formData = prepareFormDataForPricing(form.schema, input.formData);
-    return this.pricing.calculatePrice(form.eventId, { ...input, formData });
+    return this.pricing.calculatePrice(form.eventId, { ...input, formData }, undefined, { formSchema: form.schema });
   }
 }

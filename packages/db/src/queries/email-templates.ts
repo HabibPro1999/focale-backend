@@ -4,6 +4,7 @@ import {
   desc,
   eq,
   ilike,
+  inArray,
   isNull,
   ne,
   or,
@@ -14,6 +15,7 @@ import {
 import type { OffsetPagination } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
 import { pgUniqueViolation } from "../txn";
+import { events } from "../schema/events-access";
 import { emailTemplates } from "../schema/email";
 
 export type EmailTemplateRow = InferSelectModel<typeof emailTemplates>;
@@ -142,6 +144,7 @@ export async function getTemplateByTrigger(
 }
 
 export interface ListEmailTemplatesArgs extends OffsetPagination {
+  scope?: "event" | "client" | "all";
   category?: EmailTemplateRow["category"];
   trigger?: AutomaticTrigger;
   abstractTrigger?: AbstractTrigger;
@@ -153,7 +156,11 @@ export async function listEmailTemplates(
   args: ListEmailTemplatesArgs,
   exec: DbExecutor = getDb(),
 ): Promise<{ data: EmailTemplateRow[]; total: number }> {
-  const filters: SQL[] = [eq(emailTemplates.eventId, eventId)];
+  const scope = args.scope ?? "event";
+  const owningClient = exec.select({ clientId: events.clientId }).from(events).where(eq(events.id, eventId));
+  const clientScope = and(isNull(emailTemplates.eventId), inArray(emailTemplates.clientId, owningClient))!;
+  const filters: SQL[] = [scope === "client" ? clientScope : scope === "all"
+    ? or(eq(emailTemplates.eventId, eventId), clientScope)! : eq(emailTemplates.eventId, eventId)];
   if (args.category) filters.push(eq(emailTemplates.category, args.category));
   if (args.trigger) filters.push(eq(emailTemplates.trigger, args.trigger));
   if (args.abstractTrigger)

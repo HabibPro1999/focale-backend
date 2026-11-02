@@ -29,6 +29,8 @@ export type AbstractSlugParam = {
   slug: string;
 };
 
+export type AbstractStatusCounts = { [K in "SUBMITTED" | "UNDER_REVIEW" | "REVIEW_COMPLETE" | "ACCEPTED" | "REJECTED" | "PENDING"]: number };
+
 export type AbstractSubmittedResponse = {
   id: string;
   token: string;
@@ -115,6 +117,13 @@ export type AdditionalFields = {
   force?: boolean;
 };
 
+export type AdminAbstractListMeta = {
+  total: number;
+  limit: number;
+  offset: number;
+  countsByStatus: AbstractStatusCounts;
+};
+
 export type AdminCreateRegistration = {
   email: string;
   firstName: string;
@@ -142,7 +151,7 @@ export type AdminEditRegistration = {
   role?: RegistrationRole;
   accessSelections?: AccessSelection[];
   paymentStatus?: PaymentStatus;
-  paidAmount?: number;
+  paidAmount?: MoneyAmount;
   paymentMethod?: PaymentMethod | null;
   paymentReference?: string | null;
   paymentProofUrl?: string | null;
@@ -182,6 +191,9 @@ export type AdminRegistrationListResponse = {
 };
 
 export type AdminRegistrationResponse = {
+  amountDue: number;
+  catalogueBasePrice: number | null;
+  money: MoneySnapshot;
   id: string;
   formId: string;
   eventId: string;
@@ -249,6 +261,7 @@ export type AnalyticsAccessItem = {
   name: string;
   type: string;
   registeredCount: number;
+  paidCount: number;
   maxCapacity: number | null;
   fillPercentage: number | null;
 };
@@ -317,6 +330,11 @@ export type BeneficiaryTemplate = {
   [key: string]: unknown;
 };
 
+export type BulkSendCountResponse = {
+  recipientCount: number;
+  skipped: number;
+};
+
 export type BulkSendEmail = {
   /** @default "registrants" */
   audience?: "registrants" | "sponsors" | "abstracts";
@@ -359,6 +377,15 @@ export type CertificateIdParam = {
 
 export type CertificateRegistrationRole = "PARTICIPANT" | "SPEAKER" | "MODERATOR" | "ORGANIZER" | "INVITED";
 
+export type CertificateSendPreview = {
+  recipientCount: number;
+  certificateCount: number;
+  alreadySent: number;
+  ineligibleCount: number;
+  total: number;
+  breakdown: Record<string, number>;
+};
+
 export type CertificateTemplateScope = "REGISTRATION" | "ABSTRACT" | "BOTH";
 
 export type CertificateZone = {
@@ -390,8 +417,37 @@ export type CheckInRegistrationsQuery = {
   accessId?: string;
 };
 
+export type CheckInStatsResponse = {
+  total: number;
+  checkedIn: number;
+  byAccess: Array<{
+    accessId: string;
+    name: string;
+    type: string;
+    total: number;
+    checkedIn: number;
+  }>;
+};
+
 export type ClientIdParam = {
   id: string;
+};
+
+export type ClientListRowResponse = {
+  id: string;
+  name: string;
+  logo: string | null;
+  primaryColor: string | null;
+  email: string | null;
+  phone: string | null;
+  active: boolean;
+  enabledModules: string[] | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
+  userCount: number;
+  eventCount: number;
 };
 
 export type CommitteeAbstractsQuery = {
@@ -494,7 +550,7 @@ export type CreateEmbeddedRule = {
   conditions: Condition[];
   /** @default "AND" */
   conditionLogic?: "AND" | "OR";
-  price: number;
+  price: MoneyAmount;
   /** @default true */
   active?: boolean;
 };
@@ -510,8 +566,8 @@ export type CreateEventAccessBody = {
   /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
   endsAt?: string | null;
   /** @default 0 */
-  price?: number;
-  /** @default "TND" */
+  price?: MoneyAmount;
+  /** Defaults to the event pricing currency when omitted. */
   currency?: string;
   maxCapacity?: number | null;
   /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
@@ -533,7 +589,7 @@ export type CreateEventAccessBody = {
   /** @default false */
   includedInBase?: boolean;
   /** @default 0 */
-  companionPrice?: number;
+  companionPrice?: MoneyAmount;
 };
 
 export type CreateEventAccess = {
@@ -548,8 +604,8 @@ export type CreateEventAccess = {
   /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
   endsAt?: string | null;
   /** @default 0 */
-  price?: number;
-  /** @default "TND" */
+  price?: MoneyAmount;
+  /** Defaults to the event pricing currency when omitted. */
   currency?: string;
   maxCapacity?: number | null;
   /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
@@ -571,7 +627,7 @@ export type CreateEventAccess = {
   /** @default false */
   includedInBase?: boolean;
   /** @default 0 */
-  companionPrice?: number;
+  companionPrice?: MoneyAmount;
 };
 
 export type CreateEvent = {
@@ -588,7 +644,7 @@ export type CreateEvent = {
   /** @default "CLOSED" */
   status?: "CLOSED";
   /** @default 0 */
-  basePrice?: number | null;
+  basePrice?: MoneyAmount | null;
   currency?: string;
 };
 
@@ -695,6 +751,31 @@ export type DeleteRegistrationQuery = {
   force?: "true" | "false";
 };
 
+export type DeleteUnusedThemeParam = {
+  eventId: string;
+  themeId: string;
+};
+
+export type DraftEmailPreviewResponse = {
+  subject: string;
+  html: string;
+  plain: string;
+};
+
+export type DraftEmailPreview = {
+  subject: string;
+  content: TiptapDocument;
+  language?: LanguageCode;
+};
+
+export type DraftEmailTestSend = {
+  subject: string;
+  content: TiptapDocument;
+  language?: LanguageCode;
+  recipientEmail: string;
+  recipientName?: string;
+};
+
 export type DroppedAccessItem = {
   accessId: string;
   name: string;
@@ -706,6 +787,11 @@ export type DroppedAccessItem = {
 };
 
 export type DuplicateEmailTemplate = {
+  name?: string;
+};
+
+export type DuplicateForm = {
+  targetEventId: string;
   name?: string;
 };
 
@@ -764,6 +850,10 @@ export type EmailTemplateIdParam = {
 
 export type EmailTextAlign = "left" | "center" | "right" | "justify";
 
+export type EmailVariablesQuery = {
+  language?: LanguageCode;
+};
+
 export type EmbeddedPricingRule = {
   id: string;
   name: string;
@@ -773,10 +863,12 @@ export type EmbeddedPricingRule = {
   conditions: Condition[];
   /** @default "AND" */
   conditionLogic?: "AND" | "OR";
-  price: number;
+  price: MoneyAmount;
   /** @default true */
   active?: boolean;
 };
+
+export type ErrorCode = "NETWORKING_MFA_REQUIRED" | "NETWORKING_AUTH_UNAVAILABLE" | "NETWORKING_BADGE_INVALID" | "NETWORKING_BADGE_WRONG_PARTICIPANT" | "NETWORKING_MEETING_CHECKIN_UNCONFIRMED" | "NETWORKING_MEETING_CHECKIN_UNAVAILABLE" | "NETWORKING_NOT_ELIGIBLE" | "NETWORKING_CLOSED" | "NETWORKING_FEATURE_DISABLED" | "NETWORKING_CONNECTION_REQUIRED" | "NETWORKING_SLOT_INVALID" | "NETWORKING_SLOT_CONFLICT" | "NETWORKING_MEETING_LOCKED" | "NETWORKING_MEETING_CHECKED_IN" | "NETWORKING_RATE_LIMITED" | "NETWORKING_CONFIG_STALE" | "NETWORKING_VALIDATION" | "NETWORKING_SESSION_EXPIRED" | "NETWORKING_NOT_FOUND" | "NETWORKING_ACTION_NOT_ALLOWED" | "NETWORKING_MFA_ENFORCED" | "NETWORKING_CONSENT_REQUIRED" | "NETWORKING_BUSY" | "NETWORKING_RETENTION_ENDED" | "NETWORKING_PROFILE_WITHDRAWN" | "AUTH_1001" | "AUTH_1002" | "AUTH_1004" | "AUTH_1005" | "AUTH_1006" | "VAL_2001" | "RES_3001" | "RES_3002" | "RES_3003" | "RATE_4001" | "SRV_5001" | "SRV_5002" | "SRV_5003" | "PRC_6001" | "PRC_6002" | "PRC_6003" | "PRC_6004" | "PRC_6005" | "PRC_6006" | "PRC_6007" | "PRC_6008" | "ACC_7001" | "ACC_7002" | "ACC_7004" | "ACC_7005" | "ACC_7006" | "ACC_7007" | "ACC_7008" | "ACC_7009" | "ACC_7010" | "ACC_7011" | "ACC_7012" | "EVT_8000" | "EVT_8001" | "EVT_8002" | "EVT_8003" | "REG_8001" | "REG_8002" | "REG_8003" | "REG_8004" | "REG_8005" | "REG_8006" | "REG_8007" | "REG_8008" | "REG_8009" | "REG_8010" | "REG_8011" | "REG_8012" | "REG_8013" | "REG_8014" | "REG_8015" | "FRM_9001" | "FRM_9002" | "FRM_9003" | "FRM_9004" | "FRM_9005" | "FRM_9006" | "FIL_10001" | "FIL_10002" | "RPT_11001" | "RPT_11002" | "RPT_11003" | "EXPORT_BUSY" | "STT_12001" | "STT_12002" | "DEP_13001" | "SPO_14001" | "SPO_14002" | "SPO_14003" | "SPO_14004" | "SPO_14005" | "EML_15001" | "EML_15002" | "CON_16001" | "CHK_17001" | "CHK_17003" | "CHK_17004" | "CHK_17005" | "CHK_17006" | "ABS_18001" | "ABS_18002" | "ABS_18003" | "ABS_18004" | "ABS_18005" | "ABS_18006" | "ABS_18007" | "ABS_18008" | "ABS_18009" | "ABS_18010" | "ABS_18011" | "INV_19001" | "INV_19002" | "INV_19003" | "CLT_20001" | "CLT_20002";
 
 export type EventAccessIdParam = {
   id: string;
@@ -883,8 +975,67 @@ export type EventAnalyticsResponse = {
   };
 };
 
+export type EventEmailLogResponse = {
+  abstractTrigger: string | null;
+  origin: "automatic" | "networking" | "manual";
+  id: string;
+  subject: string;
+  status: string;
+  trigger: string | null;
+  templateName: string | null;
+  recipientEmail: string;
+  recipientName: string | null;
+  errorMessage: string | null;
+  queuedAt: string;
+  sentAt: string | null;
+  deliveredAt: string | null;
+  openedAt: string | null;
+  clickedAt: string | null;
+  bouncedAt: string | null;
+  failedAt: string | null;
+};
+
 export type EventIdParam = {
   id: string;
+};
+
+export type EventListPaginationMeta = {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+  hasNext: boolean;
+  hasPrev: boolean;
+};
+
+export type EventListResponse = {
+  data: EventListRowResponse[];
+  meta: EventListPaginationMeta;
+};
+
+export type EventListRowResponse = {
+  id: string;
+  clientId: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  maxCapacity: number | null;
+  registeredCount: number;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  startDate: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  endDate: string;
+  location: string | null;
+  status: "OPEN" | "CLOSED" | "ARCHIVED";
+  bannerUrl: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
+  client: {
+    id: string;
+    name: string;
+  };
 };
 
 export type EventPricingRowResponse = {
@@ -934,6 +1085,7 @@ export type ExportQuery = {
 export type ExportRegistrationsBody = {
   /** @default {} */
   filters?: {
+    role?: RegistrationRole;
     search?: string;
     paymentStatus?: "PENDING" | "VERIFYING" | "PARTIAL" | "PAID" | "SPONSORED" | "WAIVED" | "REFUNDED";
     paymentMethod?: "BANK_TRANSFER" | "ONLINE" | "CASH" | "LAB_SPONSORSHIP";
@@ -967,6 +1119,7 @@ export type ExportRegistrationsBody = {
 };
 
 export type ExportRegistrationsQuery = {
+  role?: RegistrationRole;
   startDate?: string;
   endDate?: string;
   /** @default "csv" */
@@ -1151,6 +1304,11 @@ export type FormStep = {
   };
 };
 
+export type GetEmailLogParam = {
+  eventId: string;
+  emailLogId: string;
+};
+
 export type GetGroupedAccessBody = {
   /** @default {} */
   formData?: Record<string, unknown>;
@@ -1271,6 +1429,7 @@ export type ListClientsQuery = {
 };
 
 export type ListEmailTemplatesQuery = {
+  scope?: "event" | "client" | "all";
   /** @default 1 */
   page?: number;
   /** @default 20 */
@@ -1331,6 +1490,8 @@ export type ListRegistrationEmailLogsQuery = {
 };
 
 export type ListRegistrationsQuery = {
+  sort?: "name" | "amount" | "date";
+  sortOrder?: "asc" | "desc";
   /** @default 1 */
   page?: number;
   /** @default 20 */
@@ -1369,6 +1530,14 @@ export type MarkAbstractPresented = {
   presented: boolean;
 };
 
+export type MoneyAmount = number;
+
+export type MoneySnapshot = {
+  currency: string;
+  scale: number;
+  amountsMinor: Record<string, number>;
+};
+
 export type NetworkingAdminAnalyticsResponse = {
   emailSent?: number;
   emailDelivered?: number;
@@ -1399,6 +1568,7 @@ export type NetworkingAdminAnalyticsResponse = {
   cancelledMeetings: number;
   noShowMeetings: number;
   pendingMeetings: number;
+  awaitingAllocationCount: number;
   tableOccupancyRate: number;
   tableUsage: Array<{
     tableId: string;
@@ -1428,6 +1598,7 @@ export type NetworkingAdminAnalyticsResponse = {
     averageDelayMinutes: number;
   };
   reports: number;
+  openReports: number;
   hourlyActivity?: Array<{
     hour: string;
     activity: number;
@@ -1460,6 +1631,7 @@ export type NetworkingAdminAuditResponse = {
     id: string;
     eventId: string;
     actorId: string;
+    actorName: string | null;
     action: string;
     targetId: string | null;
     data: Record<string, unknown>;
@@ -1499,8 +1671,8 @@ export type NetworkingAdminCalendarResponse = {
     requesterCheckedInAt: string | null;
     /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
     recipientCheckedInAt: string | null;
-    requester: NetworkingAdminUpdateProfileResponse | null;
-    recipient: NetworkingAdminUpdateProfileResponse | null;
+    requester: NetworkingPublicMeResponse | null;
+    recipient: NetworkingPublicMeResponse | null;
     table: {
       id: string;
       name: string;
@@ -1602,13 +1774,62 @@ export type NetworkingAdminCreateSpaceResponse = {
   capacity: number;
 };
 
+export type NetworkingAdminMeetingResponse = {
+  message: string;
+  id: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
+  status: "PENDING" | "COMPLETED" | "PENDING_ALLOCATION" | "CONFIRMED" | "DECLINED" | "CANCELLED" | "EXPIRED" | "NO_SHOW";
+  tableId: string | null;
+  eventId: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  expiresAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  startsAt: string;
+  requesterId: string;
+  recipientId: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  endsAt: string;
+  cancellationNote: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  proposedStartsAt: string | null;
+  proposalBy: string | null;
+  revision: number;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  requesterCheckedInAt: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  recipientCheckedInAt: string | null;
+  requester: NetworkingPublicMeResponse | null;
+  recipient: NetworkingPublicMeResponse | null;
+  table: {
+    id: string;
+    name: string;
+    active: boolean;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    createdAt: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    updatedAt: string;
+    location: string;
+    eventId: string;
+    kind: "TABLE" | "STAND";
+    capacity: number;
+    spaceId: string | null;
+    ownerProfileId: string | null;
+    space: NetworkingAdminCreateSpaceResponse | null;
+  } | null;
+};
+
 export type NetworkingAdminMeetingUpdate = {
-  action: "ASSIGN" | "CANCEL" | "COMPLETED" | "NO_SHOW";
+  action: "ASSIGN" | "CANCEL" | "COMPLETED" | "NO_SHOW" | "RESTORE";
+  notify?: boolean;
+  expectedRevision?: number;
   tableId?: string;
 };
 
 export type NetworkingAdminMeetingsResponse = {
-  items: NetworkingAdminUpdateMeetingResponse[];
+  items: NetworkingAdminMeetingResponse[];
   total: number;
 };
 
@@ -1628,6 +1849,7 @@ export type NetworkingAdminModerateResponse = {
   resolvedBy: string | null;
   /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
   resolvedAt: string | null;
+  accessUndoId?: string;
 };
 
 export type NetworkingAdminPostEventReportResponse = {
@@ -1635,6 +1857,50 @@ export type NetworkingAdminPostEventReportResponse = {
   url?: string;
   generatedAt?: string;
   summary?: Record<string, number>;
+};
+
+export type NetworkingAdminProfileResponse = {
+  meetingsEnabled: boolean;
+  company: string;
+  jobTitle: string;
+  sector: string;
+  bio: string;
+  city: string;
+  country: string;
+  website: string | null;
+  photoUrl: string | null;
+  interests: string[];
+  offers: string;
+  seeks: string;
+  consent: boolean;
+  id: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
+  eventId: string;
+  firstName: string;
+  lastName: string;
+  visible: boolean;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  lastActiveAt: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  erasedAt: string | null;
+  featured: boolean;
+  standTableId: string | null;
+  email: string;
+  status: "PENDING" | "ACTIVE" | "SUSPENDED" | "EXCLUDED";
+  registrationId: string;
+  emailPreference: "IMMEDIATE" | "DAILY" | "OFF";
+  language: "fr" | "en" | "ar";
+  availabilitySet: boolean;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  consentAt: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  withdrawnAt: string | null;
+  overrides: Record<string, unknown>;
+  matchCount: number;
+  meetingCount: number;
 };
 
 export type NetworkingAdminProfileUpdate = {
@@ -1654,56 +1920,21 @@ export type NetworkingAdminProfileUpdate = {
   emailPreference?: "IMMEDIATE" | "DAILY" | "OFF";
   language?: LanguageCode;
   consent?: boolean;
+  /** Access revocation and status notifications run only when the status changes. */
   status?: "PENDING" | "ACTIVE" | "SUSPENDED" | "EXCLUDED";
   featured?: boolean;
+  notify?: boolean;
   standTableId?: string | null;
 };
 
 export type NetworkingAdminProfilesResponse = {
-  items: Array<{
-    meetingsEnabled: boolean;
-    company: string;
-    jobTitle: string;
-    sector: string;
-    bio: string;
-    city: string;
-    country: string;
-    website: string | null;
-    photoUrl: string | null;
-    interests: string[];
-    offers: string;
-    seeks: string;
-    consent: boolean;
-    id: string;
-    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
-    createdAt: string;
-    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
-    updatedAt: string;
-    eventId: string;
-    firstName: string;
-    lastName: string;
-    visible: boolean;
-    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
-    lastActiveAt: string | null;
-    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
-    erasedAt: string | null;
-    featured: boolean;
-    standTableId: string | null;
-    email: string;
-    status: "PENDING" | "ACTIVE" | "SUSPENDED" | "EXCLUDED";
-    registrationId: string;
-    emailPreference: "IMMEDIATE" | "DAILY" | "OFF";
-    language: "fr" | "en" | "ar";
-    availabilitySet: boolean;
-    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
-    consentAt: string | null;
-    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
-    withdrawnAt: string | null;
-    overrides: Record<string, unknown>;
-    matchCount: number;
-    meetingCount: number;
-  }>;
+  items: NetworkingAdminProfileResponse[];
   total: number;
+};
+
+export type NetworkingAdminRecordParam = {
+  eventId: string;
+  id: string;
 };
 
 export type NetworkingAdminRegeneratePostEventReportResponse = {
@@ -1719,28 +1950,37 @@ export type NetworkingAdminRemoveSpaceResponse = {
 
 export type NetworkingAdminRemoveTableResponse = NetworkingAdminRemoveSpaceResponse;
 
+export type NetworkingAdminReportResponse = {
+  id: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
+  status: "OPEN" | "RESOLVED" | "DISMISSED";
+  eventId: string;
+  note: string | null;
+  profileId: string;
+  reporterId: string;
+  messageId: string | null;
+  reason: string;
+  resolvedBy: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  resolvedAt: string | null;
+  reporter: NetworkingPublicMeResponse | null;
+  profile: NetworkingPublicMeResponse | null;
+  message: NetworkingPublicMessageResponse | null;
+  resolvedByName: string | null;
+};
+
 export type NetworkingAdminReportsResponse = {
-  items: Array<{
-    id: string;
-    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
-    createdAt: string;
-    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
-    updatedAt: string;
-    status: "OPEN" | "RESOLVED" | "DISMISSED";
-    eventId: string;
-    note: string | null;
-    profileId: string;
-    reporterId: string;
-    messageId: string | null;
-    reason: string;
-    resolvedBy: string | null;
-    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
-    resolvedAt: string | null;
-    reporter: NetworkingAdminUpdateProfileResponse | null;
-    profile: NetworkingAdminUpdateProfileResponse | null;
-    message: NetworkingPublicMessageResponse | null;
-  }>;
+  items: NetworkingAdminReportResponse[];
   total: number;
+};
+
+export type NetworkingAdminRestoreAccessResponse = {
+  profile: NetworkingPublicMeResponse;
+  restoredMeetings: string[];
+  alreadyRestored: boolean;
 };
 
 export type NetworkingAdminSpacesResponse = {
@@ -1825,52 +2065,7 @@ export type NetworkingAdminTablesResponse = {
 
 export type NetworkingAdminUpdateConfigResponse = NetworkingAdminConfigResponse;
 
-export type NetworkingAdminUpdateMeetingResponse = {
-  message: string;
-  id: string;
-  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
-  createdAt: string;
-  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
-  updatedAt: string;
-  status: "PENDING" | "COMPLETED" | "PENDING_ALLOCATION" | "CONFIRMED" | "DECLINED" | "CANCELLED" | "EXPIRED" | "NO_SHOW";
-  tableId: string | null;
-  eventId: string;
-  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
-  expiresAt: string;
-  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
-  startsAt: string;
-  requesterId: string;
-  recipientId: string;
-  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
-  endsAt: string;
-  cancellationNote: string;
-  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
-  proposedStartsAt: string | null;
-  proposalBy: string | null;
-  revision: number;
-  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
-  requesterCheckedInAt: string | null;
-  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
-  recipientCheckedInAt: string | null;
-  requester: NetworkingAdminUpdateProfileResponse | null;
-  recipient: NetworkingAdminUpdateProfileResponse | null;
-  table: {
-    id: string;
-    name: string;
-    active: boolean;
-    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
-    createdAt: string;
-    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
-    updatedAt: string;
-    location: string;
-    eventId: string;
-    kind: "TABLE" | "STAND";
-    capacity: number;
-    spaceId: string | null;
-    ownerProfileId: string | null;
-    space: NetworkingAdminCreateSpaceResponse | null;
-  } | null;
-};
+export type NetworkingAdminUpdateMeetingResponse = NetworkingAdminMeetingResponse;
 
 export type NetworkingAdminUpdateProfileResponse = {
   meetingsEnabled: boolean;
@@ -1912,6 +2107,7 @@ export type NetworkingAdminUpdateProfileResponse = {
   /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
   withdrawnAt: string | null;
   overrides: Record<string, unknown>;
+  accessUndoId?: string;
 };
 
 export type NetworkingAdminUpdateSpaceResponse = NetworkingAdminCreateSpaceResponse;
@@ -2364,7 +2560,47 @@ export type NetworkingPublicLogoutResponse = {
   loggedOut: boolean;
 };
 
-export type NetworkingPublicMeResponse = NetworkingAdminUpdateProfileResponse;
+export type NetworkingPublicMeResponse = {
+  meetingsEnabled: boolean;
+  company: string;
+  jobTitle: string;
+  sector: string;
+  bio: string;
+  city: string;
+  country: string;
+  website: string | null;
+  photoUrl: string | null;
+  interests: string[];
+  offers: string;
+  seeks: string;
+  consent: boolean;
+  id: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
+  eventId: string;
+  firstName: string;
+  lastName: string;
+  visible: boolean;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  lastActiveAt: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  erasedAt: string | null;
+  featured: boolean;
+  standTableId: string | null;
+  email: string;
+  status: "PENDING" | "ACTIVE" | "SUSPENDED" | "EXCLUDED";
+  registrationId: string;
+  emailPreference: "IMMEDIATE" | "DAILY" | "OFF";
+  language: "fr" | "en" | "ar";
+  availabilitySet: boolean;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  consentAt: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  withdrawnAt: string | null;
+  overrides: Record<string, unknown>;
+};
 
 export type NetworkingPublicMeetingResponse = NetworkingPublicCheckinResponse;
 
@@ -2494,7 +2730,23 @@ export type NetworkingPublicRegistrationResponse = {
   networkingUrl?: string;
 };
 
-export type NetworkingPublicReportResponse = NetworkingAdminModerateResponse;
+export type NetworkingPublicReportResponse = {
+  id: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
+  status: "OPEN" | "RESOLVED" | "DISMISSED";
+  eventId: string;
+  note: string | null;
+  profileId: string;
+  reporterId: string;
+  messageId: string | null;
+  reason: string;
+  resolvedBy: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  resolvedAt: string | null;
+};
 
 export type NetworkingPublicRepresentativesResponse = {
   items: NetworkingPublicProfileResponse[];
@@ -2543,18 +2795,18 @@ export type NetworkingPublicUpdateAvailabilityResponse = {
   slots: string[];
 };
 
-export type NetworkingPublicUpdateMeResponse = NetworkingAdminUpdateProfileResponse;
+export type NetworkingPublicUpdateMeResponse = NetworkingPublicMeResponse;
 
 export type NetworkingPublicUploadPhotoResponse = {
   url: string;
-  resource: NetworkingAdminUpdateProfileResponse;
+  resource: NetworkingPublicMeResponse;
 };
 
 export type NetworkingPublicVerifyCodeResponse = {
   token: string;
   /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
   expiresAt: string;
-  profile: NetworkingAdminUpdateProfileResponse;
+  profile: NetworkingPublicMeResponse;
   requiresSecondFactor: boolean;
   mfaEnrollmentRequired: boolean;
 };
@@ -2625,7 +2877,8 @@ export type NetworkingRecommendationRecommendationsResponse = {
 };
 
 export type NetworkingReportAction = {
-  action: "DISMISS" | "RESOLVE" | "WARN" | "SUSPEND" | "EXCLUDE";
+  action: "DISMISS" | "RESOLVE" | "WARN" | "SUSPEND" | "EXCLUDE" | "REOPEN";
+  notify?: boolean;
   note?: string;
 };
 
@@ -2633,6 +2886,11 @@ export type NetworkingReport = {
   profileId: string;
   messageId?: string;
   reason: string;
+};
+
+export type NetworkingRestoreAccess = {
+  undoId: string;
+  notify?: boolean;
 };
 
 export type NetworkingSpace = {
@@ -2665,6 +2923,13 @@ export type NetworkingTable = {
 
 /** unrepresentable: opaque. The schema accepts any JSON and validates it in server code (z.unknown().transform); see the contract module. */
 export type NetworkingTableUpdate = unknown;
+
+export type OptionModifierLine = {
+  fieldId: string;
+  optionId: string;
+  label: string;
+  amount: number;
+};
 
 export type OptionTranslationEntry = {
   label?: string;
@@ -2730,6 +2995,41 @@ export type PaymentStatusBreakdownItem = {
 
 export type PaymentStatus = "PENDING" | "VERIFYING" | "PARTIAL" | "PAID" | "SPONSORED" | "WAIVED" | "REFUNDED";
 
+export type PlatformRegistrationAggregateResponse = {
+  total: number;
+  byPaymentStatus: Array<{
+    paymentStatus: PaymentStatus;
+    count: number;
+  }>;
+};
+
+export type PlatformRegistrationsQuery = {
+  sort?: "name" | "amount" | "date";
+  sortOrder?: "asc" | "desc";
+  /** @default 1 */
+  page?: number;
+  /** @default 20 */
+  limit?: number;
+  paymentStatus?: PaymentStatus;
+  paymentMethod?: PaymentMethod;
+  role?: RegistrationRole;
+  search?: string;
+  eventId?: string;
+  clientId?: string;
+};
+
+export type PlatformRegistrationsResponse = {
+  data: AdminRegistrationResponse[];
+  meta: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+  };
+};
+
 export type PriceBreakdown = {
   basePrice: number;
   appliedRules: AppliedRule[];
@@ -2742,6 +3042,9 @@ export type PriceBreakdown = {
   total: number;
   currency: string;
   droppedAccessItems?: DroppedAccessItem[];
+  optionModifiers?: OptionModifierLine[];
+  optionModifiersTotal?: number;
+  money?: MoneySnapshot;
 };
 
 export type PricingEventIdParam = {
@@ -2961,6 +3264,9 @@ export type PublicRegistrationForEditResponse = {
 };
 
 export type PublicRegistrationResponse = {
+  amountDue: number;
+  catalogueBasePrice: number | null;
+  money: MoneySnapshot;
   id: string;
   formId: string;
   eventId: string;
@@ -3070,6 +3376,12 @@ export type RegistrationAccessSelectionResponse = {
     /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
     endsAt: string | null;
   };
+};
+
+export type RegistrationAmountsResponse = {
+  amountDue: number;
+  catalogueBasePrice: number | null;
+  money: MoneySnapshot;
 };
 
 export type RegistrationAuditLogListResponse = {
@@ -3214,15 +3526,20 @@ export type RegistrationTableColumnsResponse = {
   }>;
 };
 
+export type ReorderAbstractThemes = {
+  themeIds: string[];
+};
+
 export type ReportQuery = {
   startDate?: string;
   endDate?: string;
 };
 
-export type ResendEmailLogParam = {
-  eventId: string;
-  emailLogId: string;
-};
+export type ResendEmailLogParam = GetEmailLogParam;
+
+export type RestoreCertificateBody = Record<string, never>;
+
+export type RestoreSponsorshipBody = Record<string, never>;
 
 export type ReviewAbstract = {
   score: number;
@@ -3490,7 +3807,47 @@ export type StoredEmailContextSnapshot = {
 
 export type StoredFormSchemaJson = FormSchemaJson | SponsorFormSchemaJson;
 
+export type StoredNetworkingAccessUndo = {
+  before: {
+    status: "PENDING" | "ACTIVE" | "SUSPENDED" | "EXCLUDED";
+    consent: boolean;
+    visible: boolean;
+    meetingsEnabled: boolean;
+    consentOverride?: boolean;
+  };
+  after: {
+    status: "PENDING" | "ACTIVE" | "SUSPENDED" | "EXCLUDED";
+    consent: boolean;
+    visible: boolean;
+    meetingsEnabled: boolean;
+    consentOverride?: boolean;
+  };
+  afterUpdatedAt: string;
+  meetings: Array<{
+    id: string;
+    revision: number;
+  }>;
+};
+
+export type StoredNetworkingMeetingCancellation = {
+  status: "PENDING" | "PENDING_ALLOCATION" | "CONFIRMED";
+  proposedStartsAt: string | null;
+  proposalBy: string | null;
+};
+
 export type StoredPricingRules = EmbeddedPricingRule[];
+
+export type StoredSponsorshipCancellationUndo = {
+  version: 1;
+  coverageFingerprint: string;
+  links: Array<{
+    registrationId: string;
+    afterFingerprint: string;
+    clearedPaymentMethod: string | null;
+    clearedSponsorshipCode: string | null;
+    amountApplied: number;
+  }>;
+};
 
 export type StreamQuery = {
   eventId?: string;
@@ -3563,15 +3920,19 @@ export type TableColumn = {
 
 export type TableColumnType = "text" | "email" | "phone" | "number" | "date" | "datetime" | "dropdown" | "radio" | "checkbox" | "currency" | "status" | "payment" | "file" | "textarea";
 
+export type TestCertificateBody = Record<string, never>;
+
+export type TestCertificateResult = {
+  success: true;
+  messageId?: string;
+};
+
 export type TestSendEmail = {
   recipientEmail: string;
   recipientName?: string;
 };
 
-export type ThemeIdParam = {
-  eventId: string;
-  themeId: string;
-};
+export type ThemeIdParam = DeleteUnusedThemeParam;
 
 export type ThemeTranslations = {
   fr?: {
@@ -3624,6 +3985,16 @@ export type TiptapNode = {
 
 export type TransactionType = "PAYMENT" | "REFUND" | "WAIVER" | "ADJUSTMENT";
 
+export type UndoCheckInBody = {
+  registrationId: string;
+  accessId?: string;
+  expectedCheckedInAt?: string;
+};
+
+export type UndoCheckInResult = {
+  outcome: "UNDONE" | "ALREADY_UNDONE";
+};
+
 export type UpdateCertificateTemplate = {
   name?: string;
   zones?: CertificateZone[];
@@ -3662,7 +4033,7 @@ export type UpdateEmbeddedRule = {
   priority?: number;
   conditions?: Condition[];
   conditionLogic?: "AND" | "OR";
-  price?: number;
+  price?: MoneyAmount;
   active?: boolean;
 };
 
@@ -3675,7 +4046,7 @@ export type UpdateEventAccess = {
   startsAt?: string | null;
   /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
   endsAt?: string | null;
-  price?: number;
+  price?: MoneyAmount;
   currency?: string;
   maxCapacity?: number | null;
   /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
@@ -3690,11 +4061,11 @@ export type UpdateEventAccess = {
   groupLabel?: string | null;
   allowCompanion?: boolean;
   includedInBase?: boolean;
-  companionPrice?: number;
+  companionPrice?: MoneyAmount;
 };
 
 export type UpdateEventPricing = {
-  basePrice?: number | null;
+  basePrice?: MoneyAmount | null;
   currency?: string;
   rules?: EmbeddedPricingRule[];
   onlinePaymentEnabled?: boolean;
@@ -3716,7 +4087,7 @@ export type UpdateEvent = {
   endDate?: string;
   location?: string | null;
   status?: "CLOSED" | "OPEN" | "ARCHIVED";
-  basePrice?: number | null;
+  basePrice?: MoneyAmount | null;
   currency?: string;
 };
 
@@ -3733,7 +4104,7 @@ export type UpdateNetworkingConfig = unknown;
 
 export type UpdatePayment = {
   paymentStatus: PaymentStatus;
-  paidAmount?: number;
+  paidAmount?: MoneyAmount;
   paymentMethod?: PaymentMethod;
   paymentReference?: string;
   paymentProofUrl?: string;
@@ -3741,7 +4112,7 @@ export type UpdatePayment = {
 
 export type UpdateRegistration = {
   paymentStatus?: PaymentStatus;
-  paidAmount?: number;
+  paidAmount?: MoneyAmount;
   paymentMethod?: PaymentMethod;
   paymentReference?: string;
   paymentProofUrl?: string;
@@ -3782,6 +4153,21 @@ export type UpdateUser = {
 
 export type UserIdParam = {
   id: string;
+};
+
+export type UserResponse = {
+  id: string;
+  email: string;
+  name: string;
+  role: 0 | 1 | 2;
+  clientId: string | null;
+  active: boolean;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  lastLoginAt: string | null;
 };
 
 export type ValidateAccessSelectionsBody = {

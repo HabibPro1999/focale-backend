@@ -81,6 +81,13 @@ interface TableSnapshot {
 }
 type DatabaseSnapshot = Record<string, TableSnapshot>;
 
+const DECIMAL_MONEY_COLUMNS = new Set([
+  "event_pricing.base_price", "event_access.price", "event_access.companion_price",
+  "registrations.total_amount", "registrations.paid_amount", "registrations.base_amount",
+  "registrations.discount_amount", "registrations.access_amount", "registrations.sponsorship_amount",
+  "payment_transaction.amount", "sponsorships.total_amount", "sponsorship_usages.amount_applied",
+]);
+
 async function publicTables(client: Client): Promise<string[]> {
   const result = await client.query<{ table_name: string }>(
     `SELECT table_name FROM information_schema.tables
@@ -103,7 +110,15 @@ async function snapshotTables(client: Client, tables: readonly string[]): Promis
       `SELECT ${names.map((name) => `"${name}"::TEXT AS "${name}"`).join(", ")} FROM public."${table}"`,
     );
     const rows = new Map<string, Record<string, string | null>>();
-    for (const row of result.rows) rows.set(row.id ? nameOf(row.id) : JSON.stringify(row), row);
+    for (const row of result.rows) {
+      // 0036 changes storage, not values: compare decimal strings exactly without a Number conversion.
+      for (const column of names) {
+        if (DECIMAL_MONEY_COLUMNS.has(`${table}.${column}`) && row[column]?.includes(".")) {
+          row[column] = row[column]!.replace(/0+$/, "").replace(/\.$/, "");
+        }
+      }
+      rows.set(row.id ? nameOf(row.id) : JSON.stringify(row), row);
+    }
     snapshot[table] = {
       columns: Object.fromEntries(columns.rows.map((row) => [row.column_name, `${row.data_type}/${row.udt_name}`])),
       rows,
@@ -509,7 +524,9 @@ describe.runIf(dbTestsEnabled())("legacy production data across the cutover", ()
       const diff = diffSnapshots(before, after);
       expect(diff.droppedTables).toEqual(["abstract_code_sequences"]); // 0033
       expect(diff.droppedColumns).toEqual([]);
-      expect(diff.retypedColumns).toEqual([]);
+      expect(diff.retypedColumns.map((column) => column.split(":")[0]).sort())
+        .toEqual([...DECIMAL_MONEY_COLUMNS].sort());
+      for (const column of diff.retypedColumns) expect(column).toMatch(/ -> numeric\/numeric$/);
       expect(diff.droppedRows).toEqual([]);
       expect(diff.addedRows).toEqual([]);
       expect(withMigrationTimes(diff.changes)).toEqual(EXPECTED_CHANGES);

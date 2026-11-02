@@ -142,7 +142,11 @@ const EXPECTED: Record<string, Row> = {
   "NetworkingAdminController.sync": ev(["networking"], true),
   "NetworkingAdminController.syncState": ev(["networking"]),
   "NetworkingAdminController.profiles": ev(["networking"]),
+  "NetworkingAdminController.profile": ev(["networking"]),
+  "NetworkingAdminController.meeting": ev(["networking"]),
+  "NetworkingAdminController.report": ev(["networking"]),
   "NetworkingAdminController.updateProfile": ev(["networking"], true),
+  "NetworkingAdminController.restoreAccess": ev(["networking"], true),
   "NetworkingAdminController.spaces": ev(["networking"]),
   "NetworkingAdminController.createSpace": ev(["networking"], true),
   "NetworkingAdminController.updateSpace": ev(["networking"], true),
@@ -173,6 +177,8 @@ const EXPECTED: Record<string, Row> = {
   "AbstractsController.createTheme": ABS,
   "AbstractsController.updateTheme": ABS,
   "AbstractsController.deleteTheme": ABS,
+  "AbstractsController.deleteUnusedTheme": ev(["abstracts"], true),
+  "AbstractsController.reorderThemes": ev(["abstracts"], true),
   "AbstractsController.getAdditionalFields": ABS,
   "AbstractsController.setAdditionalFields": ABS,
   "AbstractsController.listAbstracts": ABS,
@@ -194,6 +200,8 @@ const EXPECTED: Record<string, Row> = {
   // on writes); getTemplateWriteContext on template writes.
   "EmailController.list": ev(["emails"]),
   "EmailController.variables": ev(["emails"]),
+  "EmailController.previewDraft": ev(["emails"]),
+  "EmailController.testSendDraft": ev(["emails"], true),
   "EmailController.create": ev(["emails"], true),
   "EmailController.getOne": tpl(false),
   "EmailController.update": tpl(true),
@@ -201,8 +209,10 @@ const EXPECTED: Record<string, Row> = {
   "EmailController.duplicate": tpl(true),
   "EmailController.testSend": tpl(true),
   "EmailController.listLogs": ev(["emails"]),
+  "EmailController.getLog": ev(["emails"]),
   "EmailController.resendLog": ev(["emails"], true),
   "EmailController.bulkSend": ev(["emails"], true),
+  "EmailController.countSend": ev(["emails"], true),
   "EmailController.sendCustom": ev(["emails"], true),
   // registrations.controller.ts loadEvent / getRegistrationClientId checks.
   // adminEdit keeps its body-dependent pricing gate in the handler.
@@ -227,6 +237,7 @@ const EXPECTED: Record<string, Row> = {
   "PricingController.deleteRule": ev(["pricing"], true),
   // checkin.controller.ts / reports.controller.ts authorizeEvent (404 → 403).
   "CheckinController.checkIn": ev(),
+  "CheckinController.undo": ev([], true),
   "CheckinController.registrations": ev(),
   "CheckinController.stats": ev(),
   "CheckinController.sync": ev(),
@@ -243,6 +254,7 @@ const EXPECTED: Record<string, Row> = {
   // requireWritableRegistration.
   "SponsorshipsListController.list": ev(),
   "SponsorshipDetailController.detail": spo(),
+  "SponsorshipDetailController.restore": { ...spo(["sponsorships"]), write: true },
   "SponsorshipDetailController.update": spo(["sponsorships"]),
   "SponsorshipDetailController.remove": spo(["sponsorships"]),
   "RegistrationSponsorshipsController.available": reg([], false, "registrationId"),
@@ -264,9 +276,12 @@ const EXPECTED: Record<string, Row> = {
   "CertificatesController.getOne": cert(),
   "CertificatesController.update": cert(true),
   "CertificatesController.remove": cert(true),
+  "CertificatesController.restore": cert(true),
   "CertificatesController.uploadImage": cert(true),
   "CertificatesController.downloadImage": cert(),
   "CertificatesController.send": ev(["certificates", "emails"], true),
+  "CertificatesController.dryRun": ev(["certificates", "emails"], true),
+  "CertificatesController.testSend": { ...cert(true), module: ["certificates", "emails"] },
   // events.controller.ts requireOwnedEvent (writable only on the banner upload).
   "EventsController.getById": evId(),
   "EventsController.update": evId(),
@@ -277,6 +292,7 @@ const EXPECTED: Record<string, Row> = {
   "FormsController.getSponsorByEvent": evId(["sponsorships"]),
   "FormsController.createSponsorByEvent": evId(["sponsorships"], true),
   "FormsController.getOne": frm(),
+  "FormsController.duplicate": frm(),
   "FormsController.sponsorshipModeLocked": frm(),
   "FormsController.updateSponsorshipSettings": frm(true, ["sponsorships"]),
   "FormsController.update": frm(true),
@@ -525,7 +541,7 @@ async function runGuard(route: RouteCase, who: AuthUser) {
 describe("tenant scope route matrix (5.4)", () => {
   it("covers every route of the converted controllers: guarded, checked in the handler, or unscoped", () => {
     expect(ROUTES.map((r) => r.name).sort()).toEqual(Object.keys(EXPECTED).sort());
-    expect(ROUTES).toHaveLength(129); // 76 (5.4) + 25 (5.4b) + 28 networking
+    expect(ROUTES).toHaveLength(Object.keys(EXPECTED).length); // Explicit route inventory above
     const unguarded = ALL_ROUTES.filter((r) => r.rule === undefined);
     expect(unguarded.map((r) => r.name).sort()).toEqual([...IN_HANDLER, ...UNSCOPED].sort());
     for (const route of unguarded) {
@@ -656,7 +672,7 @@ describe("tenant scope route matrix (5.4)", () => {
           // Banner upload has no module gate; its archive check still refuses.
           expect(res.statusCode).toBe(400);
           expect(res.json().error).toEqual({
-            code: ErrorCodes.INVALID_STATUS_TRANSITION,
+            code: ErrorCodes.EVENT_ARCHIVED,
             message: "Archived events cannot be modified",
           });
         }
@@ -741,7 +757,7 @@ describe("tenant scope route matrix (5.4)", () => {
         const archived = await sendCase(c);
         if (c.write) {
           expect(archived.statusCode).toBe(400);
-          expect(archived.json().error.code).toBe(ErrorCodes.INVALID_STATUS_TRANSITION);
+          expect(archived.json().error.code).toBe(ErrorCodes.EVENT_ARCHIVED);
         } else {
           expect(archived.statusCode).toBeLessThan(300);
         }
@@ -830,7 +846,7 @@ describe("tenant scope route matrix (5.4)", () => {
         ownScopes("ARCHIVED");
         await expect(runGuard(route, user(UserRole.CLIENT_ADMIN, OWNER))).rejects.toMatchObject({
           status: 400,
-          response: { code: ErrorCodes.INVALID_STATUS_TRANSITION },
+          response: { code: ErrorCodes.EVENT_ARCHIVED },
         });
       },
     );

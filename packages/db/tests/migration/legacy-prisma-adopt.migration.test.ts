@@ -71,6 +71,11 @@ const LEGACY_VERDICTS: Record<string, "baseline" | "applied" | "pending"> = {
   "0033": "pending", // abstract_code_sequences still exists; apply drops it
   "0034": "pending",
   "0035": "pending",
+  "0036": "pending", // decimal monetary storage
+  "0037": "pending", // last login metadata
+  "0038": "pending", // sponsorship undo provenance
+  "0039": "pending", // certificate soft deletion
+  "0040": "pending", // meeting undo provenance
 };
 
 const PRISMA_EVIDENCE = { finished: 31, latest: "20260814000000_add_committee_invite_tokens" };

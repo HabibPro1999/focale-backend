@@ -20,6 +20,7 @@ import {
   deleteClientRow,
   getClientDeletionInfo,
   type ClientRow,
+  type ClientListRow,
   type UpdateClientData,
 } from "@app/db";
 import { getSkip, paginate, type PaginatedResult } from "@app/shared";
@@ -87,7 +88,7 @@ export class ClientsService {
   }
 
   /** List clients with pagination + optional active/search filters (createdAt desc). */
-  async list(query: ListClientsQuery): Promise<PaginatedResult<ClientRow>> {
+  async list(query: ListClientsQuery): Promise<PaginatedResult<ClientListRow>> {
     const { page, limit, active, search } = query;
     const offset = getSkip({ page, limit });
     const { data, total } = await listClientsPage({

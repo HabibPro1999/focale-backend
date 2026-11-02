@@ -19,6 +19,7 @@ export * from "./events.responses";
 export * from "./forms";
 export * from "./forms.responses";
 export * from "./pricing";
+export * from "./money";
 export * from "./access";
 export * from "./email";
 export * from "./realtime";

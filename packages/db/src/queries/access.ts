@@ -8,6 +8,7 @@ import { isTransactionExecutor } from "../txn";
 import {
   accessPrerequisites,
   eventAccess,
+  eventPricing,
   events,
   registrations,
   sponsorshipUsages,
@@ -71,10 +72,11 @@ async function loadRequiredAccessByOwners(
 export async function getEventDatesForAccess(
   eventId: string,
   exec: DbExecutor = getDb(),
-): Promise<{ id: string; startDate: Date; endDate: Date } | null> {
+): Promise<{ id: string; startDate: Date; endDate: Date; currency: string } | null> {
   const rows = await exec
-    .select({ id: events.id, startDate: events.startDate, endDate: events.endDate })
+    .select({ id: events.id, startDate: events.startDate, endDate: events.endDate, currency: sql<string>`coalesce(${eventPricing.currency}, 'TND')` })
     .from(events)
+    .leftJoin(eventPricing, eq(eventPricing.eventId, events.id))
     .where(eq(events.id, eventId))
     .limit(1);
   return rows[0] ?? null;
@@ -324,7 +326,7 @@ export async function countRegistrationsWithAccess(
     .select({ value: sql<number>`count(*)::int` })
     .from(registrations)
     .where(sql`${accessId}::text = ANY(${registrations.accessTypeIds})`);
-  return rows[0]?.value ?? 0;
+  return Number(rows[0]?.value ?? 0);
 }
 
 export async function countActiveSponsorshipsWithAccess(
@@ -340,7 +342,7 @@ export async function countActiveSponsorshipsWithAccess(
         sql`${sponsorships.status} <> 'CANCELLED'`,
       ),
     );
-  return rows[0]?.value ?? 0;
+  return Number(rows[0]?.value ?? 0);
 }
 
 /** Ids of accesses that require `accessId` (its dependents). */

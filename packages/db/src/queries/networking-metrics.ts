@@ -56,6 +56,7 @@ export type NetworkingEventTotals = {
   meetingRequests: number;
   bookedMeetings: number;
   awaitingMeetings: number;
+  awaitingAllocationMeetings: number;
   confirmedMeetings: number;
   completedMeetings: number;
   noShowMeetings: number;
@@ -111,6 +112,7 @@ export async function networkingEventTotals(
       (SELECT count(*)::int4 AS meeting_requests,
         count(*) FILTER (WHERE status IN (${booked}))::int4 AS booked_meetings,
         count(*) FILTER (WHERE status IN (${awaiting}))::int4 AS awaiting_meetings,
+        count(*) FILTER (WHERE status='PENDING_ALLOCATION')::int4 AS awaiting_allocation_meetings,
         count(*) FILTER (WHERE status='CONFIRMED')::int4 AS confirmed_meetings,
         count(*) FILTER (WHERE status='COMPLETED')::int4 AS completed_meetings,
         count(*) FILTER (WHERE status='NO_SHOW')::int4 AS no_show_meetings,
@@ -146,6 +148,7 @@ export async function networkingEventTotals(
     meetingRequests: value("meeting_requests"),
     bookedMeetings: value("booked_meetings"),
     awaitingMeetings: value("awaiting_meetings"),
+    awaitingAllocationMeetings: value("awaiting_allocation_meetings"),
     confirmedMeetings: value("confirmed_meetings"),
     completedMeetings: value("completed_meetings"),
     noShowMeetings: value("no_show_meetings"),

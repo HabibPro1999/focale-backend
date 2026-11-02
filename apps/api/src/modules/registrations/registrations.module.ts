@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { PlatformRegistrationsController } from "./platform-registrations.controller";
 import { AccessModule } from "../access/access.module";
 import { PricingModule } from "../pricing/pricing.module";
 import { RegistrationsService } from "./registrations.service";
@@ -19,6 +20,7 @@ import {
 @Module({
   imports: [AccessModule, PricingModule],
   controllers: [
+    PlatformRegistrationsController,
     RegistrationsController,
     RegistrationEditLinkController,
     RegistrationsPublicController,

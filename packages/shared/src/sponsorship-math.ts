@@ -1,4 +1,5 @@
 import type { AccessLineItem, PriceBreakdown } from "@app/contracts";
+import { sumMoney } from "./money";
 
 // ============================================================================
 // Types for sponsorship amount calculation
@@ -49,7 +50,7 @@ export function calculateApplicableAmount(
 
   // Apply base price if covered by sponsorship
   if (sponsorship.coversBasePrice) {
-    applicableAmount +=
+    applicableAmount =
       registration.priceBreakdown.calculatedBasePrice ??
       registration.baseAmount;
   }
@@ -67,7 +68,7 @@ export function calculateApplicableAmount(
           (item) => item.accessId === coveredId,
         );
         if (accessItem) {
-          applicableAmount += accessItem.subtotal;
+          applicableAmount = sumMoney(applicableAmount, accessItem.subtotal);
         }
       }
     }
@@ -79,6 +80,11 @@ export function calculateApplicableAmount(
     registration.totalAmount,
     sponsorship.totalAmount,
   );
+}
+
+/** Multiple codes still cannot cover separately billed form options. */
+export function sponsorshipLimit(breakdown: Pick<PriceBreakdown, "subtotal" | "calculatedBasePrice" | "accessItems">): number {
+  return Math.max(0, Math.min(breakdown.subtotal, sumMoney(breakdown.calculatedBasePrice, ...breakdown.accessItems.map((item) => item.subtotal))));
 }
 
 /**

@@ -1,3 +1,5 @@
+import { BulkSendCountResponseSchema, EventEmailLogResponseSchema, DraftEmailPreviewResponseSchema } from "@app/contracts";
+import { ResponseContract } from "../../core/response-contract";
 import {
   Body,
   Controller,
@@ -28,6 +30,8 @@ import { EmailTemplateService } from "./email-template.service";
 import { EmailSendService } from "./email-send.service";
 import {
   CreateEmailTemplateBodyDto,
+  DraftEmailPreviewDto,
+  DraftEmailTestSendDto,
   DuplicateEmailTemplateDto,
   UpdateEmailTemplateDto,
   ListEmailTemplatesQueryDto,
@@ -40,6 +44,8 @@ import {
   BulkSendParamDto,
   SendCustomEmailParamDto,
   ResendEmailLogParamDto,
+  GetEmailLogParamDto,
+  EmailVariablesQueryDto,
 } from "./dto";
 
 // Every route requires a valid Bearer token (any role); the tenant check is the
@@ -84,12 +90,29 @@ export class EmailController {
     return this.templates.list(params.eventId, query);
   }
 
+  @Post(":eventId/email-templates/draft/preview")
+  @HttpCode(200)
+  @EventScoped({ module: "emails" })
+  @ResponseContract(DraftEmailPreviewResponseSchema)
+  previewDraft(@Param() params: EmailEventIdParamDto, @Body() body: DraftEmailPreviewDto) {
+    return this.send.previewDraft(params.eventId, body);
+  }
+
+  @Post(":eventId/email-templates/draft/test-send")
+  @HttpCode(200)
+  @EventScoped({ module: "emails", write: true })
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  testSendDraft(@Param() params: EmailEventIdParamDto, @Body() body: DraftEmailTestSendDto) {
+    return this.send.testSendDraft(params.eventId, body);
+  }
+
   @Get(":eventId/email-templates/variables")
   @EventScoped({ module: "emails" })
   async variables(
     @Param() params: EmailEventIdParamDto,
+    @Query() query: EmailVariablesQueryDto,
   ): Promise<VariableDefinition[]> {
-    return getAvailableVariables(params.eventId);
+    return getAvailableVariables(params.eventId, query.language);
   }
 
   @Post(":eventId/email-templates")
@@ -169,6 +192,13 @@ export class EmailController {
    * 3.6: explicitly resend an UNCERTAIN email (the provider may have sent it,
    * so it is never resent automatically). Queues a new email log.
    */
+  @Get(":eventId/email-logs/:emailLogId")
+  @EventScoped({ module: "emails" })
+  @ResponseContract(EventEmailLogResponseSchema)
+  getLog(@Param() params: GetEmailLogParamDto) {
+    return this.templates.getLog(params.eventId, params.emailLogId);
+  }
+
   @Post(":eventId/email-logs/:emailLogId/resend")
   @EventScoped({ module: "emails", write: true })
   @HttpCode(201)
@@ -190,6 +220,21 @@ export class EmailController {
     @Body() body: BulkSendEmailDto,
     @ScopedClient() client: ScopedClientRow,
   ) {
+    const event = await this.bulkEvent(params, body, client);
+    return this.send.bulkSend(event, params.templateId, body);
+  }
+
+  /** POST body deliberately matches send, including complex filters and explicit ids. */
+  @Post(":eventId/email-templates/:templateId/send/count")
+  @EventScoped({ module: "emails", write: true })
+  @HttpCode(200)
+  @ResponseContract(BulkSendCountResponseSchema)
+  async countSend(@Param() params: BulkSendParamDto, @Body() body: BulkSendEmailDto, @ScopedClient() client: ScopedClientRow) {
+    const event = await this.bulkEvent(params, body, client);
+    return this.send.countBulkSend(event, params.templateId, body);
+  }
+
+  private async bulkEvent(params: BulkSendParamDto, body: BulkSendEmailDto, client: ScopedClientRow) {
     const event = await this.eventForSend(params.eventId);
     const template = await this.template(params.templateId);
     if (template.clientId !== event.clientId) {
@@ -199,12 +244,15 @@ export class EmailController {
         403,
       );
     }
+    if (template.isActive === false) {
+      throw new AppException(ErrorCodes.EMAIL_TEMPLATE_INACTIVE, "Email template is inactive", 409);
+    }
     // After the template checks, as in legacy.
     if (body.audience === "abstracts") {
       assertModuleEnabledForClient(client, "abstracts");
     }
 
-    return this.send.bulkSend(event, params.templateId, body);
+    return event;
   }
 
   @Post(":eventId/registrations/:registrationId/send-custom-email")

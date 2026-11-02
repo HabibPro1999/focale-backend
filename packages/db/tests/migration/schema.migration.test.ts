@@ -106,6 +106,7 @@ function normalizeType(type: string): string {
   return type
     .replace(/"([^"]+)"/g, "$1")
     .replace(/\s*\(\s*(\d+)\s*\)/g, "($1)")
+    .replace(/\(\s*(\d+)\s*,\s*(\d+)\s*\)/g, "($1,$2)")
     .replace(/ without time zone/g, "")
     .toLowerCase();
 }
@@ -242,7 +243,7 @@ function normalizeColumnDefault(expression: string | null, type: string): string
     const arrayValue = normalizeSimpleArrayLiteral(normalized);
     if (arrayValue !== null) return arrayValue;
   }
-  if (/^(smallint|integer|bigint|numeric|real|double precision)$/.test(type)) {
+  if (/^(smallint|integer|bigint|numeric(?:\(\d+,\d+\))?|real|double precision)$/.test(type)) {
     const quotedNumber = /^'([+-]?\d+(?:\.\d+)?)'$/.exec(normalized);
     if (quotedNumber) return quotedNumber[1];
   }
@@ -479,7 +480,7 @@ describe.runIf(dbTestsEnabled())("migration tier: apply + introspect", () => {
         WHERE (table_name='event_access' AND column_name='companion_price')
            OR (table_name='clients' AND column_name IN ('id','updated_at'))`);
     const by = (table: string, column: string) => rows.find((row) => row.table_name === table && row.column_name === column);
-    expect(by("event_access", "companion_price")?.data_type).toBe("bigint");
+    expect(by("event_access", "companion_price")?.data_type).toBe("numeric");
     expect(by("clients", "id")?.data_type).toBe("text");
     expect(by("clients", "updated_at")?.data_type).toBe("timestamp without time zone");
     expect(by("clients", "updated_at")?.column_default).toBeNull();

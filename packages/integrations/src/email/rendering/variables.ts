@@ -4,6 +4,8 @@
 // =============================================================================
 
 import { getRegistrationFormSchema } from "@app/db";
+import type { LanguageCode } from "@app/contracts";
+import { localizeVariable, formVariableDescription } from "./variables-i18n";
 import type { VariableDefinition } from "./types";
 
 export const BASE_VARIABLES: VariableDefinition[] = [
@@ -307,12 +309,13 @@ export const BASE_VARIABLES: VariableDefinition[] = [
 
 export async function getAvailableVariables(
   eventId: string,
+  language: LanguageCode = "en",
 ): Promise<VariableDefinition[]> {
-  const variables = [...BASE_VARIABLES];
+  const variables = BASE_VARIABLES.map(variable => localizeVariable(variable, language));
 
   const schema = (await getRegistrationFormSchema(eventId)) as {
     steps?: Array<{
-      fields?: Array<{ id: string; label?: string; type: string }>;
+      fields?: Array<{ id: string; label?: string; type: string; translations?: Partial<Record<LanguageCode, { label?: string }>> }>;
     }>;
   } | null;
 
@@ -321,11 +324,12 @@ export async function getAvailableVariables(
       for (const field of step.fields || []) {
         if (["heading", "paragraph", "divider"].includes(field.type)) continue;
 
+        const label = field.translations?.[language]?.label || field.label || field.id;
         variables.push({
           id: `form_${field.id}`,
-          label: field.label || field.id,
+          label,
           category: "form",
-          description: `Form field: ${field.label || field.id}`,
+          description: formVariableDescription(label, language),
           example: getExampleForFieldType(field.type),
         });
       }

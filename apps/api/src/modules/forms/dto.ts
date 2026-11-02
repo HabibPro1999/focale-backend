@@ -1,5 +1,6 @@
 import {
   CreateFormSchema,
+  DuplicateFormSchema,
   UpdateFormSchema,
   ListFormsQuerySchema,
   FormIdParamSchema,
@@ -23,3 +24,5 @@ export class CreateSponsorFormBodyDto extends createZodDto(
 
 export class EventIdParamDto extends createZodDto(EventIdParamSchema) {}
 export class EventSlugParamDto extends createZodDto(EventSlugParamSchema) {}
+
+export class DuplicateFormDto extends createZodDto(DuplicateFormSchema) {}

@@ -117,6 +117,16 @@ describe("POST /api/events/:eventId/email-templates/:templateId/send (abstracts 
     payload,
   });
 
+  it("counts the same abstract audience without inserting or sending anything", async () => {
+    const response = await app.inject({ method: "POST", url: `/api/events/${EVENT}/email-templates/${TEMPLATE}/send/count`,
+      headers: { authorization: "Bearer test" }, payload: { audience: "abstracts", dedupeByEmail: true } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toEqual({ recipientCount: 1, skipped: 1 });
+    expect(db.insertEmailLogsSkippingConflicts).not.toHaveBeenCalled();
+    expect(db.withTxn).not.toHaveBeenCalled();
+    expect(db.listAbstractsForBulkEmail).toHaveBeenCalledWith(EVENT, expect.objectContaining({ dedupeByEmail: true }));
+  });
+
   it("queues the admin dialog's send and answers queued and skipped", async () => {
     // BulkSendDialog's body: abstractFilters only when one is set, dedupeByEmail always.
     const response = await send({
@@ -166,6 +176,15 @@ describe("POST /api/events/:eventId/email-templates/:templateId/send (abstracts 
         }),
       },
     ]);
+  });
+
+  it("returns a coded 409 before selecting recipients or queuing an inactive template", async () => {
+    vi.mocked(db.getEmailTemplateById).mockResolvedValue({ id: TEMPLATE, clientId: OWNER, isActive: false } as never);
+    const response = await send({ audience: "abstracts" });
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.code).toBe("EML_15002");
+    expect(db.listAbstractsForBulkEmail).not.toHaveBeenCalled();
+    expect(db.insertEmailLogsSkippingConflicts).not.toHaveBeenCalled();
   });
 
   it("defaults dedupeByEmail to true and passes explicit ids", async () => {

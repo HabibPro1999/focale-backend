@@ -15,6 +15,14 @@ const AbstractRequestedTypeSchema = z.enum(["ORAL_COMMUNICATION", "POSTER"]);
 
 const IsoDateTimeSchema = z.string();
 
+/** Status-tab counts use the list filters except `status`, pagination never limits them. */
+export const AbstractStatusCountsSchema = z.record(z.enum(ABSTRACT_STATUSES), z.number().int().min(0));
+export type AbstractStatusCounts = z.infer<typeof AbstractStatusCountsSchema>;
+export const AdminAbstractListMetaSchema = z.object({
+  total: z.number().int().min(0), limit: z.number().int().min(1), offset: z.number().int().min(0),
+  countsByStatus: AbstractStatusCountsSchema,
+});
+
 /**
  * GET /api/public/events/:slug/abstracts/config: what the submission page
  * needs. `{ enabled: false }` alone when the event has no abstracts config.

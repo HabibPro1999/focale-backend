@@ -1,3 +1,4 @@
+import { assertMoneyPrecision } from "../../core/money-input";
 import {
   assertEventWritable,
   VALID_STATUS_TRANSITIONS,
@@ -99,6 +100,7 @@ export class EventsService {
       currency,
     } = input;
 
+    assertMoneyPrecision(normalizeCurrency(currency), basePrice);
     if (!(await clientExistsById(clientId))) {
       throw notFound("Client not found");
     }
@@ -161,6 +163,7 @@ export class EventsService {
               }
             }
             assertEventWritable(event);
+            assertMoneyPrecision(normalizeCurrency(currency ?? event.pricing?.currency), basePrice);
 
             const resultingStart = input.startDate ?? event.startDate;
             const resultingEnd = input.endDate ?? event.endDate;
@@ -194,10 +197,11 @@ export class EventsService {
               if (normalizedCurrency !== currentCurrency) {
                 const registrationCount = await countRegistrationsTx(tx, id);
                 if (registrationCount > 0) {
-                  throw badRequest(
-                    "Cannot change currency after registrations exist",
-                  );
+                  throw new AppException(ErrorCodes.CURRENCY_LOCKED,
+                    "Cannot change currency after registrations exist", 400);
                 }
+                assertMoneyPrecision(normalizedCurrency, basePrice ?? event.pricing?.basePrice,
+                  ...(event.pricing?.rules ?? []).map((rule) => rule.price));
               }
             }
 
@@ -222,7 +226,7 @@ export class EventsService {
     );
   }
 
-  async listEvents(query: ListEventsQuery): Promise<PaginatedResult<EventRow>> {
+  async listEvents(query: ListEventsQuery): Promise<PaginatedResult<EventRow & { client: { id: string; name: string } }>> {
     const { page, limit, clientId, status, search } = query;
     const { data, total } = await listEventsQuery({
       offset: getSkip({ page, limit }),

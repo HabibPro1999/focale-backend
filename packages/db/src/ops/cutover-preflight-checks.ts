@@ -219,6 +219,16 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+const MONEY_COLUMNS = [
+  ["event_pricing", "base_price"],
+  ["event_access", "price"], ["event_access", "companion_price"],
+  ["registrations", "total_amount"], ["registrations", "paid_amount"],
+  ["registrations", "base_amount"], ["registrations", "discount_amount"],
+  ["registrations", "access_amount"], ["registrations", "sponsorship_amount"],
+  ["payment_transaction", "amount"], ["sponsorships", "total_amount"],
+  ["sponsorship_usages", "amount_applied"],
+] as const;
+
 export const DATA_CHECKS: DataCheckDefinition[] = [
   {
     migrationId: "0004",
@@ -411,6 +421,36 @@ export const DATA_CHECKS: DataCheckDefinition[] = [
         status: all.length ? "changes-rows" : "no-change",
         summary: all.length ? `drops the table and its ${plural(all.length, "row")} (exported in full)` : "drops the empty table",
         rows: all,
+      };
+    },
+  },
+  {
+    migrationId: "0036",
+    file: "0036_money_precision.sql",
+    effect: "converts twelve monetary columns to DECIMAL(20,4), preserving major-unit values that fit without rounding",
+    citations: MONEY_COLUMNS.map(([table, column], index) => ({
+      line: 7 + index * 2,
+      fragment: `ALTER TABLE ${table} ALTER COLUMN ${column} TYPE DECIMAL(20,4);`,
+    })),
+    async run({ client }) {
+      const checks: PreflightRow[] = [];
+      for (const [table, column] of MONEY_COLUMNS) {
+        if (!(await tableExists(client, table))) continue;
+        // Identifiers come only from the fixed list above; export counts, never financial rows.
+        const [result] = await rows(client, `SELECT count(*)::text AS total,
+          count(*) FILTER (WHERE abs("${column}"::numeric) >= 10000000000000000
+            OR "${column}"::numeric <> round("${column}"::numeric, 4))::text AS unsafe
+          FROM "${table}"`);
+        checks.push({ table, column, total: Number(result.total), unsafe: Number(result.unsafe) });
+      }
+      const unsafe = checks.reduce((sum, check) => sum + Number(check.unsafe), 0);
+      return {
+        status: unsafe ? "fails" : "no-change",
+        summary: unsafe
+          ? `${unsafe} monetary values overflow or would round at DECIMAL(20,4); resolve before applying 0036`
+          : "all existing monetary values fit DECIMAL(20,4) without rescaling or rounding",
+        rows: checks,
+        review: unsafe > 0,
       };
     },
   },

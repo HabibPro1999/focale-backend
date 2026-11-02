@@ -2,6 +2,8 @@ import { and, asc, eq, gt, inArray, notExists, or, sql } from "drizzle-orm";
 import type { AppEvent, PriceBreakdown } from "@app/contracts";
 import {
   deriveSettlement,
+  sumMoney,
+  sponsorshipLimit,
   isFullySettled,
   netBreakdown,
   normalizeSponsorshipCode,
@@ -161,10 +163,10 @@ function isSettleableBreakdown(value: unknown): value is PriceBreakdown {
   const pb = value as Partial<PriceBreakdown> | null;
   return (
     !!pb &&
-    Number.isInteger(pb.subtotal) &&
-    Number.isInteger(pb.calculatedBasePrice) &&
+    Number.isFinite(pb.subtotal) &&
+    Number.isFinite(pb.calculatedBasePrice) &&
     Array.isArray(pb.accessItems) &&
-    pb.accessItems.every((item) => typeof item?.accessId === "string" && Number.isInteger(item.subtotal))
+    pb.accessItems.every((item) => typeof item?.accessId === "string" && Number.isFinite(item.subtotal))
   );
 }
 
@@ -244,11 +246,8 @@ async function planLinkOutcome(
   const coveredBefore = new Set(usages.flatMap((usage) => usage.sponsorship.coveredAccessIds));
   const coveredAfter = new Set([...coveredBefore, ...sponsorship.coveredAccessIds]);
   const sponsorshipAmount = Math.min(
-    [...usages.map((usage) => usage.sponsorship), sponsorship].reduce(
-      (sum, linked) => sum + sponsorshipAmountFor(linked, pb),
-      0,
-    ),
-    pb.subtotal,
+    sumMoney(...[...usages.map((usage) => usage.sponsorship), sponsorship].map((linked) => sponsorshipAmountFor(linked, pb))),
+    sponsorshipLimit(pb),
   );
   let derived: ReturnType<typeof deriveSettlement>;
   try {

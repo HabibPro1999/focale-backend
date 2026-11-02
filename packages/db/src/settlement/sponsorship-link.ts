@@ -1,6 +1,6 @@
 import { asc, eq } from "drizzle-orm";
 import type { PriceBreakdown } from "@app/contracts";
-import { normalizeSponsorshipCode } from "@app/shared";
+import { normalizeSponsorshipCode, sumMoney, subtractMoney, sponsorshipLimit } from "@app/shared";
 import type { DbExecutor } from "../client";
 import {
   lockRegistrationForUpdate,
@@ -211,10 +211,10 @@ export async function sponsorshipLinkRefusal(
   // What settleRegistrationTxn will apply once the usage exists.
   const usages = await findRegistrationUsagesForRecalc(registrationId, tx);
   const sponsorship = Math.min(
-    usages.reduce((sum, usage) => sum + sponsorshipAmountFor(usage.sponsorship, pb), amount),
-    pb.subtotal,
+    sumMoney(amount, ...usages.map((usage) => sponsorshipAmountFor(usage.sponsorship, pb))),
+    sponsorshipLimit(pb),
   );
-  const net = Math.max(0, target.totalAmount - sponsorship);
+  const net = Math.max(0, subtractMoney(target.totalAmount, sponsorship));
   if (target.paidAmount > net) {
     return new SponsorshipSettlementError("EXCEEDS_AMOUNT_DUE", {
       registrationId,

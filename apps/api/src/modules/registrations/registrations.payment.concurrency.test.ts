@@ -79,7 +79,7 @@ function breakdown(items: AccessRow[], base = 0) {
 
 async function eventWithForm() {
   const event = await seedEvent({ status: "OPEN", endDate: new Date("2099-01-01T00:00:00.000Z") });
-  const form = await seedForm({ eventId: event.id });
+  const form = await seedForm({ eventId: event.id, schema: { steps: [{ id: "main", title: "Registration", fields: [] }] } });
   return { event, form };
 }
 

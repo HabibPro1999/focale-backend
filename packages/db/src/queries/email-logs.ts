@@ -53,6 +53,8 @@ export interface EventEmailLog {
   subject: string;
   status: string;
   trigger: string | null;
+  abstractTrigger: string | null;
+  origin: "automatic" | "networking" | "manual";
   templateName: string | null;
   recipientEmail: string;
   recipientName: string | null;
@@ -129,6 +131,17 @@ export async function listEventEmailLogs(
     ...filters,
   )!;
 
+  const noRegistration = notExists(exec.select({ one: sql`1` }).from(registrations)
+    .where(and(eq(registrations.id, emailLogs.registrationId), eq(registrations.eventId, eventId))));
+  const noTemplate = notExists(exec.select({ one: sql`1` }).from(emailTemplates)
+    .where(and(eq(emailTemplates.id, emailLogs.templateId), eq(emailTemplates.eventId, eventId))));
+  const noAbstract = notExists(exec.select({ one: sql`1` }).from(abstracts)
+    .where(and(eq(abstracts.id, emailLogs.abstractId), eq(abstracts.eventId, eventId))));
+  const byAbstract = and(inArray(emailLogs.abstractId, exec.select({ id: abstracts.id }).from(abstracts).where(eq(abstracts.eventId, eventId))),
+    noRegistration, noTemplate, ...filters)!;
+  const byNetworking = and(sql`${emailLogs.contextSnapshot}->>'dispatchOwner'='networking'`,
+    sql`${emailLogs.contextSnapshot}->>'eventId'=${eventId}`, noRegistration, noTemplate, noAbstract, ...filters)!;
+
   const countCap = args.countCap ?? EMAIL_LOG_LIST_COUNT_CAP;
   const window = args.offset + args.limit;
   const firstRows = (where: SQL) =>
@@ -147,13 +160,13 @@ export async function listEventEmailLogs(
 
   const [page, countRes] = await Promise.all([
     firstRows(byRegistration)
-      .unionAll(firstRows(byTemplate))
+      .unionAll(firstRows(byTemplate)).unionAll(firstRows(byAbstract)).unionAll(firstRows(byNetworking))
       .orderBy(sql.raw(`"queued_at" DESC, "id" DESC`))
       .limit(args.limit)
       .offset(args.offset),
     exec.execute(sql`
       SELECT count(*) AS "n"
-      FROM ${counted(byRegistration).unionAll(counted(byTemplate))} AS "capped"
+      FROM ${counted(byRegistration).unionAll(counted(byTemplate)).unionAll(counted(byAbstract)).unionAll(counted(byNetworking))} AS "capped"
     `),
   ]);
   const counts = Number(rowsOf<{ n: number | string }>(countRes)[0]?.n ?? 0);
@@ -175,11 +188,24 @@ export async function listEventEmailLogs(
     // Deleted between the two reads (a retention purge): skip it.
     if (!row) continue;
     const { log, templateName } = row;
-    data.push({
+    data.push(eventEmailLog(log, templateName));
+  }
+
+  return {
+    data,
+    total: Math.min(counts, countCap),
+    totalCapped: counts > countCap,
+  };
+}
+
+function eventEmailLog(log: EmailLogRow, templateName: string | null): EventEmailLog {
+  return {
       id: log.id,
       subject: log.subject,
       status: log.status,
       trigger: log.trigger,
+      abstractTrigger: log.abstractTrigger ?? null,
+      origin: log.contextSnapshot?.dispatchOwner === "networking" ? "networking" : log.trigger || log.abstractTrigger ? "automatic" : "manual",
       templateName: templateName ?? null,
       recipientEmail: log.recipientEmail,
       recipientName: log.recipientName,
@@ -191,14 +217,18 @@ export async function listEventEmailLogs(
       clickedAt: log.clickedAt?.toISOString() ?? null,
       bouncedAt: log.bouncedAt?.toISOString() ?? null,
       failedAt: log.failedAt?.toISOString() ?? null,
-    });
-  }
-
-  return {
-    data,
-    total: Math.min(counts, countCap),
-    totalCapped: counts > countCap,
   };
+}
+
+/** Safe deep-link projection; snapshots can contain self-service credentials. */
+export async function getEventEmailLog(eventId: string, id: string, exec: DbExecutor = getDb()): Promise<EventEmailLog | null> {
+  const [row] = await exec.select({ log: emailLogs, templateName: emailTemplates.name })
+    .from(emailLogs).leftJoin(registrations, eq(registrations.id, emailLogs.registrationId))
+    .leftJoin(emailTemplates, eq(emailTemplates.id, emailLogs.templateId)).leftJoin(abstracts, eq(abstracts.id, emailLogs.abstractId))
+    .where(and(eq(emailLogs.id, id), or(eq(registrations.eventId, eventId), eq(emailTemplates.eventId, eventId), eq(abstracts.eventId, eventId),
+      and(sql`${emailLogs.contextSnapshot}->>'dispatchOwner'='networking'`, sql`${emailLogs.contextSnapshot}->>'eventId'=${eventId}`))))
+    .limit(1);
+  return row ? eventEmailLog(row.log, row.templateName) : null;
 }
 
 // ============================================================================

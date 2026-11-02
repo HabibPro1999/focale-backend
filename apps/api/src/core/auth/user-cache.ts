@@ -5,7 +5,7 @@ import {
 } from "@app/db";
 import { UserRole } from "@app/contracts";
 
-/** The explicit 8-field user shape attached to request.user (no client relation). */
+/** The explicit user shape attached to request.user (no client relation). */
 export type AuthUser = Pick<
   UserRow,
   | "id"
@@ -16,7 +16,7 @@ export type AuthUser = Pick<
   | "active"
   | "createdAt"
   | "updatedAt"
->;
+> & { lastLoginAt?: Date | null };
 
 export type CachedAuthUser = { user: AuthUser; client: ClientRow | null };
 

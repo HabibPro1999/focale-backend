@@ -21,21 +21,21 @@ it("lists every organizer meeting and report action, and no participant activity
 it("reads one page in SQL, newest first, filtered to the allow-list", async () => {
   const chain = (rows: unknown[]) => {
     const builder: Record<string, unknown> = {};
-    for (const method of ["from", "where", "orderBy", "limit", "offset"])
+    for (const method of ["from", "leftJoin", "where", "orderBy", "limit", "offset"])
       builder[method] = vi.fn(() => builder);
     builder.then = (resolve: (value: unknown) => unknown) => Promise.resolve(rows).then(resolve);
     return builder;
   };
   const selects: Record<string, unknown>[] = [];
   const db = {
-    select: vi.fn((fields?: unknown) => {
-      const builder = chain(fields ? [{ total: 42 }] : [{ id: "a" }]);
+    select: vi.fn((fields?: Record<string, unknown>) => {
+      const builder = chain(fields && "total" in fields ? [{ total: 42 }] : [{ id: "a", actorName: null }]);
       selects.push(builder);
       return builder;
     }),
   };
   const result = await listNetworkingAdminAudit("event", { page: 3, limit: 20 }, db as never);
-  expect(result).toEqual({ items: [{ id: "a" }], total: 42 });
+  expect(result).toEqual({ items: [{ id: "a", actorName: null }], total: 42 });
   const [page] = selects as Array<Record<string, ReturnType<typeof vi.fn>>>;
   expect(page.limit).toHaveBeenCalledWith(20);
   expect(page.offset).toHaveBeenCalledWith(40);

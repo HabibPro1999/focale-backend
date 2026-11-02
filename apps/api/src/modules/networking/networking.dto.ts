@@ -68,3 +68,7 @@ export class NetworkingBadgeVerifyDto extends createZodDto(
 export class NetworkingParticipantListDto extends createZodDto(c.NetworkingParticipantListQuerySchema) {}
 
 export class NetworkingCalendarDto extends createZodDto(c.NetworkingCalendarQuerySchema) {}
+
+export class NetworkingRestoreAccessDto extends createZodDto(c.NetworkingRestoreAccessSchema) {}
+
+export class NetworkingAdminRecordParamDto extends createZodDto(c.NetworkingAdminRecordParamSchema) {}

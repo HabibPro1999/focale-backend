@@ -755,3 +755,13 @@ describe("condition option IDs", () => {
     await expect(service.updateEventAccess("access-1", { conditions: [{ fieldId: "country", operator: "in", value: ["Tunisie"] }] })).rejects.toMatchObject({ code: ErrorCodes.ACCESS_CONDITION_INVALID_OPTION });
   });
 });
+
+describe("event currency inheritance", () => {
+  it("uses the event currency when the request omits a currency, including after contract parsing", async () => {
+    m.getEventDatesForAccess.mockResolvedValue({ ...eventDates, currency: "EUR" });
+    m.insertEventAccess.mockResolvedValue(accessRow({ currency: "EUR" }));
+    const input = CreateEventAccessSchema.parse({ eventId: "11111111-1111-4111-8111-111111111111", name: "Workshop", price: 12.50 });
+    await service.createEventAccess(input);
+    expect(m.insertEventAccess).toHaveBeenCalledWith(expect.objectContaining({ currency: "EUR", price: 12.50 }), expect.any(Array), txDb);
+  });
+});

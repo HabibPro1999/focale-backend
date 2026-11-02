@@ -115,6 +115,33 @@
       ],
       "type": "object"
     },
+    "AbstractStatusCountsSchema": {
+      "additionalProperties": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "propertyNames": {
+        "enum": [
+          "SUBMITTED",
+          "UNDER_REVIEW",
+          "REVIEW_COMPLETE",
+          "ACCEPTED",
+          "REJECTED",
+          "PENDING"
+        ],
+        "type": "string"
+      },
+      "required": [
+        "SUBMITTED",
+        "UNDER_REVIEW",
+        "REVIEW_COMPLETE",
+        "ACCEPTED",
+        "REJECTED",
+        "PENDING"
+      ],
+      "type": "object"
+    },
     "AbstractSubmittedResponseSchema": {
       "properties": {
         "id": {
@@ -247,24 +274,36 @@
           "type": "string"
         },
         "firstName": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "lastName": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "email": {
           "type": "string"
         },
         "phone": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "paymentStatus": {
@@ -281,7 +320,7 @@
         },
         "submittedAt": {
           "format": "date-time",
-          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
           "type": "string"
         }
       },
@@ -417,7 +456,7 @@
           "properties": {
             "email": {
               "format": "email",
-              "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+              "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
               "type": "string"
             },
             "name": {
@@ -453,12 +492,41 @@
       ],
       "type": "object"
     },
+    "AdminAbstractListMetaSchema": {
+      "properties": {
+        "total": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "limit": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "offset": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "countsByStatus": {
+          "$ref": "#/$defs/AbstractStatusCountsSchema"
+        }
+      },
+      "required": [
+        "total",
+        "limit",
+        "offset",
+        "countsByStatus"
+      ],
+      "type": "object"
+    },
     "AdminCreateRegistrationSchema": {
       "additionalProperties": false,
       "properties": {
         "email": {
           "format": "email",
-          "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+          "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
           "type": "string"
         },
         "firstName": {
@@ -521,7 +589,7 @@
       "properties": {
         "email": {
           "format": "email",
-          "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+          "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
           "type": "string"
         },
         "firstName": {
@@ -563,9 +631,7 @@
           "$ref": "#/$defs/PaymentStatusSchema"
         },
         "paidAmount": {
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer"
+          "$ref": "#/$defs/MoneyAmountSchema"
         },
         "paymentMethod": {
           "anyOf": [
@@ -747,6 +813,23 @@
     },
     "AdminRegistrationResponseSchema": {
       "properties": {
+        "amountDue": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "catalogueBasePrice": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "money": {
+          "$ref": "#/$defs/MoneySnapshotSchema"
+        },
         "id": {
           "type": "string"
         },
@@ -758,9 +841,13 @@
         },
         "formData": {},
         "networkingOptIn": {
-          "type": [
-            "boolean",
-            "null"
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "submittedAt": {
@@ -775,27 +862,43 @@
           "type": "string"
         },
         "firstName": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "lastName": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "phone": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "referenceNumber": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "paymentStatus": {
@@ -821,15 +924,23 @@
           ]
         },
         "paymentReference": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "paymentProofUrl": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "priceBreakdown": {
@@ -845,18 +956,26 @@
           "type": "number"
         },
         "sponsorshipCode": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "sponsorshipAmount": {
           "type": "number"
         },
         "labName": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "paidAt": {
@@ -894,15 +1013,23 @@
           ]
         },
         "linkBaseUrl": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "note": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "role": {
@@ -947,9 +1074,13 @@
           ]
         },
         "checkedInBy": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "form": {
@@ -1024,6 +1155,9 @@
         }
       },
       "required": [
+        "amountDue",
+        "catalogueBasePrice",
+        "money",
         "id",
         "formId",
         "eventId",
@@ -1082,16 +1216,29 @@
         "registeredCount": {
           "type": "number"
         },
+        "paidCount": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
         "maxCapacity": {
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "fillPercentage": {
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -1100,6 +1247,7 @@
         "name",
         "type",
         "registeredCount",
+        "paidCount",
         "maxCapacity",
         "fillPercentage"
       ],
@@ -1275,7 +1423,7 @@
               },
               "scannedAt": {
                 "format": "date-time",
-                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
                 "type": "string"
               }
             },
@@ -1304,7 +1452,7 @@
         },
         "email": {
           "format": "email",
-          "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+          "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
           "type": "string"
         },
         "phone": {
@@ -1359,6 +1507,25 @@
       },
       "required": [
         "fields"
+      ],
+      "type": "object"
+    },
+    "BulkSendCountResponseSchema": {
+      "properties": {
+        "recipientCount": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "skipped": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "recipientCount",
+        "skipped"
       ],
       "type": "object"
     },
@@ -1526,6 +1693,55 @@
       ],
       "type": "string"
     },
+    "CertificateSendPreviewSchema": {
+      "properties": {
+        "recipientCount": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "certificateCount": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "alreadySent": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ineligibleCount": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "breakdown": {
+          "additionalProperties": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "propertyNames": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "recipientCount",
+        "certificateCount",
+        "alreadySent",
+        "ineligibleCount",
+        "total",
+        "breakdown"
+      ],
+      "type": "object"
+    },
     "CertificateTemplateScopeSchema": {
       "enum": [
         "REGISTRATION",
@@ -1651,6 +1867,60 @@
       },
       "type": "object"
     },
+    "CheckInStatsResponseSchema": {
+      "properties": {
+        "total": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "checkedIn": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "byAccess": {
+          "items": {
+            "properties": {
+              "accessId": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "total": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "checkedIn": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "accessId",
+              "name",
+              "type",
+              "total",
+              "checkedIn"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "total",
+        "checkedIn",
+        "byAccess"
+      ],
+      "type": "object"
+    },
     "ClientIdParamSchema": {
       "additionalProperties": false,
       "properties": {
@@ -1662,6 +1932,107 @@
       },
       "required": [
         "id"
+      ],
+      "type": "object"
+    },
+    "ClientListRowResponseSchema": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "logo": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "primaryColor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "email": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "enabledModules": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "userCount": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "eventCount": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "logo",
+        "primaryColor",
+        "email",
+        "phone",
+        "active",
+        "enabledModules",
+        "createdAt",
+        "updatedAt",
+        "userCount",
+        "eventCount"
       ],
       "type": "object"
     },
@@ -1930,7 +2301,7 @@
           "anyOf": [
             {
               "format": "email",
-              "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+              "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
               "type": "string"
             },
             {
@@ -2130,9 +2501,7 @@
           "type": "string"
         },
         "price": {
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer"
+          "$ref": "#/$defs/MoneyAmountSchema"
         },
         "active": {
           "default": true,
@@ -2205,13 +2574,11 @@
           ]
         },
         "price": {
-          "default": 0,
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer"
+          "$ref": "#/$defs/MoneyAmountSchema",
+          "default": 0
         },
         "currency": {
-          "default": "TND",
+          "description": "Defaults to the event pricing currency when omitted.",
           "maxLength": 3,
           "minLength": 3,
           "type": "string"
@@ -2312,10 +2679,8 @@
           "type": "boolean"
         },
         "companionPrice": {
-          "default": 0,
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer"
+          "$ref": "#/$defs/MoneyAmountSchema",
+          "default": 0
         }
       },
       "required": [
@@ -2387,13 +2752,11 @@
           ]
         },
         "price": {
-          "default": 0,
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer"
+          "$ref": "#/$defs/MoneyAmountSchema",
+          "default": 0
         },
         "currency": {
-          "default": "TND",
+          "description": "Defaults to the event pricing currency when omitted.",
           "maxLength": 3,
           "minLength": 3,
           "type": "string"
@@ -2494,10 +2857,8 @@
           "type": "boolean"
         },
         "companionPrice": {
-          "default": 0,
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer"
+          "$ref": "#/$defs/MoneyAmountSchema",
+          "default": 0
         }
       },
       "required": [
@@ -2526,9 +2887,13 @@
           "type": "string"
         },
         "description": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "maxCapacity": {
@@ -2573,9 +2938,7 @@
         "basePrice": {
           "anyOf": [
             {
-              "maximum": 9007199254740991,
-              "minimum": 0,
-              "type": "integer"
+              "$ref": "#/$defs/MoneyAmountSchema"
             },
             {
               "type": "null"
@@ -2613,15 +2976,23 @@
           "$ref": "#/$defs/FormSchemaJsonSchema"
         },
         "successTitle": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "successMessage": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "successTranslations": {
@@ -2656,7 +3027,7 @@
         },
         "email": {
           "format": "email",
-          "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+          "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
           "type": "string"
         },
         "firstName": {
@@ -2725,7 +3096,7 @@
         },
         "email": {
           "format": "email",
-          "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+          "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
           "type": "string"
         },
         "firstName": {
@@ -2872,7 +3243,7 @@
       "properties": {
         "email": {
           "format": "email",
-          "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+          "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
           "type": "string"
         },
         "password": {
@@ -3026,6 +3397,97 @@
       },
       "type": "object"
     },
+    "DeleteUnusedThemeParamSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "eventId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "themeId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "eventId",
+        "themeId"
+      ],
+      "type": "object"
+    },
+    "DraftEmailPreviewResponseSchema": {
+      "properties": {
+        "subject": {
+          "type": "string"
+        },
+        "html": {
+          "type": "string"
+        },
+        "plain": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject",
+        "html",
+        "plain"
+      ],
+      "type": "object"
+    },
+    "DraftEmailPreviewSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "subject": {
+          "maxLength": 500,
+          "minLength": 1,
+          "type": "string"
+        },
+        "content": {
+          "$ref": "#/$defs/TiptapDocumentSchema"
+        },
+        "language": {
+          "$ref": "#/$defs/LanguageCodeSchema"
+        }
+      },
+      "required": [
+        "subject",
+        "content"
+      ],
+      "type": "object"
+    },
+    "DraftEmailTestSendSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "subject": {
+          "maxLength": 500,
+          "minLength": 1,
+          "type": "string"
+        },
+        "content": {
+          "$ref": "#/$defs/TiptapDocumentSchema"
+        },
+        "language": {
+          "$ref": "#/$defs/LanguageCodeSchema"
+        },
+        "recipientEmail": {
+          "format": "email",
+          "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+          "type": "string"
+        },
+        "recipientName": {
+          "maxLength": 200,
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject",
+        "content",
+        "recipientEmail"
+      ],
+      "type": "object"
+    },
     "DroppedAccessItemSchema": {
       "properties": {
         "accessId": {
@@ -3072,6 +3534,25 @@
       },
       "type": "object"
     },
+    "DuplicateFormSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "targetEventId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "targetEventId"
+      ],
+      "type": "object"
+    },
     "EditAbstractSchema": {
       "additionalProperties": false,
       "properties": {
@@ -3092,7 +3573,7 @@
         },
         "authorEmail": {
           "format": "email",
-          "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+          "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
           "type": "string"
         },
         "authorPhone": {
@@ -3280,15 +3761,23 @@
       "type": "object"
     },
     "EmailFontSizeSchema": {
-      "type": [
-        "string",
-        "number"
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        }
       ]
     },
     "EmailLineHeightSchema": {
-      "type": [
-        "string",
-        "number"
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        }
       ]
     },
     "EmailStatusSchema": {
@@ -3337,6 +3826,15 @@
       ],
       "type": "string"
     },
+    "EmailVariablesQuerySchema": {
+      "additionalProperties": false,
+      "properties": {
+        "language": {
+          "$ref": "#/$defs/LanguageCodeSchema"
+        }
+      },
+      "type": "object"
+    },
     "EmbeddedPricingRuleSchema": {
       "additionalProperties": false,
       "properties": {
@@ -3383,9 +3881,7 @@
           "type": "string"
         },
         "price": {
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer"
+          "$ref": "#/$defs/MoneyAmountSchema"
         },
         "active": {
           "default": true,
@@ -3399,6 +3895,131 @@
         "price"
       ],
       "type": "object"
+    },
+    "ErrorCodeSchema": {
+      "enum": [
+        "NETWORKING_MFA_REQUIRED",
+        "NETWORKING_AUTH_UNAVAILABLE",
+        "NETWORKING_BADGE_INVALID",
+        "NETWORKING_BADGE_WRONG_PARTICIPANT",
+        "NETWORKING_MEETING_CHECKIN_UNCONFIRMED",
+        "NETWORKING_MEETING_CHECKIN_UNAVAILABLE",
+        "NETWORKING_NOT_ELIGIBLE",
+        "NETWORKING_CLOSED",
+        "NETWORKING_FEATURE_DISABLED",
+        "NETWORKING_CONNECTION_REQUIRED",
+        "NETWORKING_SLOT_INVALID",
+        "NETWORKING_SLOT_CONFLICT",
+        "NETWORKING_MEETING_LOCKED",
+        "NETWORKING_MEETING_CHECKED_IN",
+        "NETWORKING_RATE_LIMITED",
+        "NETWORKING_CONFIG_STALE",
+        "NETWORKING_VALIDATION",
+        "NETWORKING_SESSION_EXPIRED",
+        "NETWORKING_NOT_FOUND",
+        "NETWORKING_ACTION_NOT_ALLOWED",
+        "NETWORKING_MFA_ENFORCED",
+        "NETWORKING_CONSENT_REQUIRED",
+        "NETWORKING_BUSY",
+        "NETWORKING_RETENTION_ENDED",
+        "NETWORKING_PROFILE_WITHDRAWN",
+        "AUTH_1001",
+        "AUTH_1002",
+        "AUTH_1004",
+        "AUTH_1005",
+        "AUTH_1006",
+        "VAL_2001",
+        "RES_3001",
+        "RES_3002",
+        "RES_3003",
+        "RATE_4001",
+        "SRV_5001",
+        "SRV_5002",
+        "SRV_5003",
+        "PRC_6001",
+        "PRC_6002",
+        "PRC_6003",
+        "PRC_6004",
+        "PRC_6005",
+        "PRC_6006",
+        "PRC_6007",
+        "PRC_6008",
+        "ACC_7001",
+        "ACC_7002",
+        "ACC_7004",
+        "ACC_7005",
+        "ACC_7006",
+        "ACC_7007",
+        "ACC_7008",
+        "ACC_7009",
+        "ACC_7010",
+        "ACC_7011",
+        "ACC_7012",
+        "EVT_8000",
+        "EVT_8001",
+        "EVT_8002",
+        "EVT_8003",
+        "REG_8001",
+        "REG_8002",
+        "REG_8003",
+        "REG_8004",
+        "REG_8005",
+        "REG_8006",
+        "REG_8007",
+        "REG_8008",
+        "REG_8009",
+        "REG_8010",
+        "REG_8011",
+        "REG_8012",
+        "REG_8013",
+        "REG_8014",
+        "REG_8015",
+        "FRM_9001",
+        "FRM_9002",
+        "FRM_9003",
+        "FRM_9004",
+        "FRM_9005",
+        "FRM_9006",
+        "FIL_10001",
+        "FIL_10002",
+        "RPT_11001",
+        "RPT_11002",
+        "RPT_11003",
+        "EXPORT_BUSY",
+        "STT_12001",
+        "STT_12002",
+        "DEP_13001",
+        "SPO_14001",
+        "SPO_14002",
+        "SPO_14003",
+        "SPO_14004",
+        "SPO_14005",
+        "EML_15001",
+        "EML_15002",
+        "CON_16001",
+        "CHK_17001",
+        "CHK_17003",
+        "CHK_17004",
+        "CHK_17005",
+        "CHK_17006",
+        "ABS_18001",
+        "ABS_18002",
+        "ABS_18003",
+        "ABS_18004",
+        "ABS_18005",
+        "ABS_18006",
+        "ABS_18007",
+        "ABS_18008",
+        "ABS_18009",
+        "ABS_18010",
+        "ABS_18011",
+        "INV_19001",
+        "INV_19002",
+        "INV_19003",
+        "CLT_20001",
+        "CLT_20002"
+      ],
+      "type": "string"
     },
     "EventAccessIdParamSchema": {
       "additionalProperties": false,
@@ -3429,15 +4050,23 @@
           "type": "string"
         },
         "description": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "location": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "startsAt": {
@@ -3471,9 +4100,13 @@
           "type": "string"
         },
         "maxCapacity": {
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "registeredCount": {
@@ -3517,9 +4150,13 @@
           "type": "boolean"
         },
         "groupLabel": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "allowCompanion": {
@@ -3605,15 +4242,23 @@
           "type": "string"
         },
         "description": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "location": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "startsAt": {
@@ -3647,9 +4292,13 @@
           "type": "string"
         },
         "maxCapacity": {
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "registeredCount": {
@@ -3693,9 +4342,13 @@
           "type": "boolean"
         },
         "groupLabel": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "allowCompanion": {
@@ -3756,7 +4409,7 @@
         },
         "generatedAt": {
           "format": "date-time",
-          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
           "type": "string"
         },
         "registrations": {
@@ -3868,6 +4521,163 @@
       ],
       "type": "object"
     },
+    "EventEmailLogResponseSchema": {
+      "properties": {
+        "abstractTrigger": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "enum": [
+            "automatic",
+            "networking",
+            "manual"
+          ],
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "trigger": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "templateName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recipientEmail": {
+          "type": "string"
+        },
+        "recipientName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "errorMessage": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "queuedAt": {
+          "type": "string"
+        },
+        "sentAt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "deliveredAt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "openedAt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clickedAt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bouncedAt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "failedAt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "abstractTrigger",
+        "origin",
+        "id",
+        "subject",
+        "status",
+        "trigger",
+        "templateName",
+        "recipientEmail",
+        "recipientName",
+        "errorMessage",
+        "queuedAt",
+        "sentAt",
+        "deliveredAt",
+        "openedAt",
+        "clickedAt",
+        "bouncedAt",
+        "failedAt"
+      ],
+      "type": "object"
+    },
     "EventIdParamSchema": {
       "additionalProperties": false,
       "properties": {
@@ -3879,6 +4689,183 @@
       },
       "required": [
         "id"
+      ],
+      "type": "object"
+    },
+    "EventListPaginationMetaSchema": {
+      "properties": {
+        "page": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "limit": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "total": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "totalPages": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "hasNext": {
+          "type": "boolean"
+        },
+        "hasPrev": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "page",
+        "limit",
+        "total",
+        "totalPages",
+        "hasNext",
+        "hasPrev"
+      ],
+      "type": "object"
+    },
+    "EventListResponseSchema": {
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/$defs/EventListRowResponseSchema"
+          },
+          "type": "array"
+        },
+        "meta": {
+          "$ref": "#/$defs/EventListPaginationMetaSchema"
+        }
+      },
+      "required": [
+        "data",
+        "meta"
+      ],
+      "type": "object"
+    },
+    "EventListRowResponseSchema": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "maxCapacity": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "registeredCount": {
+          "type": "number"
+        },
+        "startDate": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "endDate": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "location": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "enum": [
+            "OPEN",
+            "CLOSED",
+            "ARCHIVED"
+          ],
+          "type": "string"
+        },
+        "bannerUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "client": {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "clientId",
+        "name",
+        "slug",
+        "description",
+        "maxCapacity",
+        "registeredCount",
+        "startDate",
+        "endDate",
+        "location",
+        "status",
+        "bannerUrl",
+        "createdAt",
+        "updatedAt",
+        "client"
       ],
       "type": "object"
     },
@@ -3903,30 +4890,46 @@
           "type": "boolean"
         },
         "onlinePaymentUrl": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "cashPaymentEnabled": {
           "type": "boolean"
         },
         "bankName": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "bankAccountName": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "bankAccountNumber": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "createdAt": {
@@ -4038,12 +5041,12 @@
       "properties": {
         "startDate": {
           "format": "date-time",
-          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
           "type": "string"
         },
         "endDate": {
           "format": "date-time",
-          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
           "type": "string"
         },
         "format": {
@@ -4065,6 +5068,9 @@
           "additionalProperties": false,
           "default": {},
           "properties": {
+            "role": {
+              "$ref": "#/$defs/RegistrationRoleSchema"
+            },
             "search": {
               "maxLength": 200,
               "type": "string"
@@ -4092,12 +5098,12 @@
             },
             "startDate": {
               "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
               "type": "string"
             },
             "endDate": {
               "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
               "type": "string"
             }
           },
@@ -4187,14 +5193,17 @@
     "ExportRegistrationsQuerySchema": {
       "additionalProperties": false,
       "properties": {
+        "role": {
+          "$ref": "#/$defs/RegistrationRoleSchema"
+        },
         "startDate": {
           "format": "date-time",
-          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
           "type": "string"
         },
         "endDate": {
           "format": "date-time",
-          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
           "type": "string"
         },
         "format": {
@@ -4265,10 +5274,16 @@
           "$ref": "#/$defs/ConditionOperatorSchema"
         },
         "value": {
-          "type": [
-            "string",
-            "number",
-            "boolean"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
           ]
         }
       },
@@ -4525,7 +5540,7 @@
         },
         "generatedAt": {
           "format": "date-time",
-          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
           "type": "string"
         },
         "dateRange": {
@@ -4534,7 +5549,7 @@
               "anyOf": [
                 {
                   "format": "date-time",
-                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
                   "type": "string"
                 },
                 {
@@ -4546,7 +5561,7 @@
               "anyOf": [
                 {
                   "format": "date-time",
-                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
                   "type": "string"
                 },
                 {
@@ -4912,6 +5927,26 @@
       ],
       "type": "object"
     },
+    "GetEmailLogParamSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "eventId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "emailLogId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "eventId",
+        "emailLogId"
+      ],
+      "type": "object"
+    },
     "GetGroupedAccessBodySchema": {
       "additionalProperties": false,
       "properties": {
@@ -4951,15 +5986,23 @@
           "type": "string"
         },
         "description": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "location": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "startsAt": {
@@ -4993,9 +6036,13 @@
           "type": "string"
         },
         "maxCapacity": {
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "registeredCount": {
@@ -5039,9 +6086,13 @@
           "type": "boolean"
         },
         "groupLabel": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "allowCompanion": {
@@ -5078,9 +6129,13 @@
           "type": "array"
         },
         "spotsRemaining": {
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "isFull": {
@@ -5418,6 +6473,14 @@
     "ListEmailTemplatesQuerySchema": {
       "additionalProperties": false,
       "properties": {
+        "scope": {
+          "enum": [
+            "event",
+            "client",
+            "all"
+          ],
+          "type": "string"
+        },
         "page": {
           "default": 1,
           "maximum": 9007199254740991,
@@ -5589,6 +6652,21 @@
     "ListRegistrationsQuerySchema": {
       "additionalProperties": false,
       "properties": {
+        "sort": {
+          "enum": [
+            "name",
+            "amount",
+            "date"
+          ],
+          "type": "string"
+        },
+        "sortOrder": {
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "type": "string"
+        },
         "page": {
           "default": 1,
           "maximum": 9007199254740991,
@@ -5709,6 +6787,40 @@
       ],
       "type": "object"
     },
+    "MoneyAmountSchema": {
+      "maximum": 900000000000,
+      "minimum": 0,
+      "type": "number"
+    },
+    "MoneySnapshotSchema": {
+      "properties": {
+        "currency": {
+          "type": "string"
+        },
+        "scale": {
+          "maximum": 4,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "amountsMinor": {
+          "additionalProperties": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+          },
+          "propertyNames": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "currency",
+        "scale",
+        "amountsMinor"
+      ],
+      "type": "object"
+    },
     "NetworkingAdminAnalyticsResponseSchema": {
       "properties": {
         "emailSent": {
@@ -5797,6 +6909,11 @@
         },
         "pendingMeetings": {
           "type": "number"
+        },
+        "awaitingAllocationCount": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
         },
         "tableOccupancyRate": {
           "type": "number"
@@ -5914,6 +7031,11 @@
         },
         "reports": {
           "type": "number"
+        },
+        "openReports": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
         },
         "hourlyActivity": {
           "items": {
@@ -6047,6 +7169,7 @@
         "cancelledMeetings",
         "noShowMeetings",
         "pendingMeetings",
+        "awaitingAllocationCount",
         "tableOccupancyRate",
         "tableUsage",
         "peakSlots",
@@ -6055,6 +7178,7 @@
         "engagementTenSwipesRate",
         "punctuality",
         "reports",
+        "openReports",
         "timeSeries",
         "sectors",
         "engagement"
@@ -6075,13 +7199,27 @@
               "actorId": {
                 "type": "string"
               },
+              "actorName": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "action": {
                 "type": "string"
               },
               "targetId": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "data": {
@@ -6101,6 +7239,7 @@
               "id",
               "eventId",
               "actorId",
+              "actorName",
               "action",
               "targetId",
               "data",
@@ -6161,9 +7300,13 @@
                 "type": "string"
               },
               "tableId": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "eventId": {
@@ -6206,9 +7349,13 @@
                 ]
               },
               "proposalBy": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "revision": {
@@ -6241,7 +7388,7 @@
               "requester": {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/NetworkingAdminUpdateProfileResponseSchema"
+                    "$ref": "#/$defs/NetworkingPublicMeResponseSchema"
                   },
                   {
                     "type": "null"
@@ -6251,7 +7398,7 @@
               "recipient": {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/NetworkingAdminUpdateProfileResponseSchema"
+                    "$ref": "#/$defs/NetworkingPublicMeResponseSchema"
                   },
                   {
                     "type": "null"
@@ -6298,15 +7445,23 @@
                         "type": "number"
                       },
                       "spaceId": {
-                        "type": [
-                          "string",
-                          "null"
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
                         ]
                       },
                       "ownerProfileId": {
-                        "type": [
-                          "string",
-                          "null"
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
                         ]
                       },
                       "space": {
@@ -6636,45 +7791,73 @@
           "type": "array"
         },
         "requiredAccessId": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "opensAt": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "closesAt": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "logoUrl": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "supportEmail": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "supportPhone": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "accessPlanUrl": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "revision": {
@@ -6763,6 +7946,260 @@
       ],
       "type": "object"
     },
+    "NetworkingAdminMeetingResponseSchema": {
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "PENDING",
+            "COMPLETED",
+            "PENDING_ALLOCATION",
+            "CONFIRMED",
+            "DECLINED",
+            "CANCELLED",
+            "EXPIRED",
+            "NO_SHOW"
+          ],
+          "type": "string"
+        },
+        "tableId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "startsAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "requesterId": {
+          "type": "string"
+        },
+        "recipientId": {
+          "type": "string"
+        },
+        "endsAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "cancellationNote": {
+          "type": "string"
+        },
+        "proposedStartsAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "proposalBy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "type": "number"
+        },
+        "requesterCheckedInAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recipientCheckedInAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requester": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NetworkingPublicMeResponseSchema"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recipient": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NetworkingPublicMeResponseSchema"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "table": {
+          "anyOf": [
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "active": {
+                  "type": "boolean"
+                },
+                "createdAt": {
+                  "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "location": {
+                  "type": "string"
+                },
+                "eventId": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "TABLE",
+                    "STAND"
+                  ],
+                  "type": "string"
+                },
+                "capacity": {
+                  "type": "number"
+                },
+                "spaceId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ownerProfileId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "space": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/NetworkingAdminCreateSpaceResponseSchema"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "active",
+                "createdAt",
+                "updatedAt",
+                "location",
+                "eventId",
+                "kind",
+                "capacity",
+                "spaceId",
+                "ownerProfileId",
+                "space"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "createdAt",
+        "updatedAt",
+        "status",
+        "tableId",
+        "eventId",
+        "expiresAt",
+        "startsAt",
+        "requesterId",
+        "recipientId",
+        "endsAt",
+        "cancellationNote",
+        "proposedStartsAt",
+        "proposalBy",
+        "revision",
+        "requesterCheckedInAt",
+        "recipientCheckedInAt",
+        "requester",
+        "recipient",
+        "table"
+      ],
+      "type": "object"
+    },
     "NetworkingAdminMeetingUpdateSchema": {
       "additionalProperties": false,
       "properties": {
@@ -6771,9 +8208,18 @@
             "ASSIGN",
             "CANCEL",
             "COMPLETED",
-            "NO_SHOW"
+            "NO_SHOW",
+            "RESTORE"
           ],
           "type": "string"
+        },
+        "notify": {
+          "type": "boolean"
+        },
+        "expectedRevision": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
         },
         "tableId": {
           "format": "uuid",
@@ -6790,7 +8236,7 @@
       "properties": {
         "items": {
           "items": {
-            "$ref": "#/$defs/NetworkingAdminUpdateMeetingResponseSchema"
+            "$ref": "#/$defs/NetworkingAdminMeetingResponseSchema"
           },
           "type": "array"
         },
@@ -6831,9 +8277,13 @@
           "type": "string"
         },
         "note": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "profileId": {
@@ -6843,18 +8293,26 @@
           "type": "string"
         },
         "messageId": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "reason": {
           "type": "string"
         },
         "resolvedBy": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "resolvedAt": {
@@ -6868,6 +8326,9 @@
               "type": "null"
             }
           ]
+        },
+        "accessUndoId": {
+          "type": "string"
         }
       },
       "required": [
@@ -6909,6 +8370,237 @@
       },
       "required": [
         "available"
+      ],
+      "type": "object"
+    },
+    "NetworkingAdminProfileResponseSchema": {
+      "properties": {
+        "meetingsEnabled": {
+          "type": "boolean"
+        },
+        "company": {
+          "type": "string"
+        },
+        "jobTitle": {
+          "type": "string"
+        },
+        "sector": {
+          "type": "string"
+        },
+        "bio": {
+          "type": "string"
+        },
+        "city": {
+          "type": "string"
+        },
+        "country": {
+          "type": "string"
+        },
+        "website": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "photoUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "interests": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "offers": {
+          "type": "string"
+        },
+        "seeks": {
+          "type": "string"
+        },
+        "consent": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "firstName": {
+          "type": "string"
+        },
+        "lastName": {
+          "type": "string"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "lastActiveAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "erasedAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "featured": {
+          "type": "boolean"
+        },
+        "standTableId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "email": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "PENDING",
+            "ACTIVE",
+            "SUSPENDED",
+            "EXCLUDED"
+          ],
+          "type": "string"
+        },
+        "registrationId": {
+          "type": "string"
+        },
+        "emailPreference": {
+          "enum": [
+            "IMMEDIATE",
+            "DAILY",
+            "OFF"
+          ],
+          "type": "string"
+        },
+        "language": {
+          "enum": [
+            "fr",
+            "en",
+            "ar"
+          ],
+          "type": "string"
+        },
+        "availabilitySet": {
+          "type": "boolean"
+        },
+        "consentAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "withdrawnAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "overrides": {
+          "additionalProperties": {},
+          "propertyNames": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "matchCount": {
+          "type": "number"
+        },
+        "meetingCount": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "meetingsEnabled",
+        "company",
+        "jobTitle",
+        "sector",
+        "bio",
+        "city",
+        "country",
+        "website",
+        "photoUrl",
+        "interests",
+        "offers",
+        "seeks",
+        "consent",
+        "id",
+        "createdAt",
+        "updatedAt",
+        "eventId",
+        "firstName",
+        "lastName",
+        "visible",
+        "lastActiveAt",
+        "erasedAt",
+        "featured",
+        "standTableId",
+        "email",
+        "status",
+        "registrationId",
+        "emailPreference",
+        "language",
+        "availabilitySet",
+        "consentAt",
+        "withdrawnAt",
+        "overrides",
+        "matchCount",
+        "meetingCount"
       ],
       "type": "object"
     },
@@ -6994,6 +8686,7 @@
           "type": "boolean"
         },
         "status": {
+          "description": "Access revocation and status notifications run only when the status changes.",
           "enum": [
             "PENDING",
             "ACTIVE",
@@ -7003,6 +8696,9 @@
           "type": "string"
         },
         "featured": {
+          "type": "boolean"
+        },
+        "notify": {
           "type": "boolean"
         },
         "standTableId": {
@@ -7024,223 +8720,7 @@
       "properties": {
         "items": {
           "items": {
-            "properties": {
-              "meetingsEnabled": {
-                "type": "boolean"
-              },
-              "company": {
-                "type": "string"
-              },
-              "jobTitle": {
-                "type": "string"
-              },
-              "sector": {
-                "type": "string"
-              },
-              "bio": {
-                "type": "string"
-              },
-              "city": {
-                "type": "string"
-              },
-              "country": {
-                "type": "string"
-              },
-              "website": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "photoUrl": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "interests": {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "offers": {
-                "type": "string"
-              },
-              "seeks": {
-                "type": "string"
-              },
-              "consent": {
-                "type": "boolean"
-              },
-              "id": {
-                "type": "string"
-              },
-              "createdAt": {
-                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
-                "format": "date-time",
-                "type": "string"
-              },
-              "updatedAt": {
-                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
-                "format": "date-time",
-                "type": "string"
-              },
-              "eventId": {
-                "type": "string"
-              },
-              "firstName": {
-                "type": "string"
-              },
-              "lastName": {
-                "type": "string"
-              },
-              "visible": {
-                "type": "boolean"
-              },
-              "lastActiveAt": {
-                "anyOf": [
-                  {
-                    "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
-                    "format": "date-time",
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "erasedAt": {
-                "anyOf": [
-                  {
-                    "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
-                    "format": "date-time",
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "featured": {
-                "type": "boolean"
-              },
-              "standTableId": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "email": {
-                "type": "string"
-              },
-              "status": {
-                "enum": [
-                  "PENDING",
-                  "ACTIVE",
-                  "SUSPENDED",
-                  "EXCLUDED"
-                ],
-                "type": "string"
-              },
-              "registrationId": {
-                "type": "string"
-              },
-              "emailPreference": {
-                "enum": [
-                  "IMMEDIATE",
-                  "DAILY",
-                  "OFF"
-                ],
-                "type": "string"
-              },
-              "language": {
-                "enum": [
-                  "fr",
-                  "en",
-                  "ar"
-                ],
-                "type": "string"
-              },
-              "availabilitySet": {
-                "type": "boolean"
-              },
-              "consentAt": {
-                "anyOf": [
-                  {
-                    "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
-                    "format": "date-time",
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "withdrawnAt": {
-                "anyOf": [
-                  {
-                    "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
-                    "format": "date-time",
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "overrides": {
-                "additionalProperties": {},
-                "propertyNames": {
-                  "type": "string"
-                },
-                "type": "object"
-              },
-              "matchCount": {
-                "type": "number"
-              },
-              "meetingCount": {
-                "type": "number"
-              }
-            },
-            "required": [
-              "meetingsEnabled",
-              "company",
-              "jobTitle",
-              "sector",
-              "bio",
-              "city",
-              "country",
-              "website",
-              "photoUrl",
-              "interests",
-              "offers",
-              "seeks",
-              "consent",
-              "id",
-              "createdAt",
-              "updatedAt",
-              "eventId",
-              "firstName",
-              "lastName",
-              "visible",
-              "lastActiveAt",
-              "erasedAt",
-              "featured",
-              "standTableId",
-              "email",
-              "status",
-              "registrationId",
-              "emailPreference",
-              "language",
-              "availabilitySet",
-              "consentAt",
-              "withdrawnAt",
-              "overrides",
-              "matchCount",
-              "meetingCount"
-            ],
-            "type": "object"
+            "$ref": "#/$defs/NetworkingAdminProfileResponseSchema"
           },
           "type": "array"
         },
@@ -7251,6 +8731,26 @@
       "required": [
         "items",
         "total"
+      ],
+      "type": "object"
+    },
+    "NetworkingAdminRecordParamSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "eventId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "id": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "eventId",
+        "id"
       ],
       "type": "object"
     },
@@ -7289,123 +8789,149 @@
     "NetworkingAdminRemoveTableResponseSchema": {
       "$ref": "#/$defs/NetworkingAdminRemoveSpaceResponseSchema"
     },
+    "NetworkingAdminReportResponseSchema": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "OPEN",
+            "RESOLVED",
+            "DISMISSED"
+          ],
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "profileId": {
+          "type": "string"
+        },
+        "reporterId": {
+          "type": "string"
+        },
+        "messageId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "resolvedBy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resolvedAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reporter": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NetworkingPublicMeResponseSchema"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NetworkingPublicMeResponseSchema"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NetworkingPublicMessageResponseSchema"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resolvedByName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "createdAt",
+        "updatedAt",
+        "status",
+        "eventId",
+        "note",
+        "profileId",
+        "reporterId",
+        "messageId",
+        "reason",
+        "resolvedBy",
+        "resolvedAt",
+        "reporter",
+        "profile",
+        "message",
+        "resolvedByName"
+      ],
+      "type": "object"
+    },
     "NetworkingAdminReportsResponseSchema": {
       "properties": {
         "items": {
           "items": {
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "createdAt": {
-                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
-                "format": "date-time",
-                "type": "string"
-              },
-              "updatedAt": {
-                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
-                "format": "date-time",
-                "type": "string"
-              },
-              "status": {
-                "enum": [
-                  "OPEN",
-                  "RESOLVED",
-                  "DISMISSED"
-                ],
-                "type": "string"
-              },
-              "eventId": {
-                "type": "string"
-              },
-              "note": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "profileId": {
-                "type": "string"
-              },
-              "reporterId": {
-                "type": "string"
-              },
-              "messageId": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "reason": {
-                "type": "string"
-              },
-              "resolvedBy": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "resolvedAt": {
-                "anyOf": [
-                  {
-                    "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
-                    "format": "date-time",
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "reporter": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/NetworkingAdminUpdateProfileResponseSchema"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "profile": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/NetworkingAdminUpdateProfileResponseSchema"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "message": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/NetworkingPublicMessageResponseSchema"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "id",
-              "createdAt",
-              "updatedAt",
-              "status",
-              "eventId",
-              "note",
-              "profileId",
-              "reporterId",
-              "messageId",
-              "reason",
-              "resolvedBy",
-              "resolvedAt",
-              "reporter",
-              "profile",
-              "message"
-            ],
-            "type": "object"
+            "$ref": "#/$defs/NetworkingAdminReportResponseSchema"
           },
           "type": "array"
         },
@@ -7416,6 +8942,28 @@
       "required": [
         "items",
         "total"
+      ],
+      "type": "object"
+    },
+    "NetworkingAdminRestoreAccessResponseSchema": {
+      "properties": {
+        "profile": {
+          "$ref": "#/$defs/NetworkingPublicMeResponseSchema"
+        },
+        "restoredMeetings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "alreadyRestored": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "profile",
+        "restoredMeetings",
+        "alreadyRestored"
       ],
       "type": "object"
     },
@@ -7492,9 +9040,13 @@
     "NetworkingAdminSyncResponseSchema": {
       "properties": {
         "runId": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "status": {
@@ -7545,9 +9097,13 @@
           ]
         },
         "lastError": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -7606,15 +9162,23 @@
           "type": "number"
         },
         "spaceId": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "ownerProfileId": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "representativeIds": {
@@ -7685,15 +9249,23 @@
                 "type": "number"
               },
               "spaceId": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "ownerProfileId": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "space": {
@@ -7773,242 +9345,7 @@
       "$ref": "#/$defs/NetworkingAdminConfigResponseSchema"
     },
     "NetworkingAdminUpdateMeetingResponseSchema": {
-      "properties": {
-        "message": {
-          "type": "string"
-        },
-        "id": {
-          "type": "string"
-        },
-        "createdAt": {
-          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
-          "format": "date-time",
-          "type": "string"
-        },
-        "updatedAt": {
-          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
-          "format": "date-time",
-          "type": "string"
-        },
-        "status": {
-          "enum": [
-            "PENDING",
-            "COMPLETED",
-            "PENDING_ALLOCATION",
-            "CONFIRMED",
-            "DECLINED",
-            "CANCELLED",
-            "EXPIRED",
-            "NO_SHOW"
-          ],
-          "type": "string"
-        },
-        "tableId": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "eventId": {
-          "type": "string"
-        },
-        "expiresAt": {
-          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
-          "format": "date-time",
-          "type": "string"
-        },
-        "startsAt": {
-          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
-          "format": "date-time",
-          "type": "string"
-        },
-        "requesterId": {
-          "type": "string"
-        },
-        "recipientId": {
-          "type": "string"
-        },
-        "endsAt": {
-          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
-          "format": "date-time",
-          "type": "string"
-        },
-        "cancellationNote": {
-          "type": "string"
-        },
-        "proposedStartsAt": {
-          "anyOf": [
-            {
-              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
-              "format": "date-time",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "proposalBy": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "revision": {
-          "type": "number"
-        },
-        "requesterCheckedInAt": {
-          "anyOf": [
-            {
-              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
-              "format": "date-time",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "recipientCheckedInAt": {
-          "anyOf": [
-            {
-              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
-              "format": "date-time",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "requester": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NetworkingAdminUpdateProfileResponseSchema"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "recipient": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NetworkingAdminUpdateProfileResponseSchema"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "table": {
-          "anyOf": [
-            {
-              "properties": {
-                "id": {
-                  "type": "string"
-                },
-                "name": {
-                  "type": "string"
-                },
-                "active": {
-                  "type": "boolean"
-                },
-                "createdAt": {
-                  "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
-                  "format": "date-time",
-                  "type": "string"
-                },
-                "updatedAt": {
-                  "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
-                  "format": "date-time",
-                  "type": "string"
-                },
-                "location": {
-                  "type": "string"
-                },
-                "eventId": {
-                  "type": "string"
-                },
-                "kind": {
-                  "enum": [
-                    "TABLE",
-                    "STAND"
-                  ],
-                  "type": "string"
-                },
-                "capacity": {
-                  "type": "number"
-                },
-                "spaceId": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "ownerProfileId": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "space": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/$defs/NetworkingAdminCreateSpaceResponseSchema"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "id",
-                "name",
-                "active",
-                "createdAt",
-                "updatedAt",
-                "location",
-                "eventId",
-                "kind",
-                "capacity",
-                "spaceId",
-                "ownerProfileId",
-                "space"
-              ],
-              "type": "object"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "message",
-        "id",
-        "createdAt",
-        "updatedAt",
-        "status",
-        "tableId",
-        "eventId",
-        "expiresAt",
-        "startsAt",
-        "requesterId",
-        "recipientId",
-        "endsAt",
-        "cancellationNote",
-        "proposedStartsAt",
-        "proposalBy",
-        "revision",
-        "requesterCheckedInAt",
-        "recipientCheckedInAt",
-        "requester",
-        "recipient",
-        "table"
-      ],
-      "type": "object"
+      "$ref": "#/$defs/NetworkingAdminMeetingResponseSchema"
     },
     "NetworkingAdminUpdateProfileResponseSchema": {
       "properties": {
@@ -8034,15 +9371,23 @@
           "type": "string"
         },
         "website": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "photoUrl": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "interests": {
@@ -8113,9 +9458,13 @@
           "type": "boolean"
         },
         "standTableId": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "email": {
@@ -8182,6 +9531,9 @@
             "type": "string"
           },
           "type": "object"
+        },
+        "accessUndoId": {
+          "type": "string"
         }
       },
       "required": [
@@ -8251,9 +9603,13 @@
           "$ref": "#/$defs/NetworkingPublicProfileResponseSchema"
         },
         "accessId": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -8270,7 +9626,7 @@
         "slots": {
           "items": {
             "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
             "type": "string"
           },
           "maxItems": 20000,
@@ -8441,7 +9797,7 @@
           "anyOf": [
             {
               "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
               "type": "string"
             },
             {
@@ -8453,7 +9809,7 @@
           "anyOf": [
             {
               "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
               "type": "string"
             },
             {
@@ -8558,7 +9914,7 @@
           "anyOf": [
             {
               "format": "email",
-              "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+              "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
               "type": "string"
             },
             {
@@ -8656,7 +10012,7 @@
           "default": [],
           "items": {
             "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
             "type": "string"
           },
           "maxItems": 20000,
@@ -8786,7 +10142,7 @@
         },
         "before": {
           "format": "date-time",
-          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
           "type": "string"
         },
         "beforeId": {
@@ -8816,7 +10172,7 @@
         },
         "startsAt": {
           "format": "date-time",
-          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
           "type": "string"
         },
         "message": {
@@ -8844,7 +10200,7 @@
         },
         "startsAt": {
           "format": "date-time",
-          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
           "type": "string"
         },
         "message": {
@@ -8975,7 +10331,7 @@
         "email": {
           "format": "email",
           "maxLength": 254,
-          "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+          "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
           "type": "string"
         }
       },
@@ -9016,7 +10372,7 @@
         },
         "at": {
           "format": "date-time",
-          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
           "type": "string"
         },
         "id": {
@@ -9309,9 +10665,13 @@
           "type": "string"
         },
         "tableId": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "eventId": {
@@ -9354,9 +10714,13 @@
           ]
         },
         "proposalBy": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "revision": {
@@ -9446,15 +10810,23 @@
                   "type": "number"
                 },
                 "spaceId": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "ownerProfileId": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "space": {
@@ -9539,15 +10911,23 @@
               "type": "string"
             },
             "location": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "bannerUrl": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             }
           },
@@ -9748,45 +11128,73 @@
               "type": "array"
             },
             "requiredAccessId": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "opensAt": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "closesAt": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "logoUrl": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "supportEmail": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "supportPhone": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "accessPlanUrl": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             }
           },
@@ -9818,9 +11226,13 @@
           "type": "object"
         },
         "pushPublicKey": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "networkingUrl": {
@@ -9926,9 +11338,13 @@
           "type": "array"
         },
         "nextCursor": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -10054,9 +11470,13 @@
           "type": "array"
         },
         "nextCursor": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -10092,9 +11512,13 @@
           "type": "array"
         },
         "nextCursor": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -10116,7 +11540,227 @@
       "type": "object"
     },
     "NetworkingPublicMeResponseSchema": {
-      "$ref": "#/$defs/NetworkingAdminUpdateProfileResponseSchema"
+      "properties": {
+        "meetingsEnabled": {
+          "type": "boolean"
+        },
+        "company": {
+          "type": "string"
+        },
+        "jobTitle": {
+          "type": "string"
+        },
+        "sector": {
+          "type": "string"
+        },
+        "bio": {
+          "type": "string"
+        },
+        "city": {
+          "type": "string"
+        },
+        "country": {
+          "type": "string"
+        },
+        "website": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "photoUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "interests": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "offers": {
+          "type": "string"
+        },
+        "seeks": {
+          "type": "string"
+        },
+        "consent": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "firstName": {
+          "type": "string"
+        },
+        "lastName": {
+          "type": "string"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "lastActiveAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "erasedAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "featured": {
+          "type": "boolean"
+        },
+        "standTableId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "email": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "PENDING",
+            "ACTIVE",
+            "SUSPENDED",
+            "EXCLUDED"
+          ],
+          "type": "string"
+        },
+        "registrationId": {
+          "type": "string"
+        },
+        "emailPreference": {
+          "enum": [
+            "IMMEDIATE",
+            "DAILY",
+            "OFF"
+          ],
+          "type": "string"
+        },
+        "language": {
+          "enum": [
+            "fr",
+            "en",
+            "ar"
+          ],
+          "type": "string"
+        },
+        "availabilitySet": {
+          "type": "boolean"
+        },
+        "consentAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "withdrawnAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "overrides": {
+          "additionalProperties": {},
+          "propertyNames": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "meetingsEnabled",
+        "company",
+        "jobTitle",
+        "sector",
+        "bio",
+        "city",
+        "country",
+        "website",
+        "photoUrl",
+        "interests",
+        "offers",
+        "seeks",
+        "consent",
+        "id",
+        "createdAt",
+        "updatedAt",
+        "eventId",
+        "firstName",
+        "lastName",
+        "visible",
+        "lastActiveAt",
+        "erasedAt",
+        "featured",
+        "standTableId",
+        "email",
+        "status",
+        "registrationId",
+        "emailPreference",
+        "language",
+        "availabilitySet",
+        "consentAt",
+        "withdrawnAt",
+        "overrides"
+      ],
+      "type": "object"
     },
     "NetworkingPublicMeetingResponseSchema": {
       "$ref": "#/$defs/NetworkingPublicCheckinResponseSchema"
@@ -10387,15 +12031,23 @@
           "type": "string"
         },
         "website": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "photoUrl": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "interests": {
@@ -10466,9 +12118,13 @@
           "type": "boolean"
         },
         "standTableId": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -10553,15 +12209,23 @@
               "type": "boolean"
             },
             "opensAt": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "closesAt": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "approvalMode": {
@@ -10574,75 +12238,123 @@
             "fieldMapping": {
               "properties": {
                 "company": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "jobTitle": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "sector": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "bio": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "city": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "country": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "website": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "photoUrl": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "interests": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "offers": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "seeks": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "consent": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 }
               },
@@ -10664,7 +12376,98 @@
       ]
     },
     "NetworkingPublicReportResponseSchema": {
-      "$ref": "#/$defs/NetworkingAdminModerateResponseSchema"
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "OPEN",
+            "RESOLVED",
+            "DISMISSED"
+          ],
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "profileId": {
+          "type": "string"
+        },
+        "reporterId": {
+          "type": "string"
+        },
+        "messageId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "resolvedBy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resolvedAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "createdAt",
+        "updatedAt",
+        "status",
+        "eventId",
+        "note",
+        "profileId",
+        "reporterId",
+        "messageId",
+        "reason",
+        "resolvedBy",
+        "resolvedAt"
+      ],
+      "type": "object"
     },
     "NetworkingPublicRepresentativesResponseSchema": {
       "properties": {
@@ -10688,9 +12491,13 @@
                   "type": "string"
                 },
                 "spaceName": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 }
               },
@@ -10834,7 +12641,7 @@
       "type": "object"
     },
     "NetworkingPublicUpdateMeResponseSchema": {
-      "$ref": "#/$defs/NetworkingAdminUpdateProfileResponseSchema"
+      "$ref": "#/$defs/NetworkingPublicMeResponseSchema"
     },
     "NetworkingPublicUploadPhotoResponseSchema": {
       "properties": {
@@ -10842,7 +12649,7 @@
           "type": "string"
         },
         "resource": {
-          "$ref": "#/$defs/NetworkingAdminUpdateProfileResponseSchema"
+          "$ref": "#/$defs/NetworkingPublicMeResponseSchema"
         }
       },
       "required": [
@@ -10862,7 +12669,7 @@
           "type": "string"
         },
         "profile": {
-          "$ref": "#/$defs/NetworkingAdminUpdateProfileResponseSchema"
+          "$ref": "#/$defs/NetworkingPublicMeResponseSchema"
         },
         "requiresSecondFactor": {
           "type": "boolean"
@@ -10899,9 +12706,13 @@
           "type": "string"
         },
         "expirationTime": {
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "keys": {
@@ -11006,15 +12817,23 @@
                 "type": "string"
               },
               "website": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "photoUrl": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "interests": {
@@ -11085,9 +12904,13 @@
                 "type": "boolean"
               },
               "standTableId": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "score": {
@@ -11158,9 +12981,13 @@
             "RESOLVE",
             "WARN",
             "SUSPEND",
-            "EXCLUDE"
+            "EXCLUDE",
+            "REOPEN"
           ],
           "type": "string"
+        },
+        "notify": {
+          "type": "boolean"
         },
         "note": {
           "maxLength": 2000,
@@ -11194,6 +13021,23 @@
       "required": [
         "profileId",
         "reason"
+      ],
+      "type": "object"
+    },
+    "NetworkingRestoreAccessSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "undoId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "notify": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "undoId"
       ],
       "type": "object"
     },
@@ -11303,6 +13147,29 @@
     "NetworkingTableUpdateSchema": {
       "$comment": "unrepresentable: opaque. The schema accepts any JSON and validates it in server code (z.unknown().transform); see the contract module."
     },
+    "OptionModifierLineSchema": {
+      "properties": {
+        "fieldId": {
+          "type": "string"
+        },
+        "optionId": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "amount": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "fieldId",
+        "optionId",
+        "label",
+        "amount"
+      ],
+      "type": "object"
+    },
     "OptionTranslationEntrySchema": {
       "additionalProperties": false,
       "properties": {
@@ -11407,7 +13274,7 @@
           "anyOf": [
             {
               "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
               "type": "string"
             },
             {
@@ -11419,7 +13286,7 @@
           "anyOf": [
             {
               "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
               "type": "string"
             },
             {
@@ -11431,7 +13298,7 @@
           "anyOf": [
             {
               "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
               "type": "string"
             },
             {
@@ -11443,7 +13310,7 @@
           "anyOf": [
             {
               "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
               "type": "string"
             },
             {
@@ -11455,7 +13322,7 @@
           "anyOf": [
             {
               "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
               "type": "string"
             },
             {
@@ -11467,7 +13334,7 @@
           "anyOf": [
             {
               "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
               "type": "string"
             },
             {
@@ -11650,6 +13517,142 @@
       ],
       "type": "string"
     },
+    "PlatformRegistrationAggregateResponseSchema": {
+      "properties": {
+        "total": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "byPaymentStatus": {
+          "items": {
+            "properties": {
+              "paymentStatus": {
+                "$ref": "#/$defs/PaymentStatusSchema"
+              },
+              "count": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "paymentStatus",
+              "count"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "total",
+        "byPaymentStatus"
+      ],
+      "type": "object"
+    },
+    "PlatformRegistrationsQuerySchema": {
+      "additionalProperties": false,
+      "properties": {
+        "sort": {
+          "enum": [
+            "name",
+            "amount",
+            "date"
+          ],
+          "type": "string"
+        },
+        "sortOrder": {
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "type": "string"
+        },
+        "page": {
+          "default": 1,
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "limit": {
+          "default": 20,
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "paymentStatus": {
+          "$ref": "#/$defs/PaymentStatusSchema"
+        },
+        "paymentMethod": {
+          "$ref": "#/$defs/PaymentMethodSchema"
+        },
+        "role": {
+          "$ref": "#/$defs/RegistrationRoleSchema"
+        },
+        "search": {
+          "maxLength": 200,
+          "type": "string"
+        },
+        "eventId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "clientId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "PlatformRegistrationsResponseSchema": {
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/$defs/AdminRegistrationResponseSchema"
+          },
+          "type": "array"
+        },
+        "meta": {
+          "properties": {
+            "page": {
+              "type": "number"
+            },
+            "limit": {
+              "type": "number"
+            },
+            "total": {
+              "type": "number"
+            },
+            "totalPages": {
+              "type": "number"
+            },
+            "hasNext": {
+              "type": "boolean"
+            },
+            "hasPrev": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "page",
+            "limit",
+            "total",
+            "totalPages",
+            "hasNext",
+            "hasPrev"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "data",
+        "meta"
+      ],
+      "type": "object"
+    },
     "PriceBreakdownSchema": {
       "properties": {
         "basePrice": {
@@ -11696,6 +13699,18 @@
             "$ref": "#/$defs/DroppedAccessItemSchema"
           },
           "type": "array"
+        },
+        "optionModifiers": {
+          "items": {
+            "$ref": "#/$defs/OptionModifierLineSchema"
+          },
+          "type": "array"
+        },
+        "optionModifiersTotal": {
+          "type": "number"
+        },
+        "money": {
+          "$ref": "#/$defs/MoneySnapshotSchema"
         }
       },
       "required": [
@@ -11800,48 +13815,76 @@
               "type": "string"
             },
             "globalWordLimit": {
-              "type": [
-                "number",
-                "null"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "maxThemesPerAbstract": {
-              "type": [
-                "number",
-                "null"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "languages": {},
             "sectionWordLimits": {
               "properties": {
                 "introduction": {
-                  "type": [
-                    "number",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "objective": {
-                  "type": [
-                    "number",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "methods": {
-                  "type": [
-                    "number",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "results": {
-                  "type": [
-                    "number",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "conclusion": {
-                  "type": [
-                    "number",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 }
               },
@@ -11864,9 +13907,13 @@
                     "type": "string"
                   },
                   "description": {
-                    "type": [
-                      "string",
-                      "null"
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
                     ]
                   },
                   "translations": {}
@@ -11918,33 +13965,53 @@
             "deadlines": {
               "properties": {
                 "submissionStart": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "submission": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "editing": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "scoringStart": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "finalFile": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 }
               },
@@ -12003,9 +14070,13 @@
           "type": "string"
         },
         "code": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "authorFirstName": {
@@ -12015,9 +14086,13 @@
           "type": "string"
         },
         "authorAffiliation": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "authorEmail": {
@@ -12076,9 +14151,13 @@
           "type": "string"
         },
         "lastEditedAt": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "editing": {
@@ -12087,9 +14166,13 @@
               "type": "boolean"
             },
             "deadline": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             }
           },
@@ -12105,9 +14188,13 @@
               "type": "boolean"
             },
             "deadline": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "kind": {
@@ -12126,15 +14213,23 @@
               ]
             },
             "size": {
-              "type": [
-                "number",
-                "null"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "uploadedAt": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "uploaded": {
@@ -12204,21 +14299,33 @@
           "type": "string"
         },
         "logo": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "primaryColor": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "phone": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -12236,7 +14343,7 @@
       "properties": {
         "expectedUpdatedAt": {
           "format": "date-time",
-          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
           "type": "string"
         },
         "formData": {
@@ -12299,15 +14406,23 @@
           "type": "number"
         },
         "successTitle": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "successMessage": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "successTranslations": {},
@@ -12336,15 +14451,23 @@
               "type": "string"
             },
             "description": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "maxCapacity": {
-              "type": [
-                "number",
-                "null"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "registeredCount": {
@@ -12361,9 +14484,13 @@
               "type": "string"
             },
             "location": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "status": {
@@ -12375,9 +14502,13 @@
               "type": "string"
             },
             "bannerUrl": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "createdAt": {
@@ -12462,9 +14593,13 @@
               "type": "string"
             },
             "description": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "status": {
@@ -12481,15 +14616,23 @@
               "type": "string"
             },
             "location": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "bannerUrl": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "client": {
@@ -12501,21 +14644,33 @@
                   "type": "string"
                 },
                 "logo": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "primaryColor": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "phone": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 }
               },
@@ -12596,9 +14751,13 @@
                   ]
                 },
                 "onlinePaymentUrl": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 }
               },
@@ -12713,6 +14872,23 @@
     },
     "PublicRegistrationResponseSchema": {
       "properties": {
+        "amountDue": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "catalogueBasePrice": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "money": {
+          "$ref": "#/$defs/MoneySnapshotSchema"
+        },
         "id": {
           "type": "string"
         },
@@ -12723,52 +14899,80 @@
           "type": "string"
         },
         "referenceNumber": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "email": {
           "type": "string"
         },
         "firstName": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "lastName": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "phone": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "formData": {},
         "networkingOptIn": {
-          "type": [
-            "boolean",
-            "null"
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "paymentStatus": {
           "type": "string"
         },
         "paymentMethod": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "labName": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "currency": {
@@ -12790,9 +14994,13 @@
           "type": "number"
         },
         "sponsorshipCode": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "sponsorshipAmount": {
@@ -12899,13 +15107,20 @@
           "type": "object"
         },
         "token": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
       "required": [
+        "amountDue",
+        "catalogueBasePrice",
+        "money",
         "id",
         "formId",
         "eventId",
@@ -12975,27 +15190,43 @@
               "type": "string"
             },
             "startsAt": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "endsAt": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "location": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "bannerUrl": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "client": {
@@ -13070,15 +15301,23 @@
           "type": "string"
         },
         "firstName": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "lastName": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "paymentStatus": {
@@ -13208,6 +15447,33 @@
       ],
       "type": "object"
     },
+    "RegistrationAmountsResponseSchema": {
+      "properties": {
+        "amountDue": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "catalogueBasePrice": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "money": {
+          "$ref": "#/$defs/MoneySnapshotSchema"
+        }
+      },
+      "required": [
+        "amountDue",
+        "catalogueBasePrice",
+        "money"
+      ],
+      "type": "object"
+    },
     "RegistrationAuditLogListResponseSchema": {
       "properties": {
         "data": {
@@ -13221,24 +15487,36 @@
               },
               "changes": {},
               "performedBy": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "performedByName": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "performedAt": {
                 "type": "string"
               },
               "ipAddress": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               }
             },
@@ -13340,24 +15618,36 @@
           ]
         },
         "performedBy": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "performedByName": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "performedAt": {
           "type": "string"
         },
         "ipAddress": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -13496,60 +15786,96 @@
                 "type": "string"
               },
               "trigger": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "templateName": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "errorMessage": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "queuedAt": {
                 "type": "string"
               },
               "sentAt": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "deliveredAt": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "openedAt": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "clickedAt": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "bouncedAt": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "failedAt": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               }
             },
@@ -13637,54 +15963,86 @@
           ]
         },
         "templateName": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "errorMessage": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "queuedAt": {
           "type": "string"
         },
         "sentAt": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "deliveredAt": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "openedAt": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "clickedAt": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "bouncedAt": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "failedAt": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -13867,40 +16225,51 @@
       ],
       "type": "object"
     },
+    "ReorderAbstractThemesSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "themeIds": {
+          "items": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "type": "array"
+        }
+      },
+      "required": [
+        "themeIds"
+      ],
+      "type": "object"
+    },
     "ReportQuerySchema": {
       "additionalProperties": false,
       "properties": {
         "startDate": {
           "format": "date-time",
-          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
           "type": "string"
         },
         "endDate": {
           "format": "date-time",
-          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
           "type": "string"
         }
       },
       "type": "object"
     },
     "ResendEmailLogParamSchema": {
+      "$ref": "#/$defs/GetEmailLogParamSchema"
+    },
+    "RestoreCertificateBodySchema": {
       "additionalProperties": false,
-      "properties": {
-        "eventId": {
-          "format": "uuid",
-          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
-          "type": "string"
-        },
-        "emailLogId": {
-          "format": "uuid",
-          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
-          "type": "string"
-        }
-      },
-      "required": [
-        "eventId",
-        "emailLogId"
-      ],
+      "properties": {},
+      "type": "object"
+    },
+    "RestoreSponsorshipBodySchema": {
+      "additionalProperties": false,
+      "properties": {},
       "type": "object"
     },
     "ReviewAbstractSchema": {
@@ -14129,7 +16498,7 @@
         },
         "email": {
           "format": "email",
-          "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+          "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
           "type": "string"
         },
         "phone": {
@@ -14234,15 +16603,23 @@
           "type": "string"
         },
         "beneficiaryPhone": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "beneficiaryAddress": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "coversBasePrice": {
@@ -14265,9 +16642,13 @@
           "type": "number"
         },
         "targetRegistrationId": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "createdAt": {
@@ -14312,9 +16693,13 @@
               "type": "string"
             },
             "phone": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "formData": {},
@@ -14347,9 +16732,13 @@
                 "type": "string"
               },
               "registrationId": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "amountApplied": {
@@ -14374,15 +16763,23 @@
                         "type": "string"
                       },
                       "firstName": {
-                        "type": [
-                          "string",
-                          "null"
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
                         ]
                       },
                       "lastName": {
-                        "type": [
-                          "string",
-                          "null"
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
                         ]
                       }
                     },
@@ -14616,15 +17013,23 @@
                 "type": "string"
               },
               "beneficiaryPhone": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "beneficiaryAddress": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "coversBasePrice": {
@@ -14647,9 +17052,13 @@
                 "type": "number"
               },
               "targetRegistrationId": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "createdAt": {
@@ -14689,9 +17098,13 @@
                 "items": {
                   "properties": {
                     "registrationId": {
-                      "type": [
-                        "string",
-                        "null"
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
                       ]
                     },
                     "amountApplied": {
@@ -14927,11 +17340,208 @@
         }
       ]
     },
+    "StoredNetworkingAccessUndoSchema": {
+      "properties": {
+        "before": {
+          "properties": {
+            "status": {
+              "enum": [
+                "PENDING",
+                "ACTIVE",
+                "SUSPENDED",
+                "EXCLUDED"
+              ],
+              "type": "string"
+            },
+            "consent": {
+              "type": "boolean"
+            },
+            "visible": {
+              "type": "boolean"
+            },
+            "meetingsEnabled": {
+              "type": "boolean"
+            },
+            "consentOverride": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "status",
+            "consent",
+            "visible",
+            "meetingsEnabled"
+          ],
+          "type": "object"
+        },
+        "after": {
+          "properties": {
+            "status": {
+              "enum": [
+                "PENDING",
+                "ACTIVE",
+                "SUSPENDED",
+                "EXCLUDED"
+              ],
+              "type": "string"
+            },
+            "consent": {
+              "type": "boolean"
+            },
+            "visible": {
+              "type": "boolean"
+            },
+            "meetingsEnabled": {
+              "type": "boolean"
+            },
+            "consentOverride": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "status",
+            "consent",
+            "visible",
+            "meetingsEnabled"
+          ],
+          "type": "object"
+        },
+        "afterUpdatedAt": {
+          "type": "string"
+        },
+        "meetings": {
+          "items": {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "revision": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "revision"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "before",
+        "after",
+        "afterUpdatedAt",
+        "meetings"
+      ],
+      "type": "object"
+    },
+    "StoredNetworkingMeetingCancellationSchema": {
+      "properties": {
+        "status": {
+          "enum": [
+            "PENDING",
+            "PENDING_ALLOCATION",
+            "CONFIRMED"
+          ],
+          "type": "string"
+        },
+        "proposedStartsAt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "proposalBy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "proposedStartsAt",
+        "proposalBy"
+      ],
+      "type": "object"
+    },
     "StoredPricingRulesSchema": {
       "items": {
         "$ref": "#/$defs/EmbeddedPricingRuleSchema"
       },
       "type": "array"
+    },
+    "StoredSponsorshipCancellationUndoSchema": {
+      "properties": {
+        "version": {
+          "const": 1,
+          "type": "number"
+        },
+        "coverageFingerprint": {
+          "type": "string"
+        },
+        "links": {
+          "items": {
+            "properties": {
+              "registrationId": {
+                "type": "string"
+              },
+              "afterFingerprint": {
+                "type": "string"
+              },
+              "clearedPaymentMethod": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "clearedSponsorshipCode": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "amountApplied": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "registrationId",
+              "afterFingerprint",
+              "clearedPaymentMethod",
+              "clearedSponsorshipCode",
+              "amountApplied"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "version",
+        "coverageFingerprint",
+        "links"
+      ],
+      "type": "object"
     },
     "StreamQuerySchema": {
       "properties": {
@@ -14992,7 +17602,7 @@
         },
         "authorEmail": {
           "format": "email",
-          "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+          "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
           "type": "string"
         },
         "authorPhone": {
@@ -15256,12 +17866,32 @@
       ],
       "type": "string"
     },
+    "TestCertificateBodySchema": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "TestCertificateResultSchema": {
+      "properties": {
+        "success": {
+          "const": true,
+          "type": "boolean"
+        },
+        "messageId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    },
     "TestSendEmailSchema": {
       "additionalProperties": false,
       "properties": {
         "recipientEmail": {
           "format": "email",
-          "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+          "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
           "type": "string"
         },
         "recipientName": {
@@ -15275,24 +17905,7 @@
       "type": "object"
     },
     "ThemeIdParamSchema": {
-      "additionalProperties": false,
-      "properties": {
-        "eventId": {
-          "format": "uuid",
-          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
-          "type": "string"
-        },
-        "themeId": {
-          "format": "uuid",
-          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
-          "type": "string"
-        }
-      },
-      "required": [
-        "eventId",
-        "themeId"
-      ],
-      "type": "object"
+      "$ref": "#/$defs/DeleteUnusedThemeParamSchema"
     },
     "ThemeTranslationsSchema": {
       "additionalProperties": false,
@@ -15507,6 +18120,45 @@
       ],
       "type": "string"
     },
+    "UndoCheckInBodySchema": {
+      "additionalProperties": false,
+      "properties": {
+        "registrationId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "accessId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        },
+        "expectedCheckedInAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "registrationId"
+      ],
+      "type": "object"
+    },
+    "UndoCheckInResultSchema": {
+      "properties": {
+        "outcome": {
+          "enum": [
+            "UNDONE",
+            "ALREADY_UNDONE"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "outcome"
+      ],
+      "type": "object"
+    },
     "UpdateCertificateTemplateSchema": {
       "additionalProperties": false,
       "properties": {
@@ -15588,7 +18240,7 @@
           "anyOf": [
             {
               "format": "email",
-              "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+              "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
               "type": "string"
             },
             {
@@ -15684,7 +18336,7 @@
         },
         "expectedUpdatedAt": {
           "format": "date-time",
-          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
           "type": "string"
         }
       },
@@ -15729,9 +18381,7 @@
           "type": "string"
         },
         "price": {
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer"
+          "$ref": "#/$defs/MoneyAmountSchema"
         },
         "active": {
           "type": "boolean"
@@ -15797,9 +18447,7 @@
           ]
         },
         "price": {
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer"
+          "$ref": "#/$defs/MoneyAmountSchema"
         },
         "currency": {
           "maxLength": 3,
@@ -15896,9 +18544,7 @@
           "type": "boolean"
         },
         "companionPrice": {
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer"
+          "$ref": "#/$defs/MoneyAmountSchema"
         }
       },
       "type": "object"
@@ -15909,9 +18555,7 @@
         "basePrice": {
           "anyOf": [
             {
-              "maximum": 9007199254740991,
-              "minimum": 0,
-              "type": "integer"
+              "$ref": "#/$defs/MoneyAmountSchema"
             },
             {
               "type": "null"
@@ -15998,9 +18642,13 @@
           "type": "string"
         },
         "description": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "maxCapacity": {
@@ -16048,9 +18696,7 @@
         "basePrice": {
           "anyOf": [
             {
-              "maximum": 9007199254740991,
-              "minimum": 0,
-              "type": "integer"
+              "$ref": "#/$defs/MoneyAmountSchema"
             },
             {
               "type": "null"
@@ -16082,15 +18728,23 @@
           ]
         },
         "successTitle": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "successMessage": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "successTranslations": {
@@ -16116,9 +18770,7 @@
           "$ref": "#/$defs/PaymentStatusSchema"
         },
         "paidAmount": {
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer"
+          "$ref": "#/$defs/MoneyAmountSchema"
         },
         "paymentMethod": {
           "$ref": "#/$defs/PaymentMethodSchema"
@@ -16145,9 +18797,7 @@
           "$ref": "#/$defs/PaymentStatusSchema"
         },
         "paidAmount": {
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer"
+          "$ref": "#/$defs/MoneyAmountSchema"
         },
         "paymentMethod": {
           "$ref": "#/$defs/PaymentMethodSchema"
@@ -16188,7 +18838,7 @@
         },
         "beneficiaryEmail": {
           "format": "email",
-          "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+          "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
           "type": "string"
         },
         "beneficiaryPhone": {
@@ -16341,6 +18991,82 @@
       },
       "required": [
         "id"
+      ],
+      "type": "object"
+    },
+    "UserResponseSchema": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "const": 0,
+              "type": "number"
+            },
+            {
+              "const": 1,
+              "type": "number"
+            },
+            {
+              "const": 2,
+              "type": "number"
+            }
+          ]
+        },
+        "clientId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "lastLoginAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "email",
+        "name",
+        "role",
+        "clientId",
+        "active",
+        "createdAt",
+        "updatedAt",
+        "lastLoginAt"
       ],
       "type": "object"
     },

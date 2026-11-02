@@ -1,5 +1,4 @@
 import {
-  bigint,
   boolean,
   index,
   integer,
@@ -9,7 +8,7 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { idPk, timestamps } from "../helpers";
+import { idPk, timestamps, moneyColumn } from "../helpers";
 import { accessType, eventStatus } from "./enums";
 import { clients } from "./users-clients";
 import { registrations } from "./registrations";
@@ -52,7 +51,7 @@ export const eventAccess = pgTable(
     location: text(),
     startsAt: timestamp({ precision: 3 }),
     endsAt: timestamp({ precision: 3 }),
-    price: integer().notNull().default(0),
+    price: moneyColumn().notNull().default(0),
     currency: text().notNull().default("TND"),
     maxCapacity: integer(),
     registeredCount: integer().notNull().default(0),
@@ -69,7 +68,7 @@ export const eventAccess = pgTable(
     // Production column is INT8 (bigint) — prisma migration 20260319000003 notes the
     // planned narrowing to INT4 was never applied (CRDB can't ALTER TYPE via that path).
     // mode:'number' coerces pg's int8-as-string on prod and passes int4 numbers on dev.
-    companionPrice: bigint({ mode: "number" }).notNull().default(0),
+    companionPrice: moneyColumn().notNull().default(0),
     ...timestamps,
   },
   (t) => [

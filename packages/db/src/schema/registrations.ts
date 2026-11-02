@@ -10,7 +10,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { PriceBreakdownSchema } from "@app/contracts";
-import { idPk, timestamps } from "../helpers";
+import { idPk, timestamps, moneyColumn } from "../helpers";
 import { jsonbOf } from "../jsonb";
 import { paymentMethod, paymentStatus, registrationRole, transactionType } from "./enums";
 import { events } from "./events-access";
@@ -36,18 +36,18 @@ export const registrations = pgTable(
     phone: text(),
     referenceNumber: text(),
     paymentStatus: paymentStatus().notNull().default("PENDING"),
-    totalAmount: integer().notNull(),
-    paidAmount: integer().notNull().default(0),
+    totalAmount: moneyColumn().notNull(),
+    paidAmount: moneyColumn().notNull().default(0),
     currency: text().notNull().default("TND"),
     paymentMethod: paymentMethod(),
     paymentReference: text(),
     paymentProofUrl: text(),
     priceBreakdown: jsonbOf(PriceBreakdownSchema).notNull(),
-    baseAmount: integer().notNull().default(0),
-    discountAmount: integer().notNull().default(0),
-    accessAmount: integer().notNull().default(0),
+    baseAmount: moneyColumn().notNull().default(0),
+    discountAmount: moneyColumn().notNull().default(0),
+    accessAmount: moneyColumn().notNull().default(0),
     sponsorshipCode: text(),
-    sponsorshipAmount: integer().notNull().default(0),
+    sponsorshipAmount: moneyColumn().notNull().default(0),
     labName: text(),
     paidAt: timestamp({ precision: 3 }),
     ...timestamps,
@@ -105,7 +105,7 @@ export const paymentTransaction = pgTable(
         onUpdate: "cascade",
       }),
     type: transactionType().notNull(),
-    amount: integer().notNull(),
+    amount: moneyColumn().notNull(),
     method: paymentMethod(),
     reference: text(),
     note: text(),

@@ -24,14 +24,14 @@ describe("schema column mappings", () => {
     expect(names).toContain("dropped_access_ids");
   });
 
-  it("event_access.companion_price is bigint mode:number (prod column is INT8)", () => {
+  it("event_access.companion_price preserves fractional major units after migration 0036", () => {
     // getTableConfig reports the property key for casing-derived columns
     // (snake_case is applied later by the client's casing config), so look up
     // by the camelCase key rather than the SQL column name.
     const col = getTableConfig(eventAccess).columns.find(
       (c) => c.name === "companionPrice",
     );
-    expect(col?.getSQLType()).toBe("bigint");
+    expect(col?.getSQLType()).toBe("numeric(20, 4)");
   });
 
   it("_AccessPrerequisites keeps exact table + A/B column names", () => {

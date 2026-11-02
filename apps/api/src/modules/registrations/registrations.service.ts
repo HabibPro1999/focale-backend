@@ -7,6 +7,7 @@ import {
   ErrorCodes,
   type AppEvent,
   type ListRegistrationsQuery,
+  type PlatformRegistrationsQuery,
   type ListRegistrationAuditLogsQuery,
   type ListRegistrationEmailLogsQuery,
   type RegistrationAuditLog,
@@ -31,6 +32,8 @@ import {
   getRegistrationEditToken,
   getRegistrationEditLinkSource,
   listRegistrationRows,
+  listPlatformRegistrationRows,
+  getPlatformRegistrationAggregate,
   findRegistrationWithFormEvent,
   deleteRegistrationRow,
   getNetworkingProfilePhotoByRegistration,
@@ -80,6 +83,7 @@ export type GetRegistrationForEditResult = {
 
 @Injectable()
 export class RegistrationsService {
+  platformAggregate() { return getPlatformRegistrationAggregate(); }
   constructor(
     private readonly access: AccessService,
     private readonly sideEffects: RegistrationSideEffects,
@@ -106,6 +110,12 @@ export class RegistrationsService {
 
   searchRegistrantsForSponsorship(eventId: string, query: SearchRegistrantsQuery) {
     return searchRegistrantsQuery(eventId, query);
+  }
+
+  async platformList(query: PlatformRegistrationsQuery) {
+    const { data, total } = await listPlatformRegistrationRows({ ...query, offset: getSkip(query) });
+    const rows = (await enrichManyWithAccessSelections(data)).map(toAdminRegistration);
+    return paginate(rows, total, query);
   }
 
   async listRegistrations(

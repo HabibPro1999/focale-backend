@@ -385,7 +385,7 @@ export async function listNetworkingNotifications(
   return {
     items,
     total: counts[0]?.total ?? 0,
-    unreadCount: counts[0]?.unreadCount ?? 0,
+    unreadCount: Number(counts[0]?.unreadCount ?? 0),
     unreadMessageCount,
   };
 }

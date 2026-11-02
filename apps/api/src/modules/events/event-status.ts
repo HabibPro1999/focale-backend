@@ -18,7 +18,7 @@ function effectivePublicEndDate(endDate: Date): Date {
 export function assertEventWritable(event: { status: string }): void {
   if (event.status === "ARCHIVED") {
     throw new AppException(
-      ErrorCodes.INVALID_STATUS_TRANSITION,
+      ErrorCodes.EVENT_ARCHIVED,
       "Archived events cannot be modified",
       400,
     );

@@ -1,5 +1,7 @@
 import {
   CreateEmailTemplateBodySchema,
+  DraftEmailPreviewSchema,
+  DraftEmailTestSendSchema,
   DuplicateEmailTemplateSchema,
   UpdateEmailTemplateSchema,
   ListEmailTemplatesQuerySchema,
@@ -12,6 +14,8 @@ import {
   BulkSendParamSchema,
   SendCustomEmailParamSchema,
   ResendEmailLogParamSchema,
+  GetEmailLogParamSchema,
+  EmailVariablesQuerySchema,
 } from "@app/contracts";
 import { z } from "zod";
 import { createZodDto } from "../../core/zod";
@@ -49,3 +53,10 @@ export class SendCustomEmailParamDto extends createZodDto(
 export class ResendEmailLogParamDto extends createZodDto(
   ResendEmailLogParamSchema,
 ) {}
+
+export class GetEmailLogParamDto extends createZodDto(GetEmailLogParamSchema) {}
+
+export class DraftEmailPreviewDto extends createZodDto(DraftEmailPreviewSchema) {}
+export class DraftEmailTestSendDto extends createZodDto(DraftEmailTestSendSchema) {}
+
+export class EmailVariablesQueryDto extends createZodDto(EmailVariablesQuerySchema) {}

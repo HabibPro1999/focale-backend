@@ -1,14 +1,13 @@
 import {
   boolean,
   index,
-  integer,
   jsonb,
   pgTable,
   text,
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { idPk, timestamps } from "../helpers";
+import { idPk, timestamps, moneyColumn } from "../helpers";
 import { sponsorshipStatus } from "./enums";
 import { events } from "./events-access";
 import { forms } from "./forms";
@@ -59,7 +58,7 @@ export const sponsorships = pgTable(
     coversBasePrice: boolean().notNull().default(true),
     // Live column is nullable STRING[] with a default (no NOT NULL).
     coveredAccessIds: text("covered_access_ids").array().default([]),
-    totalAmount: integer().notNull(),
+    totalAmount: moneyColumn().notNull(),
     targetRegistrationId: text(),
     ...timestamps,
   },
@@ -87,7 +86,7 @@ export const sponsorshipUsages = pgTable(
       onDelete: "set null",
       onUpdate: "cascade",
     }),
-    amountApplied: integer().notNull(),
+    amountApplied: moneyColumn().notNull(),
     appliedAt: timestamp({ precision: 3 }).defaultNow().notNull(),
     appliedBy: text().notNull(),
   },
@@ -99,3 +98,9 @@ export const sponsorshipUsages = pgTable(
     ),
   ],
 );
+
+/** Cancellation provenance retained only while the sponsorship is cancelled. */
+export const sponsorshipCancellationUndo = pgTable("sponsorship_cancellation_undo", {
+  sponsorshipId: text().primaryKey().references(() => sponsorships.id, { onDelete: "cascade", onUpdate: "cascade" }),
+  snapshot: jsonb().$type<import("@app/contracts").StoredSponsorshipCancellationUndo>().notNull(),
+});

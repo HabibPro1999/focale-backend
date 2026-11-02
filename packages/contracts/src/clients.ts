@@ -98,3 +98,12 @@ export interface ClientResponse {
   createdAt: Date;
   updatedAt: Date;
 }
+
+/** GET /api/clients row; dependency counts match the delete guard, including inactive users/events. */
+export const ClientListRowResponseSchema = z.object({
+  id: z.string(), name: z.string(), logo: z.string().nullable(), primaryColor: z.string().nullable(),
+  email: z.string().nullable(), phone: z.string().nullable(), active: z.boolean(),
+  enabledModules: z.array(z.string()).nullable(), createdAt: z.date(), updatedAt: z.date(),
+  userCount: z.number().int().min(0), eventCount: z.number().int().min(0),
+});
+export type ClientListRowResponse = z.infer<typeof ClientListRowResponseSchema>;

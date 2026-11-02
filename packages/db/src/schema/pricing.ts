@@ -1,12 +1,11 @@
 import {
   boolean,
-  integer,
   pgTable,
   text,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { StoredPricingRulesSchema } from "@app/contracts";
-import { idPk, timestamps } from "../helpers";
+import { idPk, timestamps, moneyColumn } from "../helpers";
 import { jsonbOf } from "../jsonb";
 import { events } from "./events-access";
 
@@ -17,7 +16,7 @@ export const eventPricing = pgTable(
     eventId: text()
       .notNull()
       .references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
-    basePrice: integer().notNull().default(0),
+    basePrice: moneyColumn().notNull().default(0),
     currency: text().notNull().default("TND"),
     rules: jsonbOf(StoredPricingRulesSchema).notNull().default([]),
     onlinePaymentEnabled: boolean().notNull().default(false),

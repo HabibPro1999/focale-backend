@@ -348,6 +348,7 @@ export const networkingMeetings = pgTable(
       .default("PENDING"),
     message: text().notNull().default(""),
     cancellationNote: text().notNull().default(""),
+    cancellationState: jsonb().$type<import("@app/contracts").StoredNetworkingMeetingCancellation>(),
     proposedStartsAt: instant(),
     proposalBy: text(),
     expiresAt: instant().notNull(),

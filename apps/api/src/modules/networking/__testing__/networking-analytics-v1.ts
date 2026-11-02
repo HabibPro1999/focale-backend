@@ -326,6 +326,8 @@ export function calculateNetworkingAnalyticsV1(
         : 0,
     },
     reports: reports.filter((report) => report.status === "OPEN").length,
+    openReports: reports.filter((report) => report.status === "OPEN").length,
+    awaitingAllocationCount: meetings.filter((meeting) => meeting.status === "PENDING_ALLOCATION").length,
     hourlyActivity,
     timeSeries: [...dayRows.values()].sort((a, b) =>
       a.date.localeCompare(b.date),

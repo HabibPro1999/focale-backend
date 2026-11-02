@@ -10,6 +10,7 @@ import {
 } from "@app/contracts";
 import {
   getEmailTemplateById,
+  getEventEmailLog,
   findActiveTemplateForTrigger,
   listEmailTemplates as dbListTemplates,
   insertEmailTemplate,
@@ -89,6 +90,12 @@ export interface UpdateTemplateArgs {
 
 @Injectable()
 export class EmailTemplateService {
+  async getLog(eventId: string, id: string) {
+    const log = await getEventEmailLog(eventId, id);
+    if (!log) throw notFound("Email log not found");
+    return log;
+  }
+
   /** Guard: no active template already owns this event+trigger (409 otherwise). */
   private async assertNoActiveTemplateForTrigger(input: {
     eventId: string;
@@ -268,8 +275,9 @@ export class EmailTemplateService {
     eventId: string,
     query: ListEmailTemplatesQuery,
   ): Promise<PaginatedResult<EmailTemplateRow>> {
-    const { page, limit, category, trigger, abstractTrigger, search } = query;
+    const { page, limit, category, trigger, abstractTrigger, search, scope } = query;
     const { data, total } = await dbListTemplates(eventId, {
+      scope,
       category,
       trigger,
       abstractTrigger,

@@ -8,6 +8,8 @@ import {
 } from "@app/contracts";
 import { pickDefined } from "@app/shared";
 import {
+  deleteUnusedAbstractTheme,
+  reorderAbstractThemes,
   getOrCreateAbstractConfig,
   updateAbstractConfig,
   countAbstractsByEvent,
@@ -24,7 +26,7 @@ import {
   type AbstractThemeInsert,
   type AbstractThemeRow,
 } from "@app/db";
-import { AppException, conflict, notFound } from "../../core/app-exception";
+import { AppException, badRequest, conflict, notFound } from "../../core/app-exception";
 
 const SCALAR_FIELDS = [
   "submissionMode",
@@ -314,6 +316,20 @@ export class AbstractsConfigService {
     }
     if (body.active !== undefined) data.active = body.active;
     return updateThemeRow(themeId, data);
+  }
+
+  async reorderThemes(eventId: string, themeIds: string[]) {
+    const result = await reorderAbstractThemes(eventId, themeIds);
+    if (result.ok) return result.items;
+    if (result.reason === "NOT_FOUND") throw notFound("Abstract configuration not found");
+    if (result.reason === "CODED_THEME") throw conflict("Cannot move a theme with issued abstract codes");
+    throw badRequest("Provide every active theme exactly once");
+  }
+
+  async deleteUnusedTheme(eventId: string, themeId: string): Promise<void> {
+    const outcome = await deleteUnusedAbstractTheme(eventId, themeId);
+    if (outcome === "NOT_FOUND") throw notFound("Theme not found");
+    if (outcome === "IN_USE") throw conflict("Theme is used by abstracts, reviewer assignments or issued codes");
   }
 
   async softDeleteTheme(eventId: string, themeId: string): Promise<void> {

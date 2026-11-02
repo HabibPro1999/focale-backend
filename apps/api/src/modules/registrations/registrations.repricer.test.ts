@@ -188,6 +188,7 @@ describe("RegistrationRepricer", () => {
         "ev1",
         expect.objectContaining({ sponsorshipCodes: [] }),
         expect.anything(),
+        expect.objectContaining({ previous: expect.objectContaining({ optionModifiers: [] }) }),
       );
       expect(writtenPatch()).toMatchObject({
         totalAmount: 120,
@@ -517,7 +518,7 @@ describe("RegistrationRepricer", () => {
       }));
       pricing.calculatePrice.mockResolvedValue(emptyBreakdown(100));
       await service.editRegistrationPublic("reg1", { expectedUpdatedAt: expected, formData: { answer: "x" } } as never);
-      expect(pricing.calculatePrice).toHaveBeenCalledWith("ev1", expect.objectContaining({ sponsorshipCodes: [] }), expect.anything());
+      expect(pricing.calculatePrice).toHaveBeenCalledWith("ev1", expect.objectContaining({ sponsorshipCodes: [] }), expect.anything(), expect.objectContaining({ previous: expect.anything() }));
       const patch = writtenPatch();
       expect(patch.totalAmount).toBe(100);
       expect(patch.sponsorshipAmount).toBe(sponsorshipAmount);
@@ -652,6 +653,7 @@ describe("RegistrationRepricer", () => {
         "ev1",
         expect.anything(),
         tx,
+        expect.objectContaining({ previous: expect.anything() }),
       );
     });
   });

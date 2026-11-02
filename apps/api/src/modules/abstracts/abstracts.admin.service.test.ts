@@ -67,13 +67,13 @@ beforeEach(() => vi.clearAllMocks());
 
 describe("listAdminAbstracts", () => {
   it("defaults to limit 50 / offset 0 and formats items", async () => {
-    mock(listAdminAbstracts).mockResolvedValue({ items: [baseRow()], total: 1 });
+    mock(listAdminAbstracts).mockResolvedValue({ items: [baseRow()], total: 1, countsByStatus: { SUBMITTED: 1, UNDER_REVIEW: 0, REVIEW_COMPLETE: 0, ACCEPTED: 0, REJECTED: 0, PENDING: 0 } });
     const result = await service.listAdminAbstracts(eventId, {});
     expect(listAdminAbstracts).toHaveBeenCalledWith(
       eventId,
       expect.objectContaining({ limit: 50, offset: 0 }),
     );
-    expect(result).toMatchObject({ total: 1, limit: 50, offset: 0 });
+    expect(result).toMatchObject({ total: 1, limit: 50, offset: 0, countsByStatus: { SUBMITTED: 1, ACCEPTED: 0 } });
     expect(result.items[0]).toMatchObject({
       title: "My Title",
       averageScore: null, // reviewCount 0 → suppressed
@@ -106,7 +106,7 @@ describe("listAdminAbstracts", () => {
     ];
     mock(listAdminAbstracts).mockResolvedValue({
       items: [baseRow({ reviewCount: 2, averageScore: 12, reviews })],
-      total: 1,
+      total: 1, countsByStatus: { SUBMITTED: 1, UNDER_REVIEW: 0, REVIEW_COMPLETE: 0, ACCEPTED: 0, REJECTED: 0, PENDING: 0 },
     });
     const result = await service.listAdminAbstracts(eventId, { limit: 10, offset: 5 });
     expect(listAdminAbstracts).toHaveBeenCalledWith(

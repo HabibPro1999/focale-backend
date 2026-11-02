@@ -8,6 +8,7 @@ import {
   removedFieldIds,
   mergeSponsorshipSettings,
   type CreateFormInput,
+  type DuplicateFormInput,
   type UpdateFormInput,
   type ListFormsQuery,
   type FormSchemaJson,
@@ -157,6 +158,18 @@ function assertRegistrationFormSchema(schema: unknown): FormSchemaJson {
 
 @Injectable()
 export class FormsService {
+  async duplicateForm(id: string, input: DuplicateFormInput): Promise<Form> {
+    const source = await findFormById(id);
+    if (!source) throw notFound("Form not found");
+    if (!await eventExists(input.targetEventId)) throw notFound("Target event not found");
+    const result = await insertForm({ eventId: input.targetEventId, type: source.type,
+      name: input.name ?? `${source.name.slice(0, 193)} (copy)`, schema: source.schema,
+      schemaVersion: 1, active: source.active, successTitle: source.successTitle,
+      successMessage: source.successMessage, successTranslations: source.successTranslations });
+    if (!result.ok) throw conflict("Target event already has a form of this type");
+    return result.form;
+  }
+
   // --------------------------------------------------------------------------
   // createForm
   // --------------------------------------------------------------------------

@@ -4,6 +4,7 @@ import {
   integer,
   pgTable,
   text,
+  timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { idPk, timestamps } from "../helpers";
@@ -44,6 +45,7 @@ export const users = pgTable(
       onUpdate: "cascade",
     }),
     active: boolean().notNull().default(true),
+    lastLoginAt: timestamp({ withTimezone: true, precision: 3 }),
     ...timestamps,
   },
   (t) => [

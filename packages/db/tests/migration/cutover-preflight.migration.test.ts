@@ -266,7 +266,7 @@ describe.runIf(dbTestsEnabled())("cutover preflight and postflight", () => {
       const { directory } = run;
       expect((await readdir(directory)).sort()).toEqual(["affected", "report.json", "report.md", "table-counts.json"]);
       expect((await readdir(join(directory, "affected"))).sort())
-        .toEqual(["0004.json", "0006.json", "0011.json", "0030.json", "0033.json"]);
+        .toEqual(["0004.json", "0006.json", "0011.json", "0030.json", "0033.json", "0036.json"]);
       const markdown = await readFile(join(directory, "report.md"), "utf8");
       expect(markdown).toContain("**Personal data.**");
       expect(markdown).not.toContain(database.url);
@@ -318,7 +318,7 @@ describe.runIf(dbTestsEnabled())("cutover preflight and postflight", () => {
       expect(report.ledger).toMatchObject({ present: true, unknown: [] });
       expect(report.ledger.records.map((record) => record.id)).toEqual(["0000", "0001", "0002", "0003"]);
       expect(report.adopt).toMatchObject({ ran: false });
-      expect(report.dataChecks.map((entry) => entry.status)).toEqual(["fails", "changes-rows", "changes-rows", "changes-rows", "deferred", "changes-rows"]);
+      expect(report.dataChecks.map((entry) => entry.status)).toEqual(["fails", "changes-rows", "changes-rows", "changes-rows", "deferred", "changes-rows", "no-change"]);
     });
 
     it("predicted exactly what apply changes, and postflight accepts the 0033 drop", async () => {
@@ -349,7 +349,7 @@ describe.runIf(dbTestsEnabled())("cutover preflight and postflight", () => {
     it("on the migrated database skips applied migrations but still counts every table", async () => {
       const again = await preflight(database, "migrated");
       const statuses = Object.fromEntries(again.result.report.dataChecks.map((entry) => [entry.migrationId, entry.status]));
-      expect(statuses).toEqual({ "0004": "skipped", "0006": "skipped", "0010": "skipped", "0011": "skipped", "0030": "deferred", "0033": "skipped" });
+      expect(statuses).toEqual({ "0004": "skipped", "0006": "skipped", "0010": "skipped", "0011": "skipped", "0030": "deferred", "0033": "skipped", "0036": "skipped" });
       expect(again.result.affected.map((file) => file.migrationId)).toEqual(["0030"]);
       expect(again.result.tableCounts.tables.abstract_code_sequences).toBeUndefined();
       expect(again.result.tableCounts.tables.registrations).toBe(4);

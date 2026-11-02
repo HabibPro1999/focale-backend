@@ -1,4 +1,6 @@
 import {
+  TestCertificateBodySchema,
+  RestoreCertificateBodySchema,
   CertificateEventIdParamSchema,
   CertificateIdParamSchema,
   CreateCertificateTemplateSchema,
@@ -22,3 +24,7 @@ export class UpdateCertificateTemplateDto extends createZodDto(
 export class SendCertificatesBodyDto extends createZodDto(
   SendCertificatesBodySchema,
 ) {}
+
+export class TestCertificateBodyDto extends createZodDto(TestCertificateBodySchema) {}
+
+export class RestoreCertificateBodyDto extends createZodDto(RestoreCertificateBodySchema) {}

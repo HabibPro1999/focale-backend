@@ -176,9 +176,20 @@ describe("updateEventPricing", () => {
       service.updateEventPricing(eventId, { currency: "EUR" }),
     ).rejects.toMatchObject({
       statusCode: 400,
-      code: ErrorCodes.VALIDATION_ERROR,
+      code: ErrorCodes.CURRENCY_LOCKED,
       message: "Cannot change currency after registrations exist",
     });
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it("rejects a currency change that cannot represent a retained fractional base price", async () => {
+    vi.mocked(getEventPricingGate).mockResolvedValue({
+      status: "DRAFT", client: { active: true, enabledModules: ["pricing"] }, currentCurrency: "TND",
+    } as never);
+    vi.mocked(countRegistrations).mockResolvedValue(0);
+    pricingRead.mockResolvedValue(mockPricing({ basePrice: 1.125, currency: "TND" }));
+    await expect(service.updateEventPricing(eventId, { currency: "EUR" }))
+      .rejects.toThrow("Invalid monetary amount or precision for EUR");
     expect(upsert).not.toHaveBeenCalled();
   });
 
@@ -194,7 +205,7 @@ describe("updateEventPricing", () => {
       service.updateEventPricing(eventId, { currency: "EUR" }),
     ).rejects.toMatchObject({
       statusCode: 400,
-      code: ErrorCodes.VALIDATION_ERROR,
+      code: ErrorCodes.CURRENCY_LOCKED,
     });
     expect(regCount).toHaveBeenCalledWith(eventId, expect.anything());
     expect(upsert).not.toHaveBeenCalled();
@@ -234,6 +245,15 @@ describe("updateEventPricing", () => {
 });
 
 describe("addPricingRule", () => {
+  it("refuses an eleventh rule inside the transaction without writing pricing", async () => {
+    const rule = { name: "Rule", price: 100, conditions: [{ fieldId: "test", operator: "equals" as const, value: "test" }],
+      conditionLogic: "AND" as const, priority: 0, active: true };
+    pricingRead.mockResolvedValue(mockPricing({ rules: Array.from({ length: 10 }, (_, i) => ({ ...rule, id: `rule-${i}` })) }));
+    await expect(service.addPricingRule(eventId, rule)).rejects.toThrow("An event can have at most 10 pricing rules");
+    expect(serTxn).toHaveBeenCalledTimes(1);
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
   it("adds a new rule with a generated id", async () => {
     pricingRead.mockResolvedValue(mockPricing({ rules: [] }));
     upsert.mockResolvedValue(
@@ -374,6 +394,50 @@ describe("deletePricingRule", () => {
 });
 
 describe("calculatePrice", () => {
+  const optionSchema = { steps: [{ id: "s", title: "Options", fields: [
+    { id: "extras", type: "checkbox", label: "Extras", options: [
+      { id: "lunch", label: "Lunch", priceModifier: 12.125 },
+      { id: "dinner", label: "Dinner", priceModifier: 20.25 },
+    ] },
+    { id: "hidden", type: "radio", conditions: [{ fieldId: "show", operator: "equals", value: "yes" }],
+      options: [{ id: "vip", label: "VIP", priceModifier: 999 }] },
+  ] }] };
+
+  it("charges trusted visible options once and keeps modifiers outside base sponsorship", async () => {
+    pricingRead.mockResolvedValue(mockPricing({ basePrice: 100 }));
+    sponsorships.mockResolvedValue([mockSponsorship({ code: "BASE", totalAmount: 500 }), mockSponsorship({ code: "BASE2", totalAmount: 500 })]);
+    const result = await service.calculatePrice(eventId, {
+      formData: { extras: ["lunch", "lunch", "dinner"], hidden: "vip" },
+      selectedAccessItems: [], sponsorshipCodes: ["BASE", "BASE2"],
+    }, undefined, { formSchema: optionSchema });
+    expect(result).toMatchObject({ calculatedBasePrice: 100, optionModifiersTotal: 32.375,
+      subtotal: 132.375, sponsorshipTotal: 100, total: 32.375 });
+    expect(result.optionModifiers).toHaveLength(2);
+    expect(result.money).toMatchObject({ currency: "TND", scale: 3,
+      amountsMinor: { subtotal: 132375, total: 32375, optionModifiersTotal: 32375 } });
+  });
+
+  it("does not back-charge unchanged options on a legacy registration edit", async () => {
+    pricingRead.mockResolvedValue(mockPricing({ basePrice: 100 }));
+    const input = { formData: { extras: ["lunch"] }, selectedAccessItems: [], sponsorshipCodes: [] };
+    const previous = { formData: input.formData, optionModifiers: [] };
+    const unchanged = await service.calculatePrice(eventId, input, undefined, { formSchema: optionSchema, previous });
+    expect(unchanged.total).toBe(100);
+    const changed = await service.calculatePrice(eventId, { ...input, formData: { extras: ["dinner"] } }, undefined,
+      { formSchema: optionSchema, previous });
+    expect(changed.total).toBe(120.25);
+  });
+
+  it("floors a negative option adjustment at zero without changing the catalogue base", async () => {
+    pricingRead.mockResolvedValue(mockPricing({ basePrice: 10 }));
+    const result = await service.calculatePrice(eventId, {
+      formData: { discount: "yes" }, selectedAccessItems: [], sponsorshipCodes: [],
+    }, undefined, { formSchema: { steps: [{ id: "s", title: "", fields: [
+      { id: "discount", type: "radio", options: [{ id: "yes", priceModifier: -20 }] },
+    ] }] } });
+    expect(result).toMatchObject({ basePrice: 10, calculatedBasePrice: 10, optionModifiersTotal: -20, subtotal: 0, total: 0 });
+  });
+
   it("uses base price when no rules match", async () => {
     pricingRead.mockResolvedValue(mockPricing({ basePrice: 300, currency: "TND" }));
 

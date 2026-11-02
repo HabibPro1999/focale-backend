@@ -128,10 +128,10 @@ describe("deriveSettlement", () => {
 
   it.each([
     ["gross", { gross: -1 }],
-    ["sponsorship", { sponsorship: 1.5 }],
+    ["sponsorship", { sponsorship: 1.00001 }],
     ["paid", { paid: Number.NaN }],
   ])("rejects an invalid %s amount", (name, overrides) => {
-    expect(() => derive(overrides)).toThrow(new RegExp(`^${name} must be a non-negative integer amount`));
+    expect(() => derive(overrides)).toThrow(new RegExp(`^${name} must be a non-negative exact money amount`));
   });
 });
 

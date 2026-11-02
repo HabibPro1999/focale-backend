@@ -238,7 +238,7 @@ describe("ClientsService", () => {
   describe("list", () => {
     it("computes pagination meta from data + total", async () => {
       db.listClientsPage.mockResolvedValue({
-        data: [makeClient(), makeClient(), makeClient()],
+        data: [{ ...makeClient(), userCount: 2, eventCount: 1 }, { ...makeClient(), userCount: 2, eventCount: 1 }, { ...makeClient(), userCount: 2, eventCount: 1 }],
         total: 25,
       });
 

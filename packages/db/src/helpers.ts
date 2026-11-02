@@ -1,5 +1,5 @@
 import { newId } from "@app/shared";
-import { text, timestamp } from "drizzle-orm/pg-core";
+import { text, timestamp, numeric } from "drizzle-orm/pg-core";
 
 /**
  * Primary key: app-side identifier defaulted with a UUIDv7. Column name derived
@@ -57,4 +57,9 @@ export const STANDARD_RETRY_DELAYS_MS = [60 * 1000, 5 * 60 * 1000, 15 * 60 * 100
 export function standardRetryDelayMs(failedAttemptCount: number): number {
   const step = Math.min(Math.max(failedAttemptCount, 1), STANDARD_RETRY_DELAYS_MS.length);
   return STANDARD_RETRY_DELAYS_MS[step - 1]!;
+}
+
+/** Exact decimal persistence preserves legacy major-unit values without rescaling them. */
+export function moneyColumn() {
+  return numeric({ precision: 20, scale: 4, mode: "number" });
 }

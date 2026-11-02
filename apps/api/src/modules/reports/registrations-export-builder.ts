@@ -192,6 +192,7 @@ export async function prepareRegistrationsWorkbook(
           {
             paymentStatus: body.filters.paymentStatus,
             paymentMethod: body.filters.paymentMethod,
+            role: body.filters.role,
             search: body.filters.search,
             startDate: body.filters.startDate,
             endDate: body.filters.endDate,

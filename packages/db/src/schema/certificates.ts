@@ -5,6 +5,7 @@ import {
   integer,
   pgTable,
   text,
+  timestamp,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { StoredCertificateZonesSchema } from "@app/contracts";
@@ -38,6 +39,7 @@ export const certificateTemplates = pgTable(
       onUpdate: "cascade",
     }),
     active: boolean().notNull().default(true),
+    deletedAt: timestamp({ precision: 3, withTimezone: true }),
     // H2: registration-vs-abstract scope. Plain text + CHECK constraint (migration
     // 0005), NOT a new pg enum — schema.migration.test.ts (owned by another agent)
     // asserts exactly 19 enum types across every migration file, and a genuine new

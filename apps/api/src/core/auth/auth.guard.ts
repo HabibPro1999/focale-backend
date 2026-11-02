@@ -9,7 +9,7 @@ import {
 import { Reflector } from "@nestjs/core";
 import { ErrorCodes, UserRole } from "@app/contracts";
 import { verifyToken } from "@app/integrations";
-import { getUserWithClientById } from "@app/db";
+import { getDb, getUserWithClientById, recordUserLogin } from "@app/db";
 import { ROLE_KEY } from "./auth.decorator";
 import {
   userCache,
@@ -48,7 +48,7 @@ export class AuthGuard implements CanActivate {
         const dbUser = await getUserWithClientById(decoded.uid);
         if (dbUser) {
           authUser = {
-            // Explicit 8-field allowlist — do NOT spread the whole row.
+            // Explicit allowlist — do NOT spread the whole row.
             user: {
               id: dbUser.id,
               email: dbUser.email,
@@ -58,6 +58,7 @@ export class AuthGuard implements CanActivate {
               active: dbUser.active,
               createdAt: dbUser.createdAt,
               updatedAt: dbUser.updatedAt,
+              lastLoginAt: dbUser.lastLoginAt ?? null,
             },
             client: dbUser.client,
           };
@@ -73,11 +74,25 @@ export class AuthGuard implements CanActivate {
       }
       if (!authUser.user.active) {
         throw new UnauthorizedException({
-          code: ErrorCodes.UNAUTHORIZED,
+          code: ErrorCodes.USER_INACTIVE,
           message: "User account is disabled",
         });
       }
       assertTenantClientActive(authUser);
+
+      // auth_time is the verified sign-in time, unlike token iat or request time.
+      const loginSeconds = decoded.auth_time;
+      if (Number.isSafeInteger(loginSeconds) && loginSeconds > 0 && loginSeconds * 1000 <= Date.now() + 60_000 &&
+          loginSeconds * 1000 > (authUser.user.lastLoginAt?.getTime() ?? 0)) {
+        const at = new Date(loginSeconds * 1000);
+        try {
+          await recordUserLogin(decoded.uid, at, getDb());
+          authUser.user.lastLoginAt = at;
+        } catch {
+          // Analytics metadata must not turn a valid login into INVALID_TOKEN.
+          logger.warn("Failed to record authenticated login time");
+        }
+      }
 
       req.user = authUser.user;
       req.client = authUser.client;

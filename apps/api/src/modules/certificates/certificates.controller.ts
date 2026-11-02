@@ -1,3 +1,5 @@
+import { CertificateSendPreviewSchema, TestCertificateResultSchema } from "@app/contracts";
+import { ResponseContract } from "../../core/response-contract";
 import {
   BadRequestException,
   Body,
@@ -14,12 +16,16 @@ import {
 } from "@nestjs/common";
 import type { FastifyReply } from "fastify";
 import type { ScopedEventRow } from "@app/db";
+import { CurrentUser } from "../../core/auth/current-user.decorator";
+import type { AuthUser } from "../../core/auth/user-cache";
 import { Auth } from "../../core/auth/auth.decorator";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { readSingleFile, type MultipartRequest } from "../../core/multipart";
 import { CertificateTemplateScoped, EventScoped, ScopedEvent } from "../tenancy";
 import { CertificatesService } from "./certificates.service";
 import {
+  TestCertificateBodyDto,
+  RestoreCertificateBodyDto,
   CertificateEventIdParamDto,
   CertificateIdParamDto,
   CreateCertificateTemplateDto,
@@ -74,13 +80,20 @@ export class CertificatesController {
     return this.certificates.updateTemplate(params.id, body);
   }
 
-  // DELETE /api/events/certificates/:id — delete template + stored image
+  // DELETE /api/events/certificates/:id — soft-delete; images retained for Undo
   @Delete("certificates/:id")
   @HttpCode(204)
   @SkipEnvelope() // bare 204, no body/envelope (legacy parity)
   @CertificateTemplateScoped({ module: "certificates", write: true })
   async remove(@Param() params: CertificateIdParamDto) {
     await this.certificates.deleteTemplate(params.id);
+  }
+
+  @Post("certificates/:id/restore")
+  @HttpCode(200)
+  @CertificateTemplateScoped({ module: "certificates", write: true })
+  restore(@Param() params: CertificateIdParamDto, @Body() _body: RestoreCertificateBodyDto) {
+    return this.certificates.restoreTemplate(params.id);
   }
 
   // POST /api/events/certificates/:id/image — upload template image (multipart)
@@ -140,4 +153,21 @@ export class CertificatesController {
       body.abstractIds,
     );
   }
+
+  @Post(":eventId/certificates/send/dry-run")
+  @HttpCode(200)
+  @EventScoped({ module: ["certificates", "emails"], write: true })
+  @ResponseContract(CertificateSendPreviewSchema)
+  dryRun(@Param() params: CertificateEventIdParamDto, @Body() body: SendCertificatesBodyDto) {
+    return this.certificates.dryRunCertificates(params.eventId, body.registrationIds, body.abstractIds);
+  }
+  @Post("certificates/:id/test-send")
+  @HttpCode(200)
+  @CertificateTemplateScoped({ module: ["certificates", "emails"], write: true })
+  @ResponseContract(TestCertificateResultSchema)
+  testSend(@Param() params: CertificateIdParamDto, @Body() _body: TestCertificateBodyDto,
+    @CurrentUser() user: AuthUser) {
+    return this.certificates.testSendCertificate(params.id, user);
+  }
+
 }

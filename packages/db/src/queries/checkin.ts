@@ -216,7 +216,7 @@ async function countRegistrations(
     .select({ value: sql<number>`count(*)::int` })
     .from(registrations)
     .where(where);
-  return rows[0]?.value ?? 0;
+  return Number(rows[0]?.value ?? 0);
 }
 
 export function countEventRegistrations(
@@ -244,7 +244,7 @@ export async function getAccessCheckInCounts(
   eventId: string,
   exec: DbExecutor = getDb(),
 ): Promise<{ accessId: string; count: number }[]> {
-  return exec
+  const rows = await exec
     .select({
       accessId: accessCheckIns.accessId,
       count: sql<number>`count(${accessCheckIns.id})::int`,
@@ -260,6 +260,7 @@ export async function getAccessCheckInCounts(
       ),
     )
     .groupBy(accessCheckIns.accessId);
+  return rows.map((row) => ({ ...row, count: Number(row.count) }));
 }
 
 /** Active access catalogue for an event (id, name, type). */

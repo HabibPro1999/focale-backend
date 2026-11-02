@@ -83,7 +83,9 @@ export async function transitionNetworkingMeetings(
   const m = networkingMeetings;
   const rows = await db
     .update(m)
-    .set({ ...set, status: to, revision: sql`${m.revision}+1` })
+    .set({ ...set, status: to, revision: sql`${m.revision}+1`,
+      ...(transition === "CANCEL" ? { cancellationState: sql`jsonb_build_object('status', ${m.status}, 'proposedStartsAt', ${m.proposedStartsAt}, 'proposalBy', ${m.proposalBy})` } : {}),
+    })
     .where(
       and(
         eq(m.eventId, eventId),

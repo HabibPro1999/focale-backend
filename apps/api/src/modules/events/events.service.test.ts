@@ -272,7 +272,7 @@ describe("EventsService", () => {
       expectAppErrorSync(
         () => assertEventWritable({ status: "ARCHIVED" }),
         400,
-        ErrorCodes.INVALID_STATUS_TRANSITION,
+        ErrorCodes.EVENT_ARCHIVED,
       );
     });
   });
@@ -355,9 +355,19 @@ describe("EventsService", () => {
       await expectAppError(
         service.updateEvent(eventId, { currency: "EUR" }),
         400,
-        ErrorCodes.VALIDATION_ERROR,
+        ErrorCodes.CURRENCY_LOCKED,
         "Cannot change currency after registrations exist",
       );
+      expect(db.upsertEventPricingTx).not.toHaveBeenCalled();
+    });
+
+    it("rejects a currency change that cannot represent a retained fractional base price", async () => {
+      vi.mocked(db.getEventWithPricing).mockResolvedValue({
+        ...createMockEvent(), pricing: createMockEventPricing({ basePrice: 1.125, currency: "TND" }),
+      } as never);
+      vi.mocked(db.countRegistrationsTx).mockResolvedValue(0);
+      await expect(service.updateEvent(eventId, { currency: "EUR" }))
+        .rejects.toThrow("Invalid monetary amount or precision for EUR");
       expect(db.upsertEventPricingTx).not.toHaveBeenCalled();
     });
 
@@ -669,7 +679,7 @@ describe("EventsService", () => {
           mimetype: "image/png",
         }),
         400,
-        ErrorCodes.INVALID_STATUS_TRANSITION,
+        ErrorCodes.EVENT_ARCHIVED,
       );
       expect(fileTypeFromBuffer).not.toHaveBeenCalled();
     });

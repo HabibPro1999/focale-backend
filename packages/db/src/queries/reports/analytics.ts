@@ -237,7 +237,7 @@ export async function getAccessBreakdown(
     SELECT
       (item->>'accessId')::TEXT AS access_id,
       COUNT(*) AS count,
-      COALESCE(SUM((item->>'subtotal')::INTEGER), 0) AS total_amount
+      COALESCE(SUM((item->>'subtotal')::DECIMAL), 0) AS total_amount
     FROM registrations r,
     LATERAL jsonb_array_elements(r.price_breakdown->'accessItems') AS item
     WHERE r.event_id = ${eventId}
@@ -316,6 +316,7 @@ export interface EventAnalyticsData {
     name: string;
     type: string;
     registeredCount: number;
+    paidCount: number;
     maxCapacity: number | null;
   }>;
   sponsorshipsByStatus: Array<{ status: string; count: number }>;
@@ -341,6 +342,7 @@ export async function getEventAnalyticsData(eventId: string): Promise<EventAnaly
           name: eventAccess.name,
           type: eventAccess.type,
           registeredCount: eventAccess.registeredCount,
+          paidCount: eventAccess.paidCount,
           maxCapacity: eventAccess.maxCapacity,
         })
         .from(eventAccess)

@@ -237,7 +237,7 @@ beforeEach(() => {
     formId: "form1",
     eventId: "ev1",
     email: "a@b.com",
-    formData: {},
+    formData: {}, currency: "TND", paidAmount: 0, totalAmount: 0, sponsorshipAmount: 0,
     priceBreakdown: { accessItems: [] },
     accessTypeIds: [],
     editToken: "tok",
@@ -281,6 +281,18 @@ function storedRow() {
 }
 
 describe("public quote equals the public create charge", () => {
+  it("quotes and stores the same fractional option surcharge after a pricing rule", async () => {
+    const schema = structuredClone(SCHEMA);
+    Object.assign(schema.steps[0].fields[0].options![0], { priceModifier: 12.125 });
+    db.getFormForPriceQuote.mockResolvedValue({ schema, eventId: "ev1", active: true, type: "REGISTRATION", event: openEvent });
+    db.findActiveRegistrationFormById.mockResolvedValue({ id: "form1", schema, eventId: "ev1", schemaVersion: 1, event: openEvent });
+    const formData = { member: "yes", memberId: "M-1" };
+    const quoted = await quote.calculatePrice({ formId: "form1" }, { formData, selectedAccessItems: [], sponsorshipCodes: [] });
+    await service.createPublicRegistration("form1", { formData, email: "options@example.test", accessSelections: [] } as never);
+    expect(quoted).toMatchObject({ calculatedBasePrice: 150, optionModifiersTotal: 12.125, subtotal: 162.125 });
+    expect(storedRow()).toMatchObject({ totalAmount: 162.125, priceBreakdown: { optionModifiersTotal: 12.125, subtotal: 162.125 } });
+  });
+
   it.each([
     {
       name: "a stale answer to a hidden field does not price the quote",

@@ -1,6 +1,8 @@
 import {
   AbstractsEventIdParamSchema,
   ThemeIdParamSchema,
+  ReorderAbstractThemesSchema,
+  DeleteUnusedThemeParamSchema,
   AbstractAdminParamSchema,
   AbstractBookJobParamSchema,
   PatchConfigSchema,
@@ -85,3 +87,7 @@ export class ExportAbstractsQueryDto extends createZodDto(ExportAbstractsQuerySc
 export class CommitteeInviteVerifyDto extends createZodDto(CommitteeInviteVerifySchema) {}
 export class CommitteeInviteSetPasswordDto extends createZodDto(CommitteeInviteSetPasswordSchema) {}
 export class CommitteeInviteResendDto extends createZodDto(CommitteeInviteResendSchema) {}
+
+export class DeleteUnusedThemeParamDto extends createZodDto(DeleteUnusedThemeParamSchema) {}
+
+export class ReorderAbstractThemesDto extends createZodDto(ReorderAbstractThemesSchema) {}

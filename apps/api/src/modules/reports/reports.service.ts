@@ -128,6 +128,7 @@ export class ReportsService {
         name: item.name,
         type: item.type,
         registeredCount: item.registeredCount,
+        paidCount: item.paidCount,
         maxCapacity: item.maxCapacity,
         fillPercentage:
           item.maxCapacity && item.maxCapacity > 0
@@ -203,6 +204,7 @@ export class ReportsService {
     query: ExportRegistrationsQuery,
   ): Promise<ExportDownload> {
     const filters = {
+      role: query.role,
       paymentStatus: query.paymentStatus,
       paymentMethod: query.paymentMethod,
       search: query.search,

@@ -50,7 +50,7 @@ describe("settlementInvariantViolations", () => {
     ["total is not subtotal − sponsorshipTotal", { total: 450 }, /total 450 is not subtotal − sponsorshipTotal/],
     ["subtotal is not base + access", { subtotal: 600, total: 500 }, /subtotal 600 is not calculatedBasePrice \+ accessTotal/],
     ["accessTotal is not the sum of the items", { accessTotal: 150, subtotal: 450, total: 350 }, /accessTotal 150 is not the sum/],
-    ["an amount is negative", { calculatedBasePrice: -1 }, /calculatedBasePrice not a non-negative integer/],
+    ["an amount is negative", { calculatedBasePrice: -1 }, /calculatedBasePrice not a non-negative money amount/],
   ])("rejects a written breakdown whose %s", (_, over, message) => {
     const violations = settlementInvariantViolations(row({ priceBreakdown: breakdown(over) }), wrote("priceBreakdown"));
     expect(violations.join("\n")).toMatch(message);
@@ -91,15 +91,15 @@ describe("applyRegistrationSettlement outside the database", () => {
     ).rejects.toThrow(/Money columns are written only through the settlement: paidAmount/);
   });
 
-  it("refuses a negative or fractional amount before writing", async () => {
+  it("refuses a negative amount or unsupported precision before writing", async () => {
     const error = await applyRegistrationSettlement(tx, {
       registrationId: "r",
-      settlement: { paidAmount: -1, totalAmount: 2.5 },
+      settlement: { paidAmount: -1, totalAmount: 2.50001 },
     }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(SettlementInvariantError);
     expect((error as SettlementInvariantError).violations).toEqual([
-      "paidAmount -1 is not a non-negative integer",
-      "totalAmount 2.5 is not a non-negative integer",
+      "paidAmount -1 is not a non-negative money amount",
+      "totalAmount 2.50001 is not a non-negative money amount",
     ]);
     expect((tx as unknown as { update: ReturnType<typeof vi.fn> }).update).not.toHaveBeenCalled();
   });

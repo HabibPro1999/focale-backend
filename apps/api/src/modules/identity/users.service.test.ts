@@ -567,11 +567,11 @@ describe("deleteUser", () => {
     expect(fbm.deleteFirebaseUser).toHaveBeenCalledWith("user-123");
   });
 
-  it("blocks deleting your own account before any DB access (400 BAD_REQUEST)", async () => {
+  it("blocks deleting your own account before any DB access (400 USER_SELF_DELETE)", async () => {
     await expectHttp(
       () => service.deleteUser("user-123", "user-123"),
       400,
-      ErrorCodes.BAD_REQUEST,
+      ErrorCodes.USER_SELF_DELETE,
     );
     expect(dbm.deleteUser).not.toHaveBeenCalled();
     expect(fbm.deleteFirebaseUser).not.toHaveBeenCalled();

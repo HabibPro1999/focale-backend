@@ -48,6 +48,7 @@ function dbUser(role: number, clientId: string | null, active = true) {
     active: true,
     createdAt: TS,
     updatedAt: TS,
+    lastLoginAt: null,
     client: clientId
       ? {
           id: clientId,

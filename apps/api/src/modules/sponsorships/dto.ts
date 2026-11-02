@@ -1,4 +1,4 @@
-import {
+import { RestoreSponsorshipBodySchema,
   CreateSponsorshipBatchSchema,
   LinkSponsorshipByCodeSchema,
   LinkSponsorshipSchema,
@@ -42,3 +42,5 @@ export class LinkSponsorshipDto extends createZodDto(LinkSponsorshipSchema) {}
 export class LinkSponsorshipByCodeDto extends createZodDto(
   LinkSponsorshipByCodeSchema,
 ) {}
+
+export class RestoreSponsorshipDto extends createZodDto(RestoreSponsorshipBodySchema) {}

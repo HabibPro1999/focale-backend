@@ -198,8 +198,9 @@ export const NetworkingProfileUpdateSchema = z
   .strict();
 export const NetworkingAdminProfileUpdateSchema =
   NetworkingProfileUpdateSchema.omit({ resetFields: true }).extend({
-    status: z.enum(NETWORKING_PROFILE_STATUSES).optional(),
+    status: z.enum(NETWORKING_PROFILE_STATUSES).optional().describe("Access revocation and status notifications run only when the status changes."),
     featured: z.boolean().optional(),
+    notify: z.boolean().optional(),
     standTableId: id.nullable().optional(),
   }).strict();
 /** Always paginated: 50 items by default, at most 200. */
@@ -296,7 +297,8 @@ export const NetworkingReportSchema = z
   .strict();
 export const NetworkingReportActionSchema = z
   .object({
-    action: z.enum(["DISMISS", "RESOLVE", "WARN", "SUSPEND", "EXCLUDE"]),
+    action: z.enum(["DISMISS", "RESOLVE", "WARN", "SUSPEND", "EXCLUDE", "REOPEN"]),
+    notify: z.boolean().optional(),
     note: z.string().max(2000).optional(),
   })
   .strict();
@@ -323,7 +325,9 @@ export const NetworkingMeetingRespondSchema = z
   );
 export const NetworkingAdminMeetingUpdateSchema = z
   .object({
-    action: z.enum(["ASSIGN", "CANCEL", "COMPLETED", "NO_SHOW"]),
+    action: z.enum(["ASSIGN", "CANCEL", "COMPLETED", "NO_SHOW", "RESTORE"]),
+    notify: z.boolean().optional(),
+    expectedRevision: z.number().int().positive().optional(),
     tableId: id.optional(),
   })
   .strict()
@@ -513,6 +517,7 @@ export interface NetworkingAnalytics {
   cancelledMeetings: number;
   noShowMeetings: number;
   pendingMeetings: number;
+  awaitingAllocationCount: number;
   tableOccupancyRate: number;
   /** Meeting-station minutes per table over the opening slots. */
   tableUsage: Array<{
@@ -538,6 +543,7 @@ export interface NetworkingAnalytics {
     averageDelayMinutes: number;
   };
   reports: number;
+  openReports: number;
   hourlyActivity?: Array<{ hour: string; activity: number }>;
   timeSeries: Array<{
     date: string;
@@ -616,3 +622,23 @@ export function networkingActivity(lastActiveAt: Date | string | null, now = Dat
   const age = lastActiveAt ? now - new Date(lastActiveAt).getTime() : Infinity;
   return age <= 86_400_000 ? "VERY_ACTIVE" : age <= 7 * 86_400_000 ? "ACTIVE" : "INACTIVE";
 }
+
+/** Cancellation provenance excludes message text and personal profile data. */
+export const StoredNetworkingMeetingCancellationSchema = z.object({
+  status: z.enum(["PENDING", "PENDING_ALLOCATION", "CONFIRMED"]),
+  proposedStartsAt: z.string().nullable(), proposalBy: z.string().nullable(),
+});
+export type StoredNetworkingMeetingCancellation = z.infer<typeof StoredNetworkingMeetingCancellationSchema>;
+
+export const NetworkingRestoreAccessSchema = z.strictObject({ undoId: id, notify: z.boolean().optional() });
+const networkingAccessStateSchema = z.object({
+  status: z.enum(NETWORKING_PROFILE_STATUSES), consent: z.boolean(), visible: z.boolean(), meetingsEnabled: z.boolean(),
+  consentOverride: z.boolean().optional(),
+});
+export const StoredNetworkingAccessUndoSchema = z.object({
+  before: networkingAccessStateSchema, after: networkingAccessStateSchema,
+  afterUpdatedAt: z.string(), meetings: z.array(z.object({ id: z.string(), revision: z.number().int() })),
+});
+export type NetworkingRestoreAccess = z.infer<typeof NetworkingRestoreAccessSchema>;
+
+export const NetworkingAdminRecordParamSchema = z.strictObject({ eventId: id, id });

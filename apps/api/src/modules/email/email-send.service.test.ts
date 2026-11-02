@@ -514,3 +514,19 @@ describe("resendUncertain (3.6)", () => {
     expect(error).toMatchObject({ statusCode: status, code });
   });
 });
+
+describe("unsaved email drafts", () => {
+  it("compiles and previews the supplied draft without sending or queuing", async () => {
+    const preview = await service.previewDraft("event", { subject: "Draft", content: { type: "doc", content: [] }, language: "fr" });
+    expect(preview).toEqual({ subject: "Draft", html: "HTML", plain: "PLAIN" });
+    expect(getSampleEmailContext).toHaveBeenCalledWith("fr");
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    expect(insertEmailLogsSkippingConflicts).not.toHaveBeenCalled();
+  });
+  it("test-sends that same unsaved rendering and never inserts a queue row", async () => {
+    sendEmailMock.mockResolvedValue({ success: true, messageId: "draft-test" });
+    await service.testSendDraft("event", { subject: "Draft", content: { type: "doc", content: [] }, language: "en", recipientEmail: "admin@example.test" });
+    expect(sendEmailMock).toHaveBeenCalledWith(expect.objectContaining({ to: "admin@example.test", subject: "[TEST] Draft", html: "HTML", plainText: "PLAIN" }));
+    expect(insertEmailLogsSkippingConflicts).not.toHaveBeenCalled();
+  });
+});

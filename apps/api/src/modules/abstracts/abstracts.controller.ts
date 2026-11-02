@@ -33,6 +33,8 @@ import { AbstractsBookService } from "./abstracts.book.service";
 import {
   AbstractsEventIdParamDto,
   ThemeIdParamDto,
+  ReorderAbstractThemesDto,
+  DeleteUnusedThemeParamDto,
   AbstractAdminParamDto,
   AbstractBookJobParamDto,
   PatchConfigDto,
@@ -122,6 +124,12 @@ export class AbstractsController {
     return this.config.createTheme(eventId, body);
   }
 
+  @Put(":eventId/abstracts/themes/order")
+  @EventScoped({ module: "abstracts", write: true })
+  reorderThemes(@Param() { eventId }: AbstractsEventIdParamDto, @Body() body: ReorderAbstractThemesDto) {
+    return this.config.reorderThemes(eventId, body.themeIds);
+  }
+
   @Patch(":eventId/abstracts/themes/:themeId")
   @EventScoped({ module: "abstracts" })
   async updateTheme(
@@ -129,6 +137,14 @@ export class AbstractsController {
     @Body() body: UpdateThemeDto,
   ) {
     return this.config.updateTheme(eventId, themeId, body);
+  }
+
+  @Delete(":eventId/abstracts/themes/:themeId/permanent")
+  @EventScoped({ module: "abstracts", write: true })
+  @HttpCode(204)
+  @SkipEnvelope()
+  async deleteUnusedTheme(@Param() { eventId, themeId }: DeleteUnusedThemeParamDto): Promise<void> {
+    await this.config.deleteUnusedTheme(eventId, themeId);
   }
 
   @Delete(":eventId/abstracts/themes/:themeId")

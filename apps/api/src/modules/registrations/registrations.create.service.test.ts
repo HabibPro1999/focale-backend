@@ -466,7 +466,7 @@ describe("RegistrationCreateService", () => {
         sponsorshipCode: "sp-abcd2345",
       } as never);
 
-      expect(pricing.calculatePrice).toHaveBeenCalledWith("ev1", expect.objectContaining({ sponsorshipCodes: [] }));
+      expect(pricing.calculatePrice).toHaveBeenCalledWith("ev1", expect.objectContaining({ sponsorshipCodes: [] }), undefined, expect.objectContaining({ formSchema: expect.anything() }));
       expect(res.created).toBe(true);
       expect(res.priceBreakdown).toEqual(settledBreakdown);
       expect(res.registration.paymentStatus).toBe("SPONSORED");

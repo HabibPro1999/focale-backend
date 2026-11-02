@@ -3,6 +3,7 @@ import type { ClientModuleGate } from "./clients";
 import { rowsOf } from "../helpers";
 import {
   and,
+  asc,
   count,
   desc,
   eq,
@@ -17,7 +18,7 @@ import {
   type SQL,
 } from "drizzle-orm";
 import type { OffsetPagination } from "@app/shared";
-import type { ListRegistrationsQuery, StoredFormSchemaJson } from "@app/contracts";
+import type { PlatformRegistrationsQuery, ListRegistrationsQuery, StoredFormSchemaJson } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
 import { escapeLike } from "../like";
 import { SETTLEMENT_COLUMNS, type RegistrationFieldsPatch } from "../settlement/writer";
@@ -185,11 +186,12 @@ export interface RegistrationFilters {
 }
 
 /** The one WHERE for an event's registrations (list, stats, exports). */
-export function buildRegistrationWhere(
-  eventId: string,
-  filters: RegistrationFilters = {},
-): SQL {
-  const clauses: (SQL | undefined)[] = [eq(registrations.eventId, eventId)];
+export function buildRegistrationWhere(eventId: string, filters: RegistrationFilters = {}): SQL {
+  return registrationPredicate(eventId, filters);
+}
+
+function registrationPredicate(eventId: string | undefined, filters: RegistrationFilters): SQL {
+  const clauses: (SQL | undefined)[] = [eventId ? eq(registrations.eventId, eventId) : sql`true`];
   if (filters.paymentStatus) {
     clauses.push(
       eq(
@@ -297,6 +299,28 @@ export interface RegistrationListRow extends AdminRegistrationRow {
   event: RegistrationEventMeta;
 }
 
+function registrationOrder(query: Pick<ListRegistrationsQuery, "sort" | "sortOrder">) {
+  const direction = (query.sortOrder ?? (query.sort === "name" ? "asc" : "desc")) === "asc" ? asc : desc;
+  const column = query.sort === "name" ? sql`lower(trim(coalesce(${registrations.firstName}, '') || ' ' || coalesce(${registrations.lastName}, '')))`
+    : query.sort === "amount" ? registrations.totalAmount : registrations.createdAt;
+  return [direction(column), direction(registrations.id)];
+}
+
+/** SUPER_ADMIN entry point. Selects the same credential-free columns as event lists. */
+export async function listPlatformRegistrationRows(
+  query: Omit<PlatformRegistrationsQuery, "page"> & OffsetPagination, db: DbExecutor = getDb(),
+): Promise<{ data: RegistrationListRow[]; total: number }> {
+  const where = and(registrationPredicate(query.eventId, query),
+    query.clientId ? eq(events.clientId, query.clientId) : undefined);
+  const rows = await db.select({ reg: ADMIN_REGISTRATION_COLUMNS, formId: forms.id, formName: forms.name, ...EVENT_META })
+    .from(registrations).innerJoin(forms, eq(forms.id, registrations.formId))
+    .innerJoin(events, eq(events.id, registrations.eventId)).where(where)
+    .orderBy(...registrationOrder(query)).limit(query.limit).offset(query.offset);
+  const [total] = await db.select({ value: count() }).from(registrations)
+    .innerJoin(events, eq(events.id, registrations.eventId)).where(where);
+  return { data: rows.map(r => ({ ...checkRegistrationRow(r.reg), ...registrationMeta(r) })), total: Number(total?.value ?? 0) };
+}
+
 export interface RegistrationStatRow {
   paymentStatus: string;
   cnt: number;
@@ -343,7 +367,7 @@ export async function listRegistrationRows(
       .innerJoin(forms, eq(registrations.formId, forms.id))
       .innerJoin(events, eq(registrations.eventId, events.id))
       .where(where)
-      .orderBy(desc(registrations.createdAt))
+      .orderBy(...registrationOrder(query))
       .limit(limit)
       .offset(offset),
     db.select({ value: count() }).from(registrations).where(where),

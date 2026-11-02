@@ -1,3 +1,5 @@
+import { UndoCheckInResultSchema } from "@app/contracts";
+import { ResponseContract } from "../../core/response-contract";
 import {
   Body,
   Controller,
@@ -13,6 +15,7 @@ import { EventScoped } from "../tenancy";
 import { type AuthUser } from "../../core/auth/user-cache";
 import { CheckinService } from "./checkin.service";
 import {
+  UndoCheckInBodyDto,
   BatchSyncBodyDto,
   CheckInBodyDto,
   CheckInEventParamDto,
@@ -44,6 +47,16 @@ export class CheckinController {
       body.accessId,
       user.id,
     );
+  }
+
+
+  @Post(":eventId/checkin/undo")
+  @EventScoped({ write: true })
+  @HttpCode(200)
+  @ResponseContract(UndoCheckInResultSchema)
+  undo(@CurrentUser() user: AuthUser, @Param() params: CheckInEventParamDto,
+    @Body() body: UndoCheckInBodyDto) {
+    return this.checkin.undo(params.eventId, body, user.id);
   }
 
   @Get(":eventId/checkin/registrations")
