@@ -7,6 +7,7 @@
 
 import { type PDFDocument, type PDFFont, type PDFPage, rgb } from "pdf-lib";
 import { dejaVuFontPath, embedFontFile } from "../pdf-fonts";
+import { bidiTextWidth, pdfTextRuns } from "./bidi-text";
 import { logger } from "../logger";
 import { integrationsConfig } from "../config";
 
@@ -63,7 +64,7 @@ export function findFitFontSize(
   let hi = maxFontSize;
   while (hi - lo > 0.5) {
     const mid = (lo + hi) / 2;
-    const width = font.widthOfTextAtSize(text, mid);
+    const width = bidiTextWidth(font, text, mid);
     const height = font.heightAtSize(mid);
     if (width <= maxWidth && height <= maxHeight) {
       lo = mid;
@@ -80,10 +81,10 @@ export function truncateTextToWidth(
   fontSize: number,
   maxWidth: number,
 ): string {
-  if (font.widthOfTextAtSize(text, fontSize) <= maxWidth) return text;
+  if (bidiTextWidth(font, text, fontSize) <= maxWidth) return text;
 
   const ellipsis = "...";
-  if (font.widthOfTextAtSize(ellipsis, fontSize) > maxWidth) return "";
+  if (bidiTextWidth(font, ellipsis, fontSize) > maxWidth) return "";
 
   const chars = Array.from(text);
   let lo = 0;
@@ -91,7 +92,7 @@ export function truncateTextToWidth(
   while (lo < hi) {
     const mid = Math.ceil((lo + hi) / 2);
     const candidate = `${chars.slice(0, mid).join("")}${ellipsis}`;
-    if (font.widthOfTextAtSize(candidate, fontSize) <= maxWidth) {
+    if (bidiTextWidth(font, candidate, fontSize) <= maxWidth) {
       lo = mid;
     } else {
       hi = mid - 1;
@@ -205,7 +206,10 @@ export function drawTextZone(
   const { text, fontSize } = fitTextToZone(font, value, zoneW, zoneH, zone.fontSize);
   if (!text) return;
 
-  const textWidth = font.widthOfTextAtSize(text, fontSize);
+  // Mixed Latin/Arabic text is drawn run by run in visual order (./bidi-text).
+  const runs = pdfTextRuns(text);
+  const runWidths = runs.map((run) => font.widthOfTextAtSize(run, fontSize));
+  const textWidth = runWidths.reduce((sum, width) => sum + width, 0);
   const { height: textHeight, baselineOffset } = getVerticalTextMetrics(font, fontSize);
 
   let textX = zoneX;
@@ -226,11 +230,15 @@ export function drawTextZone(
 
   const { r, g, b } = hexToRgb(zone.color);
 
-  page.drawText(text, {
-    x: textX,
-    y: textY,
-    size: fontSize,
-    font,
-    color: rgb(r, g, b),
-  });
+  let runX = textX;
+  for (const [index, run] of runs.entries()) {
+    page.drawText(run, {
+      x: runX,
+      y: textY,
+      size: fontSize,
+      font,
+      color: rgb(r, g, b),
+    });
+    runX += runWidths[index]!;
+  }
 }
