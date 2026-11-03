@@ -30,6 +30,7 @@ export * from "./registrations.responses";
 export * from "./abstracts";
 export * from "./abstracts.responses";
 export * from "./certificates";
+export * from "./badges";
 export * from "./checkin";
 export * from "./reports";
 export * from "./i18n.schema";

@@ -19,6 +19,8 @@ const sendEmailMock = vi.fn();
 vi.mock("@app/integrations", () => ({
   getEmailProvider: () => ({ sendEmail: sendEmailMock }),
   getSampleEmailContext: vi.fn(() => ({})),
+  SAMPLE_REGISTRATION_ID: "sample-registration-id",
+  buildTemplateAttachments: vi.fn(async () => []),
   resolveEmailParts: vi.fn((parts: unknown) => parts),
   buildEmailContextWithAccess: vi.fn(async () => ({
     eventName: "Conf",
@@ -48,7 +50,13 @@ import {
   insertEmailLogsSkippingConflicts,
   type AbstractForBulkEmail,
 } from "@app/db";
-import { getSampleEmailContext, resendUncertainEmail, resolveEmailParts, sendEmailNow } from "@app/integrations";
+import {
+  buildTemplateAttachments,
+  getSampleEmailContext,
+  resendUncertainEmail,
+  resolveEmailParts,
+  sendEmailNow,
+} from "@app/integrations";
 import { EmailSendService } from "./email-send.service";
 
 const service = new EmailSendService();
@@ -68,6 +76,7 @@ function template(overrides: Record<string, unknown> = {}) {
     subject: "Hello",
     htmlContent: "<p>hi</p>",
     plainContent: "hi",
+    attachments: [],
     ...overrides,
   } as never;
 }
@@ -100,6 +109,25 @@ describe("testSend", () => {
       { subject: "Hello", html: "<p>hi</p>", plain: "hi" },
       {},
     );
+    expect(sendEmailMock.mock.calls[0][0]).not.toHaveProperty("attachments");
+  });
+
+  it("attaches the template's attachments, built from the sample registration", async () => {
+    const qr = { filename: "checkin-qr-SAMPLE.png", type: "image/png", disposition: "attachment", content: "b64" };
+    vi.mocked(buildTemplateAttachments).mockResolvedValueOnce([qr] as never);
+    sendEmailMock.mockResolvedValue({ success: true, messageId: "m1" });
+
+    const badge = { type: "REGISTRATION_BADGE", badgeTemplateId: "11111111-1111-4111-8111-111111111111" };
+    vi.mocked(getSampleEmailContext).mockReturnValueOnce({ fullName: "John Doe" } as never);
+    await service.testSend(template({ eventId: "event", attachments: [{ type: "REGISTRATION_QR" }, badge] }), "to@x.com");
+
+    // The sample context also feeds the badge's text zones; its event scopes the badge.
+    expect(buildTemplateAttachments).toHaveBeenCalledWith([{ type: "REGISTRATION_QR" }, badge], {
+      registrationId: "sample-registration-id",
+      eventId: "event",
+      context: { fullName: "John Doe" },
+    });
+    expect(sendEmailMock).toHaveBeenCalledWith(expect.objectContaining({ attachments: [qr] }));
   });
 
   it("throws 502 when the provider fails", async () => {
@@ -517,7 +545,7 @@ describe("resendUncertain (3.6)", () => {
 
 describe("unsaved email drafts", () => {
   it("compiles and previews the supplied draft without sending or queuing", async () => {
-    const preview = await service.previewDraft("event", { subject: "Draft", content: { type: "doc", content: [] }, language: "fr" });
+    const preview = await service.previewDraft("event", { subject: "Draft", content: { type: "doc", content: [] }, language: "fr", attachments: [] });
     expect(preview).toEqual({ subject: "Draft", html: "HTML", plain: "PLAIN" });
     expect(getSampleEmailContext).toHaveBeenCalledWith("fr");
     expect(sendEmailMock).not.toHaveBeenCalled();
@@ -525,8 +553,23 @@ describe("unsaved email drafts", () => {
   });
   it("test-sends that same unsaved rendering and never inserts a queue row", async () => {
     sendEmailMock.mockResolvedValue({ success: true, messageId: "draft-test" });
-    await service.testSendDraft("event", { subject: "Draft", content: { type: "doc", content: [] }, language: "en", recipientEmail: "admin@example.test" });
+    await service.testSendDraft("event", { subject: "Draft", content: { type: "doc", content: [] }, language: "en", recipientEmail: "admin@example.test", attachments: [] });
     expect(sendEmailMock).toHaveBeenCalledWith(expect.objectContaining({ to: "admin@example.test", subject: "[TEST] Draft", html: "HTML", plainText: "PLAIN" }));
     expect(insertEmailLogsSkippingConflicts).not.toHaveBeenCalled();
+  });
+  it("test-sends the draft's unsaved attachment toggles, built from the sample registration", async () => {
+    const qr = { filename: "checkin-qr-SAMPLE.png", type: "image/png", disposition: "attachment", content: "b64" };
+    vi.mocked(buildTemplateAttachments).mockResolvedValueOnce([qr] as never);
+    sendEmailMock.mockResolvedValue({ success: true, messageId: "draft-test" });
+    await service.testSendDraft("event", {
+      subject: "Draft", content: { type: "doc", content: [] }, recipientEmail: "admin@example.test",
+      attachments: [{ type: "REGISTRATION_QR" }],
+    });
+    expect(buildTemplateAttachments).toHaveBeenCalledWith([{ type: "REGISTRATION_QR" }], {
+      registrationId: "sample-registration-id",
+      eventId: "event",
+      context: {},
+    });
+    expect(sendEmailMock).toHaveBeenCalledWith(expect.objectContaining({ attachments: [qr] }));
   });
 });

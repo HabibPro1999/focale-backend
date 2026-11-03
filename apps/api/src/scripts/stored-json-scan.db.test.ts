@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
+import { seedBadgeZones } from "@app/contracts";
 import {
+  badgeTemplates,
   certificateTemplates,
   clients,
   emailLogs,
@@ -25,6 +27,8 @@ const ids = {
   legacyLog: randomUUID(),
   validRegistration: randomUUID(),
   legacyRegistration: randomUUID(),
+  validBadge: randomUUID(),
+  legacyBadge: randomUUID(),
 };
 const SECRET = "registrant-secret-value";
 
@@ -38,6 +42,7 @@ async function snapshotRows() {
     templates: ours(await db.select().from(certificateTemplates)),
     logs: ours(await db.select().from(emailLogs)),
     registrations: ours(await db.select().from(registrations)),
+    badges: ours(await db.select().from(badgeTemplates)),
   };
 }
 
@@ -90,6 +95,11 @@ describe.runIf(enabled)("stored JSON report (real database)", () => {
       templateHeight: 0,
       zones: [],
     });
+    await db.insert(badgeTemplates).values([
+      { id: ids.validBadge, eventId: ids.event, name: "Attendee", widthMm: 90, heightMm: 55, zones: seedBadgeZones(90, 55) },
+      // Written around the API: a badge without its QR zone.
+      { id: ids.legacyBadge, eventId: ids.event, name: "Hand-edited", widthMm: 90, heightMm: 55, zones: [] },
+    ]);
     await db.insert(emailLogs).values([
       { id: ids.validLog, recipientEmail: "a@example.test", subject: "", contextSnapshot: { firstName: SECRET } },
       { id: ids.legacyLog, recipientEmail: "b@example.test", subject: "", contextSnapshot: [SECRET] as never },
@@ -161,6 +171,10 @@ describe.runIf(enabled)("stored JSON report (real database)", () => {
         id: ids.legacyRegistration,
         issues: [{ path: "secretNote", code: "stripped_key" }],
       },
+    ]);
+    expect(findingsFor("badge_templates.zones", ids.validBadge)).toEqual([]);
+    expect(findingsFor("badge_templates.zones", ids.legacyBadge)).toEqual([
+      { column: "badge_templates.zones", id: ids.legacyBadge, issues: [{ path: "(root)", code: "custom" }] },
     ]);
     for (const column of report.columns) expect(column.scanned).toBeGreaterThan(0);
 

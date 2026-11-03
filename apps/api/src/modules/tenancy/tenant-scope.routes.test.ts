@@ -48,6 +48,7 @@ vi.mock("@app/db", async (importOriginal) => {
     getEmailTemplateTenantScope: vi.fn(),
     getAccessItemTenantScope: vi.fn(),
     getCertificateTemplateTenantScope: vi.fn(),
+    getBadgeTemplateTenantScope: vi.fn(),
     getFormTenantScope: vi.fn(),
     getClientTenantScope: vi.fn(),
   };
@@ -92,6 +93,8 @@ import { AccessController } from "../access/access.controller";
 import { AccessService } from "../access/access.service";
 import { CertificatesController } from "../certificates/certificates.controller";
 import { CertificatesService } from "../certificates/certificates.service";
+import { BadgesController } from "../badges/badges.controller";
+import { BadgesService } from "../badges/badges.service";
 import { EventsController } from "../events/events.controller";
 import { EventsService } from "../events/events.service";
 import { FormsController } from "../forms/forms.controller";
@@ -125,6 +128,7 @@ const spo = (module: ModuleId[] = []): Row => ({ kind: "sponsorship", module });
 const tpl = (write: boolean): Row => ({ kind: "emailTemplate", module: ["emails"], write });
 const acc = (write = false): Row => ({ kind: "accessItem", module: ["registrations"], write });
 const cert = (write = false): Row => ({ kind: "certificateTemplate", module: ["certificates"], write });
+const badge = (write = false): Row => ({ kind: "badgeTemplate", module: ["registrations"], write });
 // A form route gated on its type's module (moduleOfFormType) or on a fixed one.
 const frm = (write = false, module: ModuleId[] = []): Row => ({
   kind: "form",
@@ -282,6 +286,18 @@ const EXPECTED: Record<string, Row> = {
   "CertificatesController.send": ev(["certificates", "emails"], true),
   "CertificatesController.dryRun": ev(["certificates", "emails"], true),
   "CertificatesController.testSend": { ...cert(true), module: ["certificates", "emails"] },
+  // badges.controller.ts: new routes, gated by the registrations module.
+  "BadgesController.list": ev(["registrations"]),
+  "BadgesController.variables": ev(["registrations"]),
+  "BadgesController.create": ev(["registrations"], true),
+  "BadgesController.getOne": badge(),
+  "BadgesController.update": badge(true),
+  "BadgesController.remove": badge(true),
+  "BadgesController.uploadBackground": badge(true),
+  "BadgesController.removeBackground": badge(true),
+  "BadgesController.downloadBackground": badge(),
+  "BadgesController.samplePdf": badge(),
+  "BadgesController.registrationPdf": reg(["registrations"], false, "registrationId"),
   // events.controller.ts requireOwnedEvent (writable only on the banner upload).
   "EventsController.getById": evId(),
   "EventsController.update": evId(),
@@ -329,6 +345,7 @@ const NOT_FOUND: Record<TenantScopeKind, { code: string; message: string }> = {
   // 5.4b: the codes and messages the removed resolvers answered.
   accessItem: { code: ErrorCodes.ACCESS_NOT_FOUND, message: "Access item not found" },
   certificateTemplate: { code: ErrorCodes.NOT_FOUND, message: "Certificate template not found" },
+  badgeTemplate: { code: ErrorCodes.BADGE_TEMPLATE_NOT_FOUND, message: "Badge not found" },
   form: { code: ErrorCodes.NOT_FOUND, message: "Form not found" },
   client: { code: ErrorCodes.NOT_FOUND, message: "Client not found" },
 };
@@ -348,6 +365,7 @@ const CONTROLLERS: Type[] = [
   RegistrationSponsorshipsController,
   AccessController,
   CertificatesController,
+  BadgesController,
   EventsController,
   FormsController,
   ClientsController,
@@ -391,6 +409,7 @@ const SERVICES: Type[] = [
   SponsorshipsAdminService,
   AccessService,
   CertificatesService,
+  BadgesService,
   EventsService,
   FormsService,
   ClientsService,
@@ -480,6 +499,7 @@ function ownScopes(status?: "OPEN" | "ARCHIVED", modules?: string[] | null, acti
   });
   vi.mocked(db.getAccessItemTenantScope).mockResolvedValue({ accessItem: { id: IDS.id! }, ...scope });
   vi.mocked(db.getCertificateTemplateTenantScope).mockResolvedValue({ certificateTemplate: { id: IDS.id! }, ...scope });
+  vi.mocked(db.getBadgeTemplateTenantScope).mockResolvedValue({ badgeTemplate: { id: IDS.id! }, ...scope });
   vi.mocked(db.getFormTenantScope).mockResolvedValue({ form: { id: IDS.id!, type: formType }, ...scope });
   vi.mocked(db.getClientTenantScope).mockResolvedValue({ client: scope.client });
 }
@@ -504,6 +524,7 @@ const READS: Record<TenantScopeKind, ReturnType<typeof vi.fn>> = {
   emailTemplate: vi.mocked(db.getEmailTemplateTenantScope),
   accessItem: vi.mocked(db.getAccessItemTenantScope),
   certificateTemplate: vi.mocked(db.getCertificateTemplateTenantScope),
+  badgeTemplate: vi.mocked(db.getBadgeTemplateTenantScope),
   form: vi.mocked(db.getFormTenantScope),
   client: vi.mocked(db.getClientTenantScope),
 };
@@ -623,6 +644,7 @@ describe("tenant scope route matrix (5.4)", () => {
       "AbstractsController.patchConfig",
       "EventsController.uploadBanner",
       "CertificatesController.update",
+      "BadgesController.update",
     ].map((name) => {
       const route = ROUTES.find((candidate) => candidate.name === name);
       if (!route) throw new Error(`Missing overlap route ${name}`);

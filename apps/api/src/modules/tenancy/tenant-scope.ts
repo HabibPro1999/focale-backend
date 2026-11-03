@@ -18,6 +18,7 @@ import { Reflector } from "@nestjs/core";
 import { ErrorCodes, type ModuleId } from "@app/contracts";
 import {
   getAccessItemTenantScope,
+  getBadgeTemplateTenantScope,
   getCertificateTemplateTenantScope,
   getClientTenantScope,
   getEmailTemplateTenantScope,
@@ -38,7 +39,8 @@ import { assertEventWritable } from "../events/event-status";
 //
 // `@EventScoped()`, `@RegistrationScoped()`, `@SponsorshipScoped()`,
 // `@EmailTemplateScoped()`, `@AccessItemScoped()`,
-// `@CertificateTemplateScoped()`, `@FormScoped()` and `@ClientScoped()` put a
+// `@CertificateTemplateScoped()`, `@BadgeTemplateScoped()`, `@FormScoped()`
+// and `@ClientScoped()` put a
 // guard on a route that loads the resource named by a route param, its event
 // and the event's client in one query (a client route loads the client), then
 // refuses, in this order:
@@ -70,6 +72,7 @@ export type TenantScopeKind =
   | "emailTemplate"
   | "accessItem"
   | "certificateTemplate"
+  | "badgeTemplate"
   | "form"
   | "client";
 
@@ -113,6 +116,7 @@ const DEFAULT_PARAM: Record<TenantScopeKind, string> = {
   emailTemplate: "templateId",
   accessItem: "id",
   certificateTemplate: "id",
+  badgeTemplate: "id",
   form: "id",
   client: "id",
 };
@@ -172,6 +176,11 @@ export function AccessItemScoped(options: TenantScopeOptions = {}) {
 /** Route on a certificate template (`:id` by default); scoped through its event. */
 export function CertificateTemplateScoped(options: TenantScopeOptions = {}) {
   return scoped("certificateTemplate", options);
+}
+
+/** Route on a badge template (`:id` by default); scoped through its event. */
+export function BadgeTemplateScoped(options: TenantScopeOptions = {}) {
+  return scoped("badgeTemplate", options);
 }
 
 /**
@@ -259,6 +268,11 @@ function notFound(kind: TenantScopeKind): never {
         code: ErrorCodes.NOT_FOUND,
         message: "Certificate template not found",
       });
+    case "badgeTemplate":
+      throw new NotFoundException({
+        code: ErrorCodes.BADGE_TEMPLATE_NOT_FOUND,
+        message: "Badge not found",
+      });
     case "form":
       throw new NotFoundException({ code: ErrorCodes.NOT_FOUND, message: "Form not found" });
     case "client":
@@ -297,6 +311,7 @@ const EVENT_OWNED_READS: Record<
   sponsorship: (id) => getSponsorshipTenantScope(id),
   accessItem: (id) => getAccessItemTenantScope(id),
   certificateTemplate: (id) => getCertificateTemplateTenantScope(id),
+  badgeTemplate: (id) => getBadgeTemplateTenantScope(id),
 };
 
 type LoadedScope = { scope: TenantScope; modules: readonly ModuleId[] };

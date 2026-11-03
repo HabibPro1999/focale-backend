@@ -4,6 +4,7 @@ export * from "./events-access";
 export * from "./forms";
 export * from "./pricing";
 export * from "./certificates";
+export * from "./badges";
 export * from "./registrations";
 export * from "./sponsorships";
 export * from "./email";

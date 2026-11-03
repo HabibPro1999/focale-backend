@@ -73,6 +73,7 @@ import {
   buildEmailContextWithAccess,
   type EmailParts,
 } from "./rendering/index";
+import { buildTemplateAttachments } from "./attachments/build-template-attachments";
 
 const logger = createLogger({ name: "email:queue" });
 
@@ -538,6 +539,21 @@ export async function processEmailQueue(
         if (attachments.length < expectedCount) {
           throw new Error("Fewer certificate attachments generated than queued");
         }
+      }
+
+      // The template's own attachments (check-in QR, badge), read at send
+      // time like its HTML; the badge's text reads the same context.
+      const templateAttachments = await buildTemplateAttachments(
+        emailLog.template?.attachments ?? [],
+        {
+          registrationId: emailLog.registrationId,
+          eventId: emailLog.template?.eventId,
+          context,
+          emailLogId: emailLog.id,
+        },
+      );
+      if (templateAttachments.length > 0) {
+        attachments = [...(attachments ?? []), ...templateAttachments];
       }
 
       // The provider-attempt marker, written with an ownership re-check (and

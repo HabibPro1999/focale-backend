@@ -1360,6 +1360,279 @@
       ],
       "type": "object"
     },
+    "BadgeEventIdParamSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "eventId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "eventId"
+      ],
+      "type": "object"
+    },
+    "BadgeIdParamSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "BadgeQrZoneSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "qr",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "x": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "number"
+        },
+        "y": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "number"
+        },
+        "width": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "number"
+        },
+        "height": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "type": "object"
+    },
+    "BadgeRegistrationIdParamSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "registrationId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "registrationId"
+      ],
+      "type": "object"
+    },
+    "BadgeTemplateListResponseSchema": {
+      "items": {
+        "$ref": "#/$defs/BadgeTemplateResponseSchema"
+      },
+      "type": "array"
+    },
+    "BadgeTemplateResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "widthMm": {
+          "type": "number"
+        },
+        "heightMm": {
+          "type": "number"
+        },
+        "backgroundUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "backgroundWidth": {
+          "anyOf": [
+            {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "backgroundHeight": {
+          "anyOf": [
+            {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "zones": {
+          "items": {
+            "$ref": "#/$defs/BadgeZoneSchema"
+          },
+          "type": "array"
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "eventId",
+        "name",
+        "widthMm",
+        "heightMm",
+        "backgroundUrl",
+        "backgroundWidth",
+        "backgroundHeight",
+        "zones",
+        "createdAt",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "BadgeTextZoneSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "text",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "x": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "number"
+        },
+        "y": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "number"
+        },
+        "width": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "number"
+        },
+        "height": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "number"
+        },
+        "variable": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "fontSize": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fontWeight": {
+          "default": "normal",
+          "enum": [
+            "normal",
+            "bold"
+          ],
+          "type": "string"
+        },
+        "color": {
+          "default": "#000000",
+          "type": "string"
+        },
+        "textAlign": {
+          "default": "center",
+          "enum": [
+            "left",
+            "center",
+            "right"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "x",
+        "y",
+        "width",
+        "height",
+        "variable",
+        "fontSize",
+        "fontWeight",
+        "color",
+        "textAlign"
+      ],
+      "type": "object"
+    },
+    "BadgeZoneSchema": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/BadgeTextZoneSchema"
+        },
+        {
+          "$ref": "#/$defs/BadgeQrZoneSchema"
+        }
+      ]
+    },
+    "BadgeZonesSchema": {
+      "items": {
+        "$ref": "#/$defs/BadgeZoneSchema"
+      },
+      "maxItems": 50,
+      "type": "array"
+    },
     "BatchSyncBodySchema": {
       "additionalProperties": false,
       "properties": {
@@ -2183,6 +2456,37 @@
       ],
       "type": "object"
     },
+    "CreateBadgeTemplateSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "widthMm": {
+          "default": 90,
+          "maximum": 210,
+          "minimum": 40,
+          "type": "number"
+        },
+        "heightMm": {
+          "default": 55,
+          "maximum": 210,
+          "minimum": 40,
+          "type": "number"
+        },
+        "zones": {
+          "$ref": "#/$defs/BadgeZonesSchema"
+        }
+      },
+      "required": [
+        "name",
+        "widthMm",
+        "heightMm"
+      ],
+      "type": "object"
+    },
     "CreateCertificateTemplateSchema": {
       "additionalProperties": false,
       "properties": {
@@ -2339,6 +2643,10 @@
         "isActive": {
           "default": true,
           "type": "boolean"
+        },
+        "attachments": {
+          "$ref": "#/$defs/EmailTemplateAttachmentsSchema",
+          "default": []
         }
       },
       "required": [
@@ -2346,7 +2654,8 @@
         "subject",
         "content",
         "category",
-        "isActive"
+        "isActive",
+        "attachments"
       ],
       "type": "object"
     },
@@ -2401,6 +2710,10 @@
         "isActive": {
           "default": true,
           "type": "boolean"
+        },
+        "attachments": {
+          "$ref": "#/$defs/EmailTemplateAttachmentsSchema",
+          "default": []
         }
       },
       "required": [
@@ -2409,7 +2722,8 @@
         "subject",
         "content",
         "category",
-        "isActive"
+        "isActive",
+        "attachments"
       ],
       "type": "object"
     },
@@ -3421,11 +3735,16 @@
         },
         "language": {
           "$ref": "#/$defs/LanguageCodeSchema"
+        },
+        "attachments": {
+          "$ref": "#/$defs/EmailTemplateAttachmentsSchema",
+          "default": []
         }
       },
       "required": [
         "subject",
-        "content"
+        "content",
+        "attachments"
       ],
       "type": "object"
     },
@@ -3443,6 +3762,10 @@
         "language": {
           "$ref": "#/$defs/LanguageCodeSchema"
         },
+        "attachments": {
+          "$ref": "#/$defs/EmailTemplateAttachmentsSchema",
+          "default": []
+        },
         "recipientEmail": {
           "format": "email",
           "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
@@ -3456,6 +3779,7 @@
       "required": [
         "subject",
         "content",
+        "attachments",
         "recipientEmail"
       ],
       "type": "object"
@@ -3757,6 +4081,49 @@
       ],
       "type": "string"
     },
+    "EmailTemplateAttachmentSchema": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "REGISTRATION_QR",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "REGISTRATION_BADGE",
+              "type": "string"
+            },
+            "badgeTemplateId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "badgeTemplateId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "EmailTemplateAttachmentsSchema": {
+      "items": {
+        "$ref": "#/$defs/EmailTemplateAttachmentSchema"
+      },
+      "maxItems": 5,
+      "type": "array"
+    },
     "EmailTemplateCategorySchema": {
       "enum": [
         "AUTOMATIC",
@@ -3960,6 +4327,8 @@
         "SPO_14005",
         "EML_15001",
         "EML_15002",
+        "EML_15003",
+        "EML_15004",
         "CON_16001",
         "CHK_17001",
         "CHK_17003",
@@ -3981,7 +4350,10 @@
         "INV_19002",
         "INV_19003",
         "CLT_20001",
-        "CLT_20002"
+        "CLT_20002",
+        "BDG_21001",
+        "BDG_21002",
+        "BDG_21003"
       ],
       "type": "string"
     },
@@ -15209,6 +15581,20 @@
       ],
       "type": "object"
     },
+    "RegistrationBadgeQuerySchema": {
+      "additionalProperties": false,
+      "properties": {
+        "badgeId": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "badgeId"
+      ],
+      "type": "object"
+    },
     "RegistrationColumnsResponseSchema": {
       "additionalProperties": false,
       "properties": {
@@ -16778,6 +17164,9 @@
       },
       "type": "object"
     },
+    "StoredBadgeZonesSchema": {
+      "$ref": "#/$defs/BadgeZonesSchema"
+    },
     "StoredCertificateZonesSchema": {
       "items": {
         "$ref": "#/$defs/CertificateZoneSchema"
@@ -17637,6 +18026,30 @@
       ],
       "type": "object"
     },
+    "UpdateBadgeTemplateSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "widthMm": {
+          "maximum": 210,
+          "minimum": 40,
+          "type": "number"
+        },
+        "heightMm": {
+          "maximum": 210,
+          "minimum": 40,
+          "type": "number"
+        },
+        "zones": {
+          "$ref": "#/$defs/BadgeZonesSchema"
+        }
+      },
+      "type": "object"
+    },
     "UpdateCertificateTemplateSchema": {
       "additionalProperties": false,
       "properties": {
@@ -17799,6 +18212,9 @@
         },
         "isActive": {
           "type": "boolean"
+        },
+        "attachments": {
+          "$ref": "#/$defs/EmailTemplateAttachmentsSchema"
         },
         "expectedUpdatedAt": {
           "format": "date-time",

@@ -1,10 +1,12 @@
 import { asc, gt } from "drizzle-orm";
 import {
   PriceBreakdownSchema,
+  StoredBadgeZonesSchema,
   StoredCertificateZonesSchema,
   StoredEmailContextSnapshotSchema,
   StoredFormSchemaJsonSchema,
   StoredPricingRulesSchema,
+  type StoredBadgeZones,
   type StoredCertificateZones,
   type StoredEmailContextSnapshot,
   type StoredFormSchemaJson,
@@ -13,6 +15,7 @@ import {
 } from "@app/contracts";
 import { getDb } from "../client";
 import { parseJsonb } from "../jsonb";
+import { badgeTemplates } from "../schema/badges";
 import { certificateTemplates } from "../schema/certificates";
 import { emailLogs } from "../schema/email";
 import { forms } from "../schema/forms";
@@ -71,6 +74,13 @@ export const STORED_JSONB_COLUMNS = [
     column: registrations.priceBreakdown,
     schema: PriceBreakdownSchema,
   },
+  {
+    name: "badge_templates.zones",
+    table: badgeTemplates,
+    id: badgeTemplates.id,
+    column: badgeTemplates.zones,
+    schema: StoredBadgeZonesSchema,
+  },
 ] as const;
 
 export type StoredJsonbColumn = (typeof STORED_JSONB_COLUMNS)[number];
@@ -107,6 +117,10 @@ export function readCertificateZones(value: unknown, id?: string | null): Stored
   });
 }
 
+export function readBadgeZones(value: unknown, id?: string | null): StoredBadgeZones {
+  return parseJsonb(StoredBadgeZonesSchema, value, { column: "badge_templates.zones", id });
+}
+
 export function readFormSchema(value: unknown, id?: string | null): StoredFormSchemaJson {
   return parseJsonb(StoredFormSchemaJsonSchema, value, { column: "forms.schema", id });
 }
@@ -136,6 +150,12 @@ export function checkFormRow<T extends { id: string; schema: unknown } | null | 
   row: T,
 ): T {
   if (row) readFormSchema(row.schema, row.id);
+  return row;
+}
+
+/** Check a badge template row's `zones`. Returns the row. */
+export function checkBadgeTemplateRow<T extends { id: string; zones: unknown }>(row: T): T {
+  readBadgeZones(row.zones, row.id);
   return row;
 }
 

@@ -148,6 +148,12 @@ export const ErrorCodes = {
   // Email (15xxx)
   MJML_COMPILATION_ERROR: "EML_15001",
   EMAIL_TEMPLATE_INACTIVE: "EML_15002",
+  // 400: an attachment the template's emails cannot carry, e.g. the
+  // registration QR code on an abstract-triggered template (no registration).
+  EMAIL_ATTACHMENT_NOT_SUPPORTED: "EML_15003",
+  // 400: a REGISTRATION_BADGE attachment whose badge is not one of the
+  // template's event (or the template belongs to no event).
+  EMAIL_ATTACHMENT_BADGE_INVALID: "EML_15004",
 
   // Concurrency (16xxx)
   CONCURRENT_MODIFICATION: "CON_16001",
@@ -189,6 +195,14 @@ export const ErrorCodes = {
   CLIENT_INACTIVE: "CLT_20001",
   /** The client has not enabled the module this route belongs to. */
   MODULE_DISABLED: "CLT_20002",
+
+  // Badges (21xxx)
+  /** 404: no such badge template (or it was deleted). */
+  BADGE_TEMPLATE_NOT_FOUND: "BDG_21001",
+  /** 400: a stored badge without exactly one QR zone cannot be rendered (writes are refused by validation). */
+  BADGE_QR_ZONE_REQUIRED: "BDG_21002",
+  /** 400: the background upload is not a PNG or JPEG of at most 20 megapixels. */
+  BADGE_IMAGE_INVALID: "BDG_21003",
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];

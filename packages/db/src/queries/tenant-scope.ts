@@ -6,6 +6,7 @@ import { registrations } from "../schema/registrations";
 import { sponsorships } from "../schema/sponsorships";
 import { emailTemplates } from "../schema/email";
 import { certificateTemplates } from "../schema/certificates";
+import { badgeTemplates } from "../schema/badges";
 import { forms } from "../schema/forms";
 
 // ============================================================================
@@ -52,6 +53,10 @@ export interface AccessItemTenantScope extends EventTenantScope {
 
 export interface CertificateTemplateTenantScope extends EventTenantScope {
   certificateTemplate: { id: string };
+}
+
+export interface BadgeTemplateTenantScope extends EventTenantScope {
+  badgeTemplate: { id: string };
 }
 
 /** The form's type picks its module (sponsorships for SPONSOR, registrations otherwise). */
@@ -187,6 +192,21 @@ export async function getCertificateTemplateTenantScope(
     .where(eq(certificateTemplates.id, templateId))
     .limit(1);
   return row ? { certificateTemplate: { id: row.templateId }, ...toScope(row) } : null;
+}
+
+/** Badge template → event → client, by badge id. */
+export async function getBadgeTemplateTenantScope(
+  badgeId: string,
+  db: DbExecutor = getDb(),
+): Promise<BadgeTemplateTenantScope | null> {
+  const [row] = await db
+    .select({ badgeId: badgeTemplates.id, ...eventColumns, ...clientColumns })
+    .from(badgeTemplates)
+    .innerJoin(events, eq(events.id, badgeTemplates.eventId))
+    .innerJoin(clients, eq(clients.id, events.clientId))
+    .where(eq(badgeTemplates.id, badgeId))
+    .limit(1);
+  return row ? { badgeTemplate: { id: row.badgeId }, ...toScope(row) } : null;
 }
 
 /** Form (id and type) → event → client, by form id. */

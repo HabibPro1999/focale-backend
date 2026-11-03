@@ -7,6 +7,7 @@ export * from "./email/index";
 export * from "./certificates-pdf";
 export * from "./certificate-image-cache";
 export * from "./certificate-render-image";
+export * from "./badges/badge-pdf";
 export * from "./pdf-fonts";
 export { pdfTextRuns } from "./networking/pdf-text";
 export * from "./networking/embeddings";

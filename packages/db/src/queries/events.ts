@@ -6,6 +6,7 @@ import { rowCountOf } from "../helpers";
 import {
   abstractBookJobs,
   abstracts,
+  badgeTemplates,
   certificateTemplates,
   clients,
   emailTemplates,
@@ -266,6 +267,20 @@ export async function getCertificateTemplateUrlsTx(
     .select({ templateUrl: certificateTemplates.templateUrl })
     .from(certificateTemplates)
     .where(eq(certificateTemplates.eventId, eventId));
+}
+
+/** Every badge's stored images (deleted badges too), for event-delete storage cleanup. */
+export async function getBadgeTemplateImagesTx(
+  exec: DbExecutor,
+  eventId: string,
+): Promise<Array<{ backgroundUrl: string | null; renderImageKey: string | null }>> {
+  return exec
+    .select({
+      backgroundUrl: badgeTemplates.backgroundUrl,
+      renderImageKey: badgeTemplates.renderImageKey,
+    })
+    .from(badgeTemplates)
+    .where(eq(badgeTemplates.eventId, eventId));
 }
 
 export async function getAbstractFinalFileKeysTx(
