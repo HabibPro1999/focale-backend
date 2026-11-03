@@ -7,17 +7,18 @@ import type { LanguageCode } from "@app/contracts";
 import type { EmailContext } from "./types";
 import { buildRegistrationSelfLinks } from "./context";
 import {
-  BASE_PRICE_ITEM_LABEL,
+  basePriceItemLabel,
   bulletListHtml,
   formatCurrency,
+  formatPaymentStatus,
+  labelWithColon,
   sponsoredItemHtml,
 } from "./format";
-import { formatDate } from "./locale";
+import { formatDate, formatDateRange } from "./locale";
 import { sanitizeForHtml } from "./resolve";
 
-// Sponsorship contexts are built inside the sponsorship transactions, which do
-// not load a form language yet, so their dates stay in English.
-const SPONSORSHIP_EMAIL_LANGUAGE: LanguageCode = "en";
+// Both builders take `language`: the primary language of the event's
+// registration form, read by their callers (getRegistrationFormLanguage).
 
 export interface BatchEmailContextInput {
   batch: {
@@ -34,10 +35,12 @@ export interface BatchEmailContextInput {
   event: {
     name: string;
     startDate: Date;
+    endDate: Date;
     location: string | null;
     client: { name: string };
   };
   currency: string;
+  language: LanguageCode;
 }
 
 export interface LinkedSponsorshipContextInput {
@@ -70,24 +73,29 @@ export interface LinkedSponsorshipContextInput {
     name: string;
     slug: string;
     startDate: Date;
+    endDate: Date;
     location: string | null;
     client: { name: string };
   };
   pricing: { basePrice: number } | null;
   accessItems: Array<{ id: string; name: string; price: number }>;
   currency: string;
+  language: LanguageCode;
 }
 
 /** Lab-confirmation email context (SPONSORSHIP_BATCH_SUBMITTED). */
 export function buildBatchEmailContext(
   input: BatchEmailContextInput,
 ): Partial<EmailContext> {
-  const { batch, sponsorships, event, currency } = input;
+  const { batch, sponsorships, event, currency, language } = input;
   const totalAmount = sponsorships.reduce((sum, s) => sum + s.totalAmount, 0);
+  const money = (amount: number) => formatCurrency(amount, currency, language);
 
   return {
     eventName: event.name,
-    eventDate: formatDate(event.startDate, SPONSORSHIP_EMAIL_LANGUAGE),
+    eventDate: formatDate(event.startDate, language),
+    eventEndDate: formatDate(event.endDate, language),
+    eventDateRange: formatDateRange(event.startDate, event.endDate, language),
     eventLocation: event.location || "",
     organizerName: event.client.name,
 
@@ -96,12 +104,12 @@ export function buildBatchEmailContext(
     labEmail: batch.email,
 
     beneficiaryCount: String(sponsorships.length),
-    totalBatchAmount: formatCurrency(totalAmount, currency),
+    totalBatchAmount: money(totalAmount),
 
     beneficiaryList: bulletListHtml(
       sponsorships.map(
         (s) =>
-          `<b>${sanitizeForHtml(s.beneficiaryName)}</b> (${sanitizeForHtml(s.beneficiaryEmail)}) : ${sanitizeForHtml(formatCurrency(s.totalAmount, currency))}`,
+          `<b>${sanitizeForHtml(s.beneficiaryName)}</b> ${sanitizeForHtml(labelWithColon(`(${s.beneficiaryEmail})`, language))} ${sanitizeForHtml(money(s.totalAmount))}`,
       ),
     ),
 
@@ -110,15 +118,14 @@ export function buildBatchEmailContext(
     fullName: batch.contactName,
     email: batch.email,
     phone: batch.phone || "",
-    registrationDate: formatDate(new Date(), SPONSORSHIP_EMAIL_LANGUAGE),
+    registrationDate: formatDate(new Date(), language),
     registrationId: "",
     registrationNumber: "",
-    eventEndDate: "",
     eventDescription: "",
-    totalAmount: formatCurrency(totalAmount, currency),
-    paidAmount: "0 " + currency,
-    amountDue: formatCurrency(totalAmount, currency),
-    paymentStatus: "N/A",
+    totalAmount: money(totalAmount),
+    paidAmount: money(0),
+    amountDue: money(totalAmount),
+    paymentStatus: "",
     paymentMethod: "",
     selectedAccess: "",
     selectedWorkshops: "",
@@ -138,20 +145,30 @@ export function buildBatchEmailContext(
 export function buildLinkedSponsorshipContext(
   input: LinkedSponsorshipContextInput,
 ): Partial<EmailContext> {
-  const { sponsorship, registration, event, pricing, accessItems, currency } =
-    input;
+  const {
+    sponsorship,
+    registration,
+    event,
+    pricing,
+    accessItems,
+    currency,
+    language,
+  } = input;
+  const money = (amount: number) => formatCurrency(amount, currency, language);
 
   const sponsoredItems: string[] = [];
   if (sponsorship.coversBasePrice) {
     const basePrice = registration.baseAmount ?? pricing?.basePrice ?? 0;
     sponsoredItems.push(
-      sponsoredItemHtml(BASE_PRICE_ITEM_LABEL, basePrice, currency),
+      sponsoredItemHtml(basePriceItemLabel(language), basePrice, currency, language),
     );
   }
   for (const accessId of sponsorship.coveredAccessIds) {
     const access = accessItems.find((a) => a.id === accessId);
     if (access) {
-      sponsoredItems.push(sponsoredItemHtml(access.name, access.price, currency));
+      sponsoredItems.push(
+        sponsoredItemHtml(access.name, access.price, currency, language),
+      );
     }
   }
 
@@ -180,25 +197,27 @@ export function buildLinkedSponsorshipContext(
         .join(" ") || sponsorship.beneficiaryName,
     email: registration.email,
     phone: registration.phone || "",
-    registrationDate: formatDate(new Date(), SPONSORSHIP_EMAIL_LANGUAGE),
+    registrationDate: formatDate(new Date(), language),
     registrationId: registration.id,
     registrationNumber: registration.id.slice(0, 8).toUpperCase(),
 
     eventName: event.name,
-    eventDate: formatDate(event.startDate, SPONSORSHIP_EMAIL_LANGUAGE),
-    eventEndDate: "",
+    eventDate: formatDate(event.startDate, language),
+    eventEndDate: formatDate(event.endDate, language),
+    eventDateRange: formatDateRange(event.startDate, event.endDate, language),
     eventLocation: event.location || "",
     eventDescription: "",
     organizerName: event.client.name,
     organizerEmail: "",
     organizerPhone: "",
 
-    totalAmount: formatCurrency(registration.totalAmount, currency),
-    paidAmount: isFullySponsored
-      ? formatCurrency(registration.totalAmount, currency)
-      : "0 " + currency,
-    amountDue: formatCurrency(remainingAmount, currency),
-    paymentStatus: isFullySponsored ? "Paid" : "Pending",
+    totalAmount: money(registration.totalAmount),
+    paidAmount: money(isFullySponsored ? registration.totalAmount : 0),
+    amountDue: money(remainingAmount),
+    paymentStatus: formatPaymentStatus(
+      isFullySponsored ? "PAID" : "PENDING",
+      language,
+    ),
     paymentMethod: "",
 
     selectedAccess: "",
@@ -212,12 +231,12 @@ export function buildLinkedSponsorshipContext(
     bankAccountNumber: "",
 
     sponsorshipCode: sponsorship.code,
-    sponsorshipAmount: formatCurrency(input.amountApplied, currency),
+    sponsorshipAmount: money(input.amountApplied),
     labName: sponsorship.batch.labName,
     labContactName: sponsorship.batch.contactName,
     labEmail: sponsorship.batch.email,
     beneficiaryName: sponsorship.beneficiaryName,
     sponsoredItems: bulletListHtml(sponsoredItems),
-    remainingAmount: formatCurrency(remainingAmount, currency),
+    remainingAmount: money(remainingAmount),
   };
 }

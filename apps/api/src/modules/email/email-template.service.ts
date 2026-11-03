@@ -30,7 +30,7 @@ import {
   conflict,
   notFound,
 } from "../../core/app-exception";
-import { compileTemplateContent } from "./template-content";
+import { compileTemplateContent, getTemplateLanguage } from "./template-content";
 
 interface TemplateTriggerState {
   category: EmailTemplateCategory;
@@ -177,7 +177,13 @@ export class EmailTemplateService {
     });
 
     const { mjmlContent, htmlContent, plainContent } =
-      await compileTemplateContent(input.content);
+      await compileTemplateContent(
+        input.content,
+        await getTemplateLanguage({
+          eventId: input.eventId,
+          abstractTrigger: triggerState.abstractTrigger,
+        }),
+      );
 
     const values: EmailTemplateInsert = {
       clientId: input.clientId,
@@ -253,9 +259,24 @@ export class EmailTemplateService {
     if (input.name !== undefined) patch.name = input.name;
     if (input.description !== undefined) patch.description = input.description;
     if (input.subject !== undefined) patch.subject = input.subject;
-    if (input.content) {
-      patch.content = input.content;
-      Object.assign(patch, await compileTemplateContent(input.content));
+    if (input.content) patch.content = input.content;
+    // The language follows the abstract trigger, so a trigger change
+    // recompiles the stored content too.
+    if (
+      input.content ||
+      triggerState.abstractTrigger !== existing.abstractTrigger
+    ) {
+      const language = await getTemplateLanguage({
+        eventId: existing.eventId,
+        abstractTrigger: triggerState.abstractTrigger,
+      });
+      Object.assign(
+        patch,
+        await compileTemplateContent(
+          input.content ?? (existing.content as TiptapDocument),
+          language,
+        ),
+      );
     }
     if (input.category !== undefined) patch.category = input.category;
     if (
@@ -304,6 +325,12 @@ export class EmailTemplateService {
       throw notFound("Email template not found");
     }
 
+    // A duplicate is a manual template: compiled in the registration form's
+    // language even when the original is an abstract-trigger template.
+    const compiled = await compileTemplateContent(
+      existing.content as TiptapDocument,
+      await getTemplateLanguage({ eventId: existing.eventId, abstractTrigger: null }),
+    );
     const values: EmailTemplateInsert = {
       clientId: existing.clientId,
       eventId: existing.eventId,
@@ -311,9 +338,7 @@ export class EmailTemplateService {
       description: existing.description,
       subject: existing.subject,
       content: existing.content,
-      mjmlContent: existing.mjmlContent,
-      htmlContent: existing.htmlContent,
-      plainContent: existing.plainContent,
+      ...compiled,
       category: "MANUAL", // Duplicates are always manual
       trigger: null,
       abstractTrigger: null,

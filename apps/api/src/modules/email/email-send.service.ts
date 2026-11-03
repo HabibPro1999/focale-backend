@@ -1,6 +1,5 @@
 import { Injectable } from "@nestjs/common";
 import {
-  DEFAULT_LANGUAGE,
   ErrorCodes,
   type BulkSendEmailInput,
   type DraftEmailPreview,
@@ -25,7 +24,7 @@ import {
 } from "@app/db";
 import {
   getEmailProvider,
-  getSampleEmailContext,
+  getSampleEmailContextForEvent,
   buildTemplateAttachments,
   SAMPLE_REGISTRATION_ID,
   resolveEmailParts,
@@ -36,7 +35,7 @@ import {
   sendEmailNow,
 } from "@app/integrations";
 import { AppException, conflict, notFound } from "../../core/app-exception";
-import { compileTemplateContent } from "./template-content";
+import { compileTemplateContent, getTemplateLanguage } from "./template-content";
 
 /** Minimal event shape the send paths need (subset of EventWithPricing). */
 export interface SendEventContext {
@@ -44,6 +43,7 @@ export interface SendEventContext {
   clientId: string;
   name: string;
   startDate: Date;
+  endDate: Date;
   location: string | null;
   pricing: { currency: string } | null;
 }
@@ -68,11 +68,13 @@ export class EmailSendService {
     recipientEmail: string,
     recipientName?: string,
   ): Promise<{ success: true; message: string; messageId?: string }> {
-    // Sample dates and labels in the event's registration-form language.
-    const language = template.eventId
-      ? await getRegistrationFormLanguage(template.eventId)
-      : DEFAULT_LANGUAGE;
-    const sampleContext = getSampleEmailContext(language);
+    // Sample dates and labels in the template's language (the one its stored
+    // HTML was compiled in), with the form fields' sample answers.
+    const language = await getTemplateLanguage(template);
+    const sampleContext = await getSampleEmailContextForEvent(
+      template.eventId,
+      language,
+    );
 
     const resolved = resolveEmailParts(
       {
@@ -107,9 +109,9 @@ export class EmailSendService {
 
   /** The unsaved draft compiled and resolved against the sample context. */
   private async resolveDraft(eventId: string, input: DraftEmailPreview) {
-    const compiled = await compileTemplateContent(input.content);
     const language = input.language ?? await getRegistrationFormLanguage(eventId);
-    const context = getSampleEmailContext(language);
+    const compiled = await compileTemplateContent(input.content, language);
+    const context = await getSampleEmailContextForEvent(eventId, language);
     const resolved = resolveEmailParts({ subject: input.subject, html: compiled.htmlContent, plain: compiled.plainContent }, context);
     return { resolved, context };
   }
@@ -123,7 +125,7 @@ export class EmailSendService {
     sample: {
       attachments: readonly EmailTemplateAttachment[];
       eventId: string | null;
-      context: ReturnType<typeof getSampleEmailContext>;
+      context: Awaited<ReturnType<typeof getSampleEmailContextForEvent>>;
     },
     recipientEmail: string,
     recipientName?: string,
@@ -248,6 +250,7 @@ export class EmailSendService {
     }
 
     const currency = event.pricing?.currency ?? "TND";
+    const language = await getRegistrationFormLanguage(event.id);
     const sponsors = [...grouped.values()]
       .filter(({ sponsorships }) => sponsorships.length > 0)
       .map(({ batch, sponsorships }) => {
@@ -257,10 +260,12 @@ export class EmailSendService {
           event: {
             name: event.name,
             startDate: event.startDate,
+            endDate: event.endDate,
             location: event.location,
             client: { name: client?.name ?? "" },
           },
           currency,
+          language,
         });
         return {
           email: batch.email,
@@ -378,7 +383,10 @@ export class EmailSendService {
 
     const context = await buildEmailContextWithAccess(registration);
 
-    const { htmlContent, plainContent } = await compileTemplateContent(content);
+    const { htmlContent, plainContent } = await compileTemplateContent(
+      content,
+      registration.language,
+    );
     const resolved = resolveEmailParts(
       { subject, html: htmlContent, plain: plainContent },
       context,

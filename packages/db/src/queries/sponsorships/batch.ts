@@ -83,6 +83,7 @@ export interface EventForBatch {
   slug: string;
   status: string;
   startDate: Date;
+  endDate: Date;
   location: string | null;
   clientId: string;
   client: SponsorshipClientGate & { name: string };
@@ -99,6 +100,7 @@ export async function findEventForBatch(
       slug: events.slug,
       status: events.status,
       startDate: events.startDate,
+      endDate: events.endDate,
       location: events.location,
       clientId: events.clientId,
       client: { ...clientModuleGateColumns, name: clients.name },

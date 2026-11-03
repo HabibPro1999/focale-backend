@@ -5,7 +5,11 @@ vi.mock("@app/db", () => ({
 }));
 
 import { getRegistrationFormSchema } from "@app/db";
-import { BASE_VARIABLES, getAvailableVariables } from "./variables";
+import {
+  BASE_VARIABLES,
+  getAvailableVariables,
+  getSampleEmailContextForEvent,
+} from "./variables";
 
 describe("BASE_VARIABLES", () => {
   it("covers the core categories", () => {
@@ -38,6 +42,88 @@ describe("BASE_VARIABLES", () => {
     const byId = new Map(BASE_VARIABLES.map((v) => [v.id, v]));
     expect(byId.get("reviewerName")).toMatchObject({ category: "abstract" });
     expect(byId.get("loginLink")).toMatchObject({ category: "abstract" });
+  });
+
+  it("lists eventDateRange under event, translated", async () => {
+    vi.mocked(getRegistrationFormSchema).mockResolvedValue(null);
+    expect(BASE_VARIABLES.find((v) => v.id === "eventDateRange")).toMatchObject({ category: "event" });
+    const fr = await getAvailableVariables("evt-1", "fr");
+    expect(fr.find((v) => v.id === "eventDateRange")?.label).toBe("Dates de l’événement");
+  });
+});
+
+describe("form_* examples and the sample context", () => {
+  const schema = {
+    steps: [
+      {
+        fields: [
+          {
+            id: "job",
+            type: "dropdown",
+            label: "Profession",
+            options: [
+              { id: "opt_1", label: "Ingénieur ", translations: { en: { label: "Engineer" } } },
+              { id: "opt_2", label: "Médecin" },
+            ],
+          },
+          { id: "consent", type: "checkbox", options: [{ id: "c", label: "J'accepte" }] },
+          { id: "tags", type: "checkbox", options: [{ id: "t1", label: "Fournisseurs" }, { id: "t2", label: "B" }] },
+          { id: "country", type: "country" },
+          { id: "gov", type: "governorate", options: [{ id: "ben-arous", label: "Ben Arous", translations: { ar: { label: "بن عروس" } } }] },
+          { id: "arrival", type: "date" },
+          { id: "cv", type: "file" },
+        ],
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    vi.mocked(getRegistrationFormSchema).mockResolvedValue(schema as never);
+  });
+
+  it("gives each form variable a real example in the language", async () => {
+    const example = async (language: "fr" | "en" | "ar") =>
+      Object.fromEntries(
+        (await getAvailableVariables("evt-1", language))
+          .filter((v) => v.category === "form")
+          .map((v) => [v.id, v.example]),
+      );
+    expect(await example("fr")).toEqual({
+      form_job: "Ingénieur",
+      form_consent: "Oui",
+      form_tags: "Fournisseurs",
+      form_country: "Tunisie",
+      form_gov: "Ben Arous",
+      form_arrival: "15 mars 2025",
+      form_cv: "[Uploaded file]",
+    });
+    expect(await example("en")).toMatchObject({
+      form_job: "Engineer",
+      form_consent: "Yes",
+      form_country: "Tunisia",
+      form_arrival: "March 15, 2025",
+    });
+    expect(await example("ar")).toMatchObject({
+      form_consent: "نعم",
+      form_country: "تونس",
+      form_gov: "بن عروس",
+    });
+  });
+
+  it("fills the sample context's form_* keys from the examples", async () => {
+    const ctx = await getSampleEmailContextForEvent("evt-1", "fr");
+    expect(ctx).toMatchObject({
+      firstName: "John",
+      form_job: "Ingénieur",
+      form_country: "Tunisie",
+      eventDateRange: "20–22 avril 2025",
+    });
+  });
+
+  it("is the plain sample context without an event", async () => {
+    const ctx = await getSampleEmailContextForEvent(null, "fr");
+    expect(Object.keys(ctx).some((k) => k.startsWith("form_"))).toBe(false);
+    expect(getRegistrationFormSchema).not.toHaveBeenCalledWith(null);
   });
 });
 

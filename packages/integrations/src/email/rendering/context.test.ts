@@ -3,12 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@app/db", () => ({
   getEventPricingForEmail: vi.fn(),
   getEventAccessByIdsForEmail: vi.fn(),
+  getRegistrationFormSchema: vi.fn(),
   getSponsorshipByCodeForEmail: vi.fn(),
 }));
 
 import {
   getEventPricingForEmail,
   getEventAccessByIdsForEmail,
+  getRegistrationFormSchema,
   getSponsorshipByCodeForEmail,
 } from "@app/db";
 import type { EventAccessEmailInfo } from "@app/db";
@@ -22,6 +24,10 @@ import {
 } from "./context";
 import { resolveEmailParts, resolveVariables, sanitizeForHtml } from "./resolve";
 import { buildBatchEmailContext } from "./sponsorship-context";
+
+beforeEach(() => {
+  vi.mocked(getRegistrationFormSchema).mockReset().mockResolvedValue(null);
+});
 
 function reg(overrides: Record<string, unknown> = {}) {
   return {
@@ -166,6 +172,87 @@ describe("buildEmailContext — form's primary language", () => {
   });
 });
 
+describe("buildEmailContext — form answers, payment and dates by language", () => {
+  const schema = {
+    steps: [
+      {
+        id: "s1",
+        title: "S",
+        fields: [
+          {
+            id: "dropdown_1",
+            type: "dropdown",
+            options: [
+              { id: "opt_1", label: "Ingénieur ", translations: { en: { label: "Engineer" } } },
+            ],
+          },
+          { id: "country_1", type: "country" },
+          { id: "file_1", type: "file" },
+          { id: "consent_1", type: "checkbox", options: [{ id: "opt_c", label: "J'accepte" }] },
+        ],
+      },
+    ],
+  };
+  const answers = {
+    dropdown_1: "opt_1",
+    country_1: "TN",
+    file_1: {},
+    consent_1: ["opt_c"],
+    note: "a\nb",
+  };
+  const registration = (language: string) =>
+    reg({
+      language,
+      formData: answers,
+      totalAmount: 1350.5,
+      paidAmount: 0,
+      paymentMethod: "BANK_TRANSFER",
+      event: {
+        ...(reg() as unknown as { event: object }).event,
+        startDate: new Date("2026-11-20T12:00:00Z"),
+        endDate: new Date("2026-11-22T12:00:00Z"),
+      },
+    });
+
+  it("formats form_* by the schema's field types", async () => {
+    vi.mocked(getEventPricingForEmail).mockResolvedValue(null);
+    vi.mocked(getRegistrationFormSchema).mockResolvedValue(schema as never);
+    const ctx = await buildEmailContextWithAccess(registration("en"));
+    expect(getRegistrationFormSchema).toHaveBeenCalledWith("evt-1");
+    expect(ctx).toMatchObject({
+      form_dropdown_1: "Engineer",
+      form_country_1: "Tunisia",
+      form_file_1: "",
+      form_consent_1: "Yes",
+      form_note: "a\nb",
+    });
+  });
+
+  it("without a schema, never prints [object Object]", () => {
+    const ctx = buildEmailContext(registration("fr"));
+    expect(ctx.form_file_1).toBe("");
+    expect(ctx.form_dropdown_1).toBe("opt_1");
+    expect(Object.values(ctx).join(" ")).not.toContain("[object Object]");
+  });
+
+  it.each([
+    ["fr", "1\u202f350,500 TND", "Virement bancaire", "20–22 novembre 2026"],
+    ["en", "1,350.500 TND", "Bank transfer", "November 20–22, 2026"],
+    ["ar", "1.350,500 TND", "تحويل بنكي", "20–22 نوفمبر 2026"],
+  ] as const)("amounts, payment method and event dates in %s", (language, total, method, range) => {
+    const ctx = buildEmailContext(registration(language));
+    expect(ctx.totalAmount).toBe(total);
+    expect(ctx.amountDue).toBe(total);
+    expect(ctx.paidAmount).toBe("0 TND");
+    expect(ctx.paymentMethod).toBe(method);
+    expect(ctx.eventDateRange).toBe(range);
+  });
+
+  it("blanks a missing payment method", () => {
+    expect(buildEmailContext(reg()).paymentMethod).toBe("");
+  });
+});
+
 describe("buildEmailContextWithAccess (async, DB)", () => {
   beforeEach(() => {
     vi.mocked(getEventPricingForEmail).mockResolvedValue(null);
@@ -226,7 +313,7 @@ describe("buildEmailContextWithAccess (async, DB)", () => {
     );
     expect(ctx.sponsorshipCode).toBe("SP1");
     expect(ctx.labName).toBe("Lab");
-    expect(ctx.sponsoredItems).toContain("Inscription de base");
+    expect(ctx.sponsoredItems).toContain("<b>Base registration:</b> 200 TND");
     expect(ctx.remainingAmount).toBe("100 TND"); // 250 - 150 applied
   });
 });
@@ -245,6 +332,7 @@ describe("email context lookups (3.8: one event-level read per send)", () => {
     return {
       eventId: "evt-1",
       pricing,
+      formFields: new Map(),
       accessById: new Map([
         [workshop.id, workshop],
         [dinner.id, dinner],
@@ -269,6 +357,8 @@ describe("email context lookups (3.8: one event-level read per send)", () => {
     expect(getEventPricingForEmail).toHaveBeenCalledWith("evt-1");
     expect(getEventAccessByIdsForEmail).toHaveBeenCalledTimes(1);
     expect(getEventAccessByIdsForEmail).toHaveBeenCalledWith(["a1", "a2"]);
+    expect(getRegistrationFormSchema).toHaveBeenCalledTimes(1);
+    expect(getRegistrationFormSchema).toHaveBeenCalledWith("evt-1");
     expect(loaded.pricing).toBe(pricing);
     expect([...loaded.accessById.keys()]).toEqual(["a1", "a2"]);
   });
@@ -281,6 +371,7 @@ describe("email context lookups (3.8: one event-level read per send)", () => {
 
     expect(getEventPricingForEmail).not.toHaveBeenCalled();
     expect(getEventAccessByIdsForEmail).not.toHaveBeenCalled();
+    expect(getRegistrationFormSchema).not.toHaveBeenCalled();
     expect(ctx.bankName).toBe("BT");
     expect(ctx.selectedAccess).toBe("Workshop A, Gala");
     expect(ctx.selectedWorkshops).toBe("Workshop A");
@@ -329,7 +420,7 @@ describe("email context lookups (3.8: one event-level read per send)", () => {
     );
 
     expect(getEventAccessByIdsForEmail).not.toHaveBeenCalled();
-    expect(ctx.sponsoredItems).toContain("Inscription de base");
+    expect(ctx.sponsoredItems).toContain("Base registration");
     expect(ctx.sponsoredItems).toContain("Workshop A");
   });
 
@@ -341,6 +432,7 @@ describe("email context lookups (3.8: one event-level read per send)", () => {
 
     expect(getEventPricingForEmail).toHaveBeenCalledWith("evt-2");
     expect(getEventAccessByIdsForEmail).toHaveBeenCalledWith(["a1"]);
+    expect(getRegistrationFormSchema).toHaveBeenCalledWith("evt-2");
   });
 });
 
@@ -389,6 +481,22 @@ describe("resolveVariables", () => {
       certificateList: "Q&A <b>Session</b>, Attendance",
     } as never);
     expect(out).toBe("Q&amp;A &lt;b&gt;Session&lt;/b&gt;, Attendance");
+  });
+});
+
+describe("resolveVariables — line breaks", () => {
+  const values = { form_note: "<b>one</b>\r\ntwo\nthree" } as never;
+
+  it("turns a value's line breaks into <br> after escaping, in HTML mode", () => {
+    expect(resolveVariables("<p>{{form_note}}</p>", values)).toBe(
+      "<p>&lt;b&gt;one&lt;/b&gt;<br>two<br>three</p>",
+    );
+  });
+
+  it("keeps the text-mode behaviour (line breaks become spaces)", () => {
+    expect(resolveVariables("{{form_note}}", values, { mode: "text" })).toBe(
+      "<b>one</b> two three",
+    );
   });
 });
 
@@ -531,6 +639,32 @@ describe("getSampleEmailContext", () => {
       paymentStatus: "مؤكَّد",
     });
   });
+
+  it("carries the event date range, payment method, amounts and sponsored items in the language", () => {
+    expect(getSampleEmailContext("fr")).toMatchObject({
+      eventDateRange: "20–22 avril 2025",
+      paymentMethod: "Virement bancaire",
+      totalAmount: "250 TND",
+      amountDue: "0 TND",
+      sponsorshipAmount: "150 TND",
+    });
+    expect(getSampleEmailContext("en")).toMatchObject({
+      eventDateRange: "April 20–22, 2025",
+      paymentMethod: "Bank transfer",
+    });
+    expect(getSampleEmailContext("ar")).toMatchObject({
+      eventDateRange: "20–22 أفريل 2025",
+      paymentMethod: "تحويل بنكي",
+    });
+    // Server-built HTML, like the real variable.
+    expect(getSampleEmailContext("fr").sponsoredItems).toBe(
+      '<div style="padding: 4px 0;">• <b>Inscription de base :</b> 100 TND</div>' +
+        '<div style="padding: 4px 0;">• <b>Workshop A :</b> 50 TND</div>',
+    );
+    expect(getSampleEmailContext("en").sponsoredItems).toContain(
+      "<b>Base registration:</b> 100 TND",
+    );
+  });
 });
 
 describe("buildBatchEmailContext", () => {
@@ -556,11 +690,13 @@ describe("buildBatchEmailContext", () => {
       ],
       event: {
         name: "Conf",
-        startDate: new Date("2025-04-20T00:00:00Z"),
+        startDate: new Date("2025-04-20T12:00:00Z"),
+        endDate: new Date("2025-04-22T12:00:00Z"),
         location: "Tunis",
         client: { name: "Org" },
       },
       currency: "TND",
+      language: "en",
     });
     expect(ctx.beneficiaryCount).toBe("2");
     expect(ctx.totalBatchAmount).toBe("150 TND");

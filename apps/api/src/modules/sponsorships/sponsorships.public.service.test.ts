@@ -17,6 +17,7 @@ const db = vi.hoisted(() => {
     "findEventForBatch",
     "findSponsorFormById",
     "getEventPricingForBatch",
+    "getRegistrationFormLanguage",
     "findRegistrationsForBatch",
     "sponsorshipCodeExists",
     "insertSponsorship",
@@ -68,6 +69,7 @@ beforeEach(() => {
   m.emitSettlementEvents.mockResolvedValue([]);
   m.enqueueSponsorshipEmailOutbox.mockResolvedValue(true);
   m.enqueueTriggeredEmailOutbox.mockResolvedValue(true);
+  m.getRegistrationFormLanguage.mockResolvedValue("en");
   m.sponsorshipLinkRefusal.mockResolvedValue(null);
 });
 
@@ -148,7 +150,8 @@ function batchEvent() {
     name: "Ev",
     slug: "ev",
     status: "OPEN",
-    startDate: new Date(),
+    startDate: new Date("2026-11-20T12:00:00Z"),
+    endDate: new Date("2026-11-22T12:00:00Z"),
     location: null,
     clientId: "c1",
     client: { active: true, enabledModules: ["sponsorships"], name: "Client" },
@@ -402,11 +405,17 @@ describe("createSponsorshipBatch", () => {
         input: {
           recipientEmail: SPONSOR.email,
           recipientName: SPONSOR.contactName,
-          context: expect.objectContaining({ labName: SPONSOR.labName, labEmail: SPONSOR.email }),
+          context: expect.objectContaining({
+            labName: SPONSOR.labName,
+            labEmail: SPONSOR.email,
+            // In the registration form's language, read on the batch tx.
+            eventDateRange: "November 20–22, 2026",
+          }),
         },
       },
       "email:sponsorship:SPONSORSHIP_BATCH_SUBMITTED:b1",
     );
+    expect(m.getRegistrationFormLanguage).toHaveBeenCalledWith("e1", TX);
     const registrantInput = {
       recipientEmail: "registrant@example.test",
       recipientName,
@@ -417,7 +426,7 @@ describe("createSponsorshipBatch", () => {
         sponsorshipCode: "SP-EMAIL-CODE",
         beneficiaryName,
         labEmail: SPONSOR.email,
-        paymentStatus: full ? "Paid" : "Pending",
+        paymentStatus: full ? "Confirmed" : "Pending",
       }),
     };
     expect(m.enqueueSponsorshipEmailOutbox).toHaveBeenNthCalledWith(

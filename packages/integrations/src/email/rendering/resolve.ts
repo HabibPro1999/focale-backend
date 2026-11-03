@@ -12,7 +12,8 @@ const HTML_SAFE_VARIABLES = new Set(["sponsoredItems", "beneficiaryList"]);
 
 export interface ResolveVariablesOptions {
   /**
-   * `html` (default): values are HTML-escaped, for HTML bodies.
+   * `html` (default): values are HTML-escaped, for HTML bodies; a value's
+   * line breaks become `<br>`.
    * `text`: for subjects and plain-text bodies. Values are inserted unescaped
    * (so "Dupont & Fils" is not sent as "Dupont &amp; Fils"), server-built HTML
    * values become text, and CR/LF in values becomes a space (no header
@@ -40,7 +41,8 @@ export function resolveVariables(
       if (HTML_SAFE_VARIABLES.has(varId)) {
         return String(value);
       }
-      return sanitizeForHtml(String(value));
+      // Escaped first, so only the value's own line breaks become <br>.
+      return sanitizeForHtml(String(value)).replace(/\r?\n/g, "<br>");
     }
 
     return "";
