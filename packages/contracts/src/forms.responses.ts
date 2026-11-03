@@ -29,6 +29,8 @@ export const EventPricingRowResponseSchema = z.object({
   id: z.string(),
   eventId: z.string(),
   basePrice: z.number(),
+  isFree: z.boolean(),
+  autoAccept: z.boolean(),
   currency: z.string(),
   rules: StoredPricingRulesSchema,
   onlinePaymentEnabled: z.boolean(),

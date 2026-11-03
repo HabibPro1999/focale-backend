@@ -32,6 +32,7 @@ import {
   insertRegistrationRow,
   allocateReferenceNumber,
   insertAuditLog,
+  getEventPricing,
   type SettleRegistrationResult,
   type LinkableSponsorship,
 } from "@app/db";
@@ -359,7 +360,13 @@ export class RegistrationCreateService {
       const linked = sponsorship
         ? await this.consumeSponsorshipAtSignup(tx, { sponsorship, registrationId: id, eventId, grossBreakdown })
         : null;
-      const paymentStatus = linked?.settled.after.paymentStatus ?? "PENDING";
+      // A free event with auto-accept settles a signup that owes nothing
+      // (no paid add-on, no code) as WAIVED at once; any other stays PENDING.
+      const autoAccepted = !linked && grossBreakdown.subtotal === 0
+        ? await this.autoAcceptFreeSignup(tx, eventId, id)
+        : null;
+      const paymentStatus =
+        linked?.settled.after.paymentStatus ?? autoAccepted?.after.paymentStatus ?? "PENDING";
 
       await this.sideEffects.audit(tx, {
         entityId: id,
@@ -374,6 +381,12 @@ export class RegistrationCreateService {
                 sponsorshipCode: { old: null, new: sponsorshipCode },
                 sponsorshipAmount: { old: null, new: linked.settled.after.sponsorshipAmount },
                 paymentStatus: { old: null, new: paymentStatus },
+              }
+            : {}),
+          ...(autoAccepted
+            ? {
+                paymentStatus: { old: null, new: paymentStatus },
+                autoAccepted: { old: null, new: true },
               }
             : {}),
         },
@@ -512,6 +525,31 @@ export class RegistrationCreateService {
     }
     await this.access.handleCapacityReached(eventId, settled.paidAccess.incremented, tx);
     return { sponsorshipId: sponsorship.id, amountApplied: usage.amountApplied, settled };
+  }
+
+  /**
+   * Auto-accept (free event): when the event's pricing is free with
+   * auto-accept on, settle the new registration WAIVED (paid now, nothing
+   * paid), taking the paid places that status holds, as an admin
+   * confirmation would. Null when the event does not auto-accept.
+   */
+  private async autoAcceptFreeSignup(
+    tx: DbExecutor,
+    eventId: string,
+    registrationId: string,
+  ): Promise<SettleRegistrationResult | null> {
+    const pricing = await getEventPricing(eventId, tx);
+    if (!pricing?.isFree || !pricing.autoAccept) return null;
+    const settled = await settleRegistrationTxn(tx, registrationId, {
+      decide: () => ({ paymentStatus: "WAIVED", paidAmount: 0, paidAt: new Date() }),
+    }).catch((err: unknown) => {
+      throw toAccessAppException(err);
+    });
+    if (!settled) {
+      throw new Error(`Registration ${registrationId} vanished inside its create transaction`);
+    }
+    await this.access.handleCapacityReached(eventId, settled.paidAccess.incremented, tx);
+    return settled;
   }
 
   // ==========================================================================

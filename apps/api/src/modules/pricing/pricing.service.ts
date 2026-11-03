@@ -47,6 +47,27 @@ import { assertMoneyPrecision } from "../../core/money-input";
 // writable/module-enabled inside the transaction, then upsert.
 type MutateRules = (rules: EmbeddedPricingRule[]) => EmbeddedPricingRule[];
 
+/**
+ * The free-event flags after a PATCH: the input merged over the stored row
+ * (an omitted flag keeps its stored value). Auto-accept needs a free event:
+ * asking for it on a paid one is PRC_6009, and making the event paid again
+ * clears it.
+ */
+function resolveFreeEventFlags(
+  input: Pick<UpdateEventPricingInput, "isFree" | "autoAccept">,
+  stored: Pick<EventPricingWithRules, "isFree" | "autoAccept"> | null,
+): { isFree: boolean; autoAccept: boolean } {
+  const isFree = input.isFree ?? stored?.isFree ?? false;
+  if (input.autoAccept === true && !isFree) {
+    throw new AppException(
+      ErrorCodes.AUTO_ACCEPT_REQUIRES_FREE_EVENT,
+      "Auto-accept can only be enabled on a free event",
+      400,
+    );
+  }
+  return { isFree, autoAccept: isFree && (input.autoAccept ?? stored?.autoAccept ?? false) };
+}
+
 @Injectable()
 export class PricingService {
   /** GET pricing — findUnique with parsed rules (null when absent). */
@@ -159,6 +180,19 @@ export class PricingService {
 
     if (input.basePrice !== undefined) {
       updateData.basePrice = input.basePrice ?? 0;
+    }
+    if (input.isFree !== undefined || input.autoAccept !== undefined || input.basePrice !== undefined) {
+      const stored = await getEventPricing(eventId, tx);
+      const flags = resolveFreeEventFlags(input, stored);
+      if (flags.isFree) {
+        // A free event holds its base price at 0, whatever price is sent.
+        createData.basePrice = 0;
+        updateData.basePrice = 0;
+      }
+      if (input.isFree !== undefined || input.autoAccept !== undefined) {
+        Object.assign(createData, flags);
+        Object.assign(updateData, flags);
+      }
     }
     if (input.currency !== undefined) {
       const currentCurrency = gate.currentCurrency ?? "TND";
