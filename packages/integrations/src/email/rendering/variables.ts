@@ -6,7 +6,9 @@
 import { getRegistrationFormSchema } from "@app/db";
 import type { LanguageCode } from "@app/contracts";
 import { localizeVariable, formVariableDescription } from "./variables-i18n";
-import type { VariableDefinition } from "./types";
+import { getSampleEmailContext } from "./context";
+import { indexFormFields, sampleFormValue } from "./form-values";
+import type { EmailContext, VariableDefinition } from "./types";
 
 export const BASE_VARIABLES: VariableDefinition[] = [
   // Registration
@@ -74,6 +76,13 @@ export const BASE_VARIABLES: VariableDefinition[] = [
     category: "event",
     description: "End date of event",
     example: "April 22, 2025",
+  },
+  {
+    id: "eventDateRange",
+    label: "Event Dates",
+    category: "event",
+    description: "Start and end dates as one range",
+    example: "April 20–22, 2025",
   },
   {
     id: "eventLocation",
@@ -318,6 +327,7 @@ export async function getAvailableVariables(
       fields?: Array<{ id: string; label?: string; type: string; translations?: Partial<Record<LanguageCode, { label?: string }>> }>;
     }>;
   } | null;
+  const fields = indexFormFields(schema);
 
   if (schema?.steps) {
     for (const step of schema.steps) {
@@ -325,18 +335,39 @@ export async function getAvailableVariables(
         if (["heading", "paragraph", "divider"].includes(field.type)) continue;
 
         const label = field.translations?.[language]?.label || field.label || field.id;
+        const info = fields.get(field.id);
         variables.push({
           id: `form_${field.id}`,
           label,
           category: "form",
           description: formVariableDescription(label, language),
-          example: getExampleForFieldType(field.type),
+          example:
+            (info && sampleFormValue(info, language)) ||
+            getExampleForFieldType(field.type),
         });
       }
     }
   }
 
   return variables;
+}
+
+/**
+ * The sample context (preview, test sends) with each of the event's form
+ * fields filled with its catalogue example, so `form_*` values show there too.
+ */
+export async function getSampleEmailContextForEvent(
+  eventId: string | null,
+  language: LanguageCode,
+): Promise<EmailContext> {
+  const context = getSampleEmailContext(language);
+  if (!eventId) return context;
+  for (const variable of await getAvailableVariables(eventId, language)) {
+    if (variable.category === "form" && variable.example) {
+      context[variable.id as `form_${string}`] = variable.example;
+    }
+  }
+  return context;
 }
 
 function getExampleForFieldType(type: string): string {

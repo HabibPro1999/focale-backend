@@ -251,6 +251,8 @@ const pricingRow: NonNullable<FormWithRelations["event"]["pricing"]> = {
   id: "p1",
   eventId: "e1",
   basePrice: 200,
+  isFree: false,
+  autoAccept: false,
   currency: "TND",
   rules: [
     {

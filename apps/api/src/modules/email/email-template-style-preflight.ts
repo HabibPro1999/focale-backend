@@ -1,8 +1,10 @@
 import {
+  DEFAULT_LANGUAGE,
   EmailFontSizeSchema,
   EmailLineHeightSchema,
   EmailTextAlignSchema,
   TiptapDocumentSchema,
+  type LanguageCode,
   type TiptapDocument,
 } from "@app/contracts";
 import { compileTemplateContent } from "./template-content";
@@ -25,6 +27,8 @@ export interface EmailTemplatePreflightRow {
   name: string;
   content: unknown;
   updatedAt: Date;
+  /** The template's language (getTemplateLanguage); fr when omitted. */
+  language?: LanguageCode;
 }
 
 export interface EmailTemplatePreflightUpdate {
@@ -215,7 +219,10 @@ export async function runEmailTemplateStylePreflight(
     try {
       const update: EmailTemplatePreflightUpdate = {
         content: preflight.content,
-        ...(await compileTemplateContent(preflight.content)),
+        ...(await compileTemplateContent(
+          preflight.content,
+          row.language ?? DEFAULT_LANGUAGE,
+        )),
       };
 
       if (!options.apply) {

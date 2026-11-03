@@ -35,7 +35,14 @@ function abstract(overrides: Record<string, unknown> = {}) {
     linkBaseUrl: "https://events.example.com",
     eventId: "ev-1",
     language: "fr",
-    event: { name: "Congress", slug: "congress", clientId: "client-1" },
+    event: {
+      name: "Congress",
+      slug: "congress",
+      clientId: "client-1",
+      startDate: new Date("2026-11-20T12:00:00Z"),
+      endDate: new Date("2026-11-22T12:00:00Z"),
+      client: { name: "Org Co" },
+    },
     config: {
       submissionStartAt: null,
       submissionDeadline: null,
@@ -117,6 +124,17 @@ describe("queueAbstractEmail — dates in the abstract config's language", () =>
     expect(await snapshotFor("ar")).toMatchObject({
       submissionDeadline: "24 سبتمبر 2026",
       editingDeadline: "15 أوت 2026",
+    });
+  });
+
+  it("carries the layout header values: organizer, event name and date range", async () => {
+    expect(await snapshotFor("fr")).toMatchObject({
+      organizerName: "Org Co",
+      eventName: "Congress",
+      eventDateRange: "20–22 novembre 2026",
+    });
+    expect(await snapshotFor("en")).toMatchObject({
+      eventDateRange: "November 20–22, 2026",
     });
   });
 });
@@ -313,6 +331,7 @@ describe("buildAbstractBulkEmailContext (bulk send to abstract authors)", () => 
       eventName: "Congress",
       eventDate: "20 avril 2026",
       eventEndDate: "22 avril 2026",
+      eventDateRange: "20–22 avril 2026",
       eventLocation: "",
       organizerName: "Client",
       organizerEmail: "",

@@ -213,7 +213,9 @@ export class EventsService {
             if (basePrice !== undefined || normalizedCurrency !== undefined) {
               const pricingData: { basePrice?: number; currency?: string } = {};
               if (basePrice !== undefined) {
-                pricingData.basePrice = normalizeBasePrice(basePrice);
+                // A free event holds its base price at 0 (the pricing PATCH
+                // turns isFree off to price it again).
+                pricingData.basePrice = event.pricing?.isFree ? 0 : normalizeBasePrice(basePrice);
               }
               if (normalizedCurrency !== undefined) {
                 pricingData.currency = normalizedCurrency;

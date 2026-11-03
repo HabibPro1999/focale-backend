@@ -9,6 +9,8 @@ vi.mock("@app/db", () => ({
   deleteEmailTemplateById: vi.fn(),
   listEmailTemplates: vi.fn(),
   listEventEmailLogs: vi.fn(),
+  getRegistrationFormLanguage: vi.fn(),
+  getAbstractConfigLanguage: vi.fn(),
 }));
 
 vi.mock("@app/integrations", () => ({
@@ -17,7 +19,10 @@ vi.mock("@app/integrations", () => ({
   extractPlainText: vi.fn(() => "PLAIN"),
 }));
 
+import { renderTemplateToMjml } from "@app/integrations";
 import {
+  getAbstractConfigLanguage,
+  getRegistrationFormLanguage,
   getBadgeTemplate,
   getEmailTemplateById,
   findActiveTemplateForTrigger,
@@ -68,6 +73,8 @@ beforeEach(() => {
   vi.mocked(updateEmailTemplate).mockImplementation(
     async (id, patch) => ({ id, ...patch }) as never,
   );
+  vi.mocked(getRegistrationFormLanguage).mockResolvedValue("en");
+  vi.mocked(getAbstractConfigLanguage).mockResolvedValue("ar");
 });
 
 describe("create", () => {
@@ -89,6 +96,9 @@ describe("create", () => {
     expect(created.plainContent).toBe("PLAIN");
     expect(created.isActive).toBe(true); // default true
     expect(created.trigger).toBeNull();
+    // Compiled in the event's registration-form language.
+    expect(getRegistrationFormLanguage).toHaveBeenCalledWith("event-1");
+    expect(renderTemplateToMjml).toHaveBeenCalledWith(content, { language: "en" });
   });
 
   it("creates an AUTOMATIC template with a registration trigger", async () => {
@@ -107,6 +117,9 @@ describe("create", () => {
       abstractTrigger: "ABSTRACT_SUBMISSION_ACK",
     })) as Record<string, unknown>;
     expect(created.abstractTrigger).toBe("ABSTRACT_SUBMISSION_ACK");
+    // An abstract template follows the abstract config's language.
+    expect(getAbstractConfigLanguage).toHaveBeenCalledWith("event-1");
+    expect(renderTemplateToMjml).toHaveBeenCalledWith(content, { language: "ar" });
   });
 
   it("respects an explicit isActive:false", async () => {
@@ -228,6 +241,16 @@ describe("update", () => {
       htmlContent: "HTML",
       plainContent: "PLAIN",
     });
+    expect(renderTemplateToMjml).toHaveBeenCalledWith(content, { language: "en" });
+  });
+
+  it("recompiles the stored content in the new language when the abstract trigger changes", async () => {
+    vi.mocked(getEmailTemplateById).mockResolvedValue(templateRow());
+    await service.update("tmpl-1", { category: "AUTOMATIC", abstractTrigger: "ABSTRACT_DECISION" });
+    const patch = vi.mocked(updateEmailTemplate).mock.calls[0][1];
+    expect(patch).toMatchObject({ abstractTrigger: "ABSTRACT_DECISION", htmlContent: "HTML" });
+    expect(patch).not.toHaveProperty("content");
+    expect(renderTemplateToMjml).toHaveBeenCalledWith(content, { language: "ar" });
   });
 
   it("allows clearing description explicitly to null", async () => {
@@ -356,7 +379,10 @@ describe("duplicate", () => {
     expect(dup.category).toBe("MANUAL");
     expect(dup.trigger).toBeNull();
     expect(dup.isActive).toBe(false);
-    expect(dup.mjmlContent).toBe("OLD_MJML"); // reused, not recompiled
+    // Recompiled: the copy is a manual template in the registration form's language.
+    expect(dup.mjmlContent).toBe("MJML");
+    expect(dup.htmlContent).toBe("HTML");
+    expect(renderTemplateToMjml).toHaveBeenCalledWith(content, { language: "en" });
   });
 
   it("copies the attachments", async () => {

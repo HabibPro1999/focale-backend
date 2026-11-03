@@ -1,11 +1,13 @@
 import { Inject, Injectable } from "@nestjs/common";
 import {
-  findEventClientId,
+  findEventForCommitteeEmail,
   findAbstractEmailTemplate,
   type EmailTemplateRow,
 } from "@app/db";
 import {
   compileMjmlToHtml,
+  formatDate,
+  formatDateRange,
   renderEmailLayout,
   resolveVariables,
   sendEmailNow,
@@ -33,7 +35,7 @@ export class CommitteeEmailsService {
     link: string,
     eventId: string,
   ): Promise<boolean> {
-    const event = await findEventClientId(eventId);
+    const event = await findEventForCommitteeEmail(eventId);
     const template = event
       ? await findAbstractEmailTemplate({
           clientId: event.clientId,
@@ -41,7 +43,8 @@ export class CommitteeEmailsService {
           abstractTrigger: "ABSTRACT_COMMITTEE_INVITE",
         })
       : null;
-    if (template) {
+    if (event && template) {
+      const { language } = event;
       return await this.sendTemplatedCommitteeEmail(
         template,
         user.email,
@@ -50,6 +53,11 @@ export class CommitteeEmailsService {
           reviewerName: user.name,
           eventName,
           loginLink: link,
+          // The shared email layout's header.
+          organizerName: event.organizerName,
+          eventDate: formatDate(event.startDate, language),
+          eventEndDate: formatDate(event.endDate, language),
+          eventDateRange: formatDateRange(event.startDate, event.endDate, language),
         },
       );
     }
@@ -136,7 +144,7 @@ export class CommitteeEmailsService {
       `<strong>${safeEventName}</strong>`,
     );
     const footnoteBlock = input.footnote
-      ? `<mj-text font-size="13px" color="#6b7280">${escapeHtml(
+      ? `<mj-text font-size="13px" color="#636978">${escapeHtml(
           input.footnote,
         )}</mj-text>`
       : "";
@@ -145,7 +153,7 @@ export class CommitteeEmailsService {
         <mj-text>Bonjour ${safeName},</mj-text>
         <mj-text>${safeIntro}</mj-text>
         <mj-button href="${safeLink}">${safeCtaText}</mj-button>
-        <mj-text font-size="13px" color="#6b7280">Ce lien est valable ${this.config.security.committeeInvite.tokenTtlDays} jour(s) et ne peut être utilisé qu'une seule fois. Après avoir défini votre mot de passe, vous pourrez vous connecter directement avec votre email.</mj-text>
+        <mj-text font-size="13px" color="#636978">Ce lien est valable ${this.config.security.committeeInvite.tokenTtlDays} jour(s) et ne peut être utilisé qu'une seule fois. Après avoir défini votre mot de passe, vous pourrez vous connecter directement avec votre email.</mj-text>
         ${footnoteBlock}`;
     const { html } = await compileMjmlToHtml(
       renderEmailLayout(body, { header: safeEventName }),

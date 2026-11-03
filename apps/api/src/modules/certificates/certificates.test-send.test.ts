@@ -3,6 +3,7 @@ vi.mock("@app/db", async (original) => ({
   ...(await original<typeof import("@app/db")>()),
   getCertificateTemplateWithEvent: vi.fn(),
   getRegistrationFormLanguage: vi.fn(async () => "fr"),
+  getRegistrationFormSchema: vi.fn(async () => null),
   getTemplateByTrigger: vi.fn(),
 }));
 const { sendEmail, generateCertificatePdf } = vi.hoisted(() => ({

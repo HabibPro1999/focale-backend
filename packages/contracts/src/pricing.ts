@@ -76,6 +76,10 @@ export const UpdateEventPricingSchema = z
     basePrice: MoneyAmountSchema.nullable().optional(),
     currency: z.string().length(3).optional(),
     rules: z.array(EmbeddedPricingRuleSchema).max(MAX_PRICING_RULES).optional(),
+    // Free event: base price forced to 0. Auto-accept requires a free event
+    // (PRC_6009); turning the event paid again clears it.
+    isFree: z.boolean().optional(),
+    autoAccept: z.boolean().optional(),
     // Payment Methods
     onlinePaymentEnabled: z.boolean().optional(),
     onlinePaymentUrl: z.string().url().optional().nullable(),
@@ -216,6 +220,10 @@ export interface EventPricingWithRules {
   id: string;
   eventId: string;
   basePrice: number;
+  /** Free event: basePrice is held at 0; rules and paid access items still apply. */
+  isFree: boolean;
+  /** Public signups of a free event that owe nothing are settled WAIVED at once. */
+  autoAccept: boolean;
   currency: string;
   rules: EmbeddedPricingRule[];
   onlinePaymentEnabled: boolean;

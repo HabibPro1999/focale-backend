@@ -23,6 +23,7 @@ const db = vi.hoisted(() => {
     "updateSponsorshipRow",
     "deleteSponsorshipRow",
     "getEventPricingForBatch",
+    "getRegistrationFormLanguage",
     "findSponsorshipForLink",
     "findRegistrationForLink",
     "getSponsorshipByCode",
@@ -82,6 +83,7 @@ beforeEach(() => {
   m.insertAuditLog.mockResolvedValue(undefined);
   m.emitSettlementEvents.mockResolvedValue([]);
   m.enqueueSponsorshipEmailOutbox.mockResolvedValue(true);
+  m.getRegistrationFormLanguage.mockResolvedValue("fr");
 });
 
 /** A settleRegistrationTxn result with the given money state change. */
@@ -445,7 +447,8 @@ function linkSponsorship(overrides: Record<string, unknown> = {}) {
       clientId: "c1",
       name: "Ev",
       slug: "ev",
-      startDate: new Date(),
+      startDate: new Date("2026-11-20T12:00:00Z"),
+      endDate: new Date("2026-11-22T12:00:00Z"),
       location: null,
       status: "OPEN",
       client: { active: true, enabledModules: ["sponsorships"], name: "Client" },
@@ -596,6 +599,9 @@ describe("linkSponsorshipToRegistration", () => {
             sponsorshipCode: "SP-CODE-DIFFERS-FROM-ID",
             beneficiaryName: "Beneficiary fallback",
             labEmail: "l@x.com",
+            // In the registration form's language (read on the same tx).
+            eventDateRange: "20–22 novembre 2026",
+            paymentStatus: "En attente",
           }),
         },
       },

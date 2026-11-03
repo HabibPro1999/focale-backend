@@ -36,6 +36,7 @@ import {
   getPendingSponsorships,
   getRegistrationCoverage,
   getRegistrationForSponsorship,
+  getRegistrationFormLanguage,
   getSponsorshipById,
   getSponsorshipByCode,
   insertAuditLog,
@@ -538,13 +539,14 @@ export class SponsorshipsAdminService {
     ]);
 
     // SPONSORSHIP_APPLIED email — enqueued on the same txn (legacy parity).
-    const [pricing, accessItems] = await Promise.all([
+    const [pricing, accessItems, language] = await Promise.all([
       getEventPricingForBatch(tx, sponsorship.eventId),
       findActiveEventAccess(
         tx,
         sponsorship.eventId,
         sponsorship.coveredAccessIds ?? [],
       ),
+      getRegistrationFormLanguage(sponsorship.eventId, tx),
     ]);
     const currency = pricing?.currency ?? "TND";
     const emailContext = buildLinkedSponsorshipContext({
@@ -577,6 +579,7 @@ export class SponsorshipsAdminService {
       pricing: pricing ? { basePrice: pricing.basePrice } : null,
       accessItems,
       currency,
+      language,
     });
     await queueRegistrantSponsorshipEmail(tx, {
       trigger: "SPONSORSHIP_APPLIED",

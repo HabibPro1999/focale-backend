@@ -300,6 +300,107 @@ describe("RegistrationCreateService", () => {
       });
     });
 
+    describe("auto-accept on a free event", () => {
+      const freePricing = (overrides: Record<string, unknown> = {}) => ({
+        id: "p1", eventId: "ev1", basePrice: 0, isFree: true, autoAccept: true, currency: "TND", rules: [], ...overrides,
+      });
+      const freeAccessBreakdown = () => ({
+        ...emptyBreakdown(0),
+        accessItems: [{ accessId: "acc1", name: "Workshop", unitPrice: 0, quantity: 1, subtotal: 0, status: "confirmed" as const }],
+      });
+
+      beforeEach(() => {
+        db.getEventPricing.mockResolvedValue(freePricing());
+        // The settlement mock reads the inserted row back.
+        db.findRegistrationForMutation.mockResolvedValue(
+          makeRegRow({ totalAmount: 0, priceBreakdown: freeAccessBreakdown() }),
+        );
+      });
+
+      it("settles a signup that owes nothing WAIVED, paid now with nothing paid, taking paid places", async () => {
+        const input = { ...baseInput, accessSelections: [{ accessId: "acc1", quantity: 1 }] } as never;
+        await service.createRegistration(input, freeAccessBreakdown());
+
+        expect(db.getEventPricing).toHaveBeenCalledWith("ev1", expect.anything());
+        // Inserted PENDING, then settled in the same transaction.
+        expect(db.insertRegistrationRow.mock.calls[0][0]).toMatchObject({ paymentStatus: "PENDING", totalAmount: 0 });
+        expect(db.withLockingTxn).toHaveBeenCalledTimes(1);
+        expect(db.settleRegistrationTxn).toHaveBeenCalledWith(expect.anything(), "reg1", expect.objectContaining({ decide: expect.any(Function) }));
+        const { settlement } = db.applyRegistrationSettlement.mock.calls[0][1];
+        expect(settlement).toMatchObject({ paymentStatus: "WAIVED", paidAmount: 0 });
+        expect(settlement.paidAt).toBeInstanceOf(Date);
+        expect(access.handleCapacityReached).toHaveBeenCalledWith("ev1", ["acc1"], expect.anything());
+
+        const audit = db.insertAuditLog.mock.calls.map((c) => c[0]).find((a) => a.action === "CREATE");
+        expect(audit.changes).toMatchObject({
+          paymentStatus: { old: null, new: "WAIVED" },
+          autoAccepted: { old: null, new: true },
+        });
+        const events = db.enqueueRealtimeOutboxEvent.mock.calls.map((c) => c[1]);
+        expect(events.find((e) => e.type === "registration.created")?.payload).toMatchObject({ id: "reg1", paymentStatus: "WAIVED" });
+        // The created email stays the only email; networking is projected as before.
+        expect(db.enqueueTriggeredEmailOutbox).toHaveBeenCalledTimes(1);
+        expect(db.enqueueTriggeredEmailOutbox.mock.calls[0][1]).toMatchObject({ trigger: "REGISTRATION_CREATED" });
+        expect(db.enqueueNetworkingRegistrationCreatedSync).toHaveBeenCalledTimes(1);
+      });
+
+      it("maps a paid-capacity failure while auto-accepting to ACCESS_CAPACITY_EXCEEDED", async () => {
+        db.settleRegistrationTxn.mockRejectedValueOnce(new AccessCapacityExceededError("acc1", "Workshop", 0, 1));
+        await expect(service.createRegistration(baseInput as never, emptyBreakdown(0)))
+          .rejects.toMatchObject({ code: ErrorCodes.ACCESS_CAPACITY_EXCEEDED, statusCode: 409 });
+        expect(db.enqueueTriggeredEmailOutbox).not.toHaveBeenCalled();
+      });
+
+      const expectPending = () => {
+        expect(db.settleRegistrationTxn).not.toHaveBeenCalled();
+        expect(access.handleCapacityReached).not.toHaveBeenCalled();
+        const audit = db.insertAuditLog.mock.calls.map((c) => c[0]).find((a) => a.action === "CREATE");
+        expect(audit.changes).not.toHaveProperty("paymentStatus");
+        expect(audit.changes).not.toHaveProperty("autoAccepted");
+        const events = db.enqueueRealtimeOutboxEvent.mock.calls.map((c) => c[1]);
+        expect(events.find((e) => e.type === "registration.created")?.payload).toMatchObject({ paymentStatus: "PENDING" });
+      };
+
+      it("stays PENDING when the signup owes something (a paid add-on)", async () => {
+        await service.createRegistration(baseInput as never, emptyBreakdown(50));
+        expect(db.getEventPricing).not.toHaveBeenCalled();
+        expectPending();
+      });
+
+      it.each([
+        ["auto-accept is off", freePricing({ autoAccept: false })],
+        ["the event is not free", freePricing({ isFree: false })],
+        ["the event has no pricing row", null],
+      ])("stays PENDING when %s", async (_, pricing) => {
+        db.getEventPricing.mockResolvedValue(pricing);
+        await service.createRegistration(baseInput as never, emptyBreakdown(0));
+        expectPending();
+      });
+
+      it("leaves a signup with a sponsorship code to the sponsorship settlement", async () => {
+        db.claimSponsorshipCodeTxn.mockResolvedValue({
+          outcome: "available",
+          sponsorship: { id: "sp1", eventId: "ev1", code: "SP-ABCD2345", status: "PENDING", targetRegistrationId: null, totalAmount: 100, coversBasePrice: true, coveredAccessIds: [] },
+        });
+        db.linkSponsorshipUsageTxn.mockResolvedValue({ id: "use1", sponsorshipId: "sp1", amountApplied: 0 });
+        db.settleRegistrationTxn.mockResolvedValueOnce({
+          written: true, eventId: "ev1",
+          before: { paymentStatus: "PENDING", sponsorshipAmount: 0 },
+          after: { paymentStatus: "PENDING", sponsorshipAmount: 0 },
+          coveredAccessIds: [], paidAccess: { incremented: [], decremented: [] },
+        });
+
+        await service.createRegistration({ ...baseInput, sponsorshipCode: "SP-ABCD2345" } as never, emptyBreakdown(0));
+
+        expect(db.getEventPricing).not.toHaveBeenCalled();
+        expect(db.settleRegistrationTxn).toHaveBeenCalledTimes(1);
+        expect(db.settleRegistrationTxn.mock.calls[0][2]).not.toHaveProperty("decide");
+        const audit = db.insertAuditLog.mock.calls.map((c) => c[0]).find((a) => a.action === "CREATE");
+        expect(audit.changes).not.toHaveProperty("autoAccepted");
+        expect(audit.changes.paymentStatus).toEqual({ old: null, new: "PENDING" });
+      });
+    });
+
     it.each([
       ["OPEN", 409, ErrorCodes.EVENT_FULL],
       ["CLOSED", 400, ErrorCodes.EVENT_NOT_OPEN],

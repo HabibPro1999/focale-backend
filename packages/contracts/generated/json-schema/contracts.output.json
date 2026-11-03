@@ -4275,6 +4275,7 @@
         "PRC_6006",
         "PRC_6007",
         "PRC_6008",
+        "PRC_6009",
         "ACC_7001",
         "ACC_7002",
         "ACC_7004",
@@ -5138,6 +5139,12 @@
         "basePrice": {
           "type": "number"
         },
+        "isFree": {
+          "type": "boolean"
+        },
+        "autoAccept": {
+          "type": "boolean"
+        },
         "currency": {
           "type": "string"
         },
@@ -5189,6 +5196,8 @@
         "id",
         "eventId",
         "basePrice",
+        "isFree",
+        "autoAccept",
         "currency",
         "rules",
         "onlinePaymentEnabled",
@@ -18455,6 +18464,12 @@
           },
           "maxItems": 10,
           "type": "array"
+        },
+        "isFree": {
+          "type": "boolean"
+        },
+        "autoAccept": {
+          "type": "boolean"
         },
         "onlinePaymentEnabled": {
           "type": "boolean"

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@app/db", () => ({
   getEventPricingForEmail: vi.fn(),
   getEventAccessByIdsForEmail: vi.fn(),
+  getRegistrationFormSchema: vi.fn().mockResolvedValue(null),
   getSponsorshipByCodeForEmail: vi.fn(),
 }));
 
@@ -49,6 +50,7 @@ function linkedInput(overrides: Partial<LinkedInput> = {}): LinkedInput {
       name: "Conf",
       slug: "conf",
       startDate: new Date("2026-04-20T12:00:00Z"),
+      endDate: new Date("2026-04-22T12:00:00Z"),
       location: null,
       client: { name: "Org" },
     },
@@ -58,6 +60,7 @@ function linkedInput(overrides: Partial<LinkedInput> = {}): LinkedInput {
       { id: "acc-2", name: "Dîner", price: 80 },
     ],
     currency: "TND",
+    language: "fr",
     ...overrides,
   };
 }
@@ -83,12 +86,13 @@ describe("buildLinkedSponsorshipContext", () => {
       fullName: "Amel",
       email: "reg@x.test",
       phone: "",
-      registrationDate: "September 24, 2026",
+      registrationDate: "24 septembre 2026",
       registrationId: "abcdef12-3456-7890",
       registrationNumber: "ABCDEF12",
       eventName: "Conf",
-      eventDate: "April 20, 2026",
-      eventEndDate: "",
+      eventDate: "20 avril 2026",
+      eventEndDate: "22 avril 2026",
+      eventDateRange: "20–22 avril 2026",
       eventLocation: "",
       eventDescription: "",
       organizerName: "Org",
@@ -97,7 +101,7 @@ describe("buildLinkedSponsorshipContext", () => {
       totalAmount: "400 TND",
       paidAmount: "0 TND",
       amountDue: "280 TND",
-      paymentStatus: "Pending",
+      paymentStatus: "En attente",
       paymentMethod: "",
       selectedAccess: "",
       selectedWorkshops: "",
@@ -135,6 +139,7 @@ describe("buildLinkedSponsorshipContext", () => {
       "eventName",
       "eventDate",
       "eventEndDate",
+      "eventDateRange",
       "eventLocation",
       "eventDescription",
       "organizerName",
@@ -177,7 +182,7 @@ describe("buildLinkedSponsorshipContext", () => {
       totalAmount: "400 TND",
       paidAmount: "400 TND",
       amountDue: "0 TND",
-      paymentStatus: "Paid",
+      paymentStatus: "Confirmé",
       sponsorshipAmount: "400 TND",
       remainingAmount: "0 TND",
     });
@@ -198,6 +203,28 @@ describe("buildLinkedSponsorshipContext", () => {
       buildLinkedSponsorshipContext({ ...withoutBaseAmount, pricing: null })
         .sponsoredItems,
     ).toBe(bullet("<b>Inscription de base :</b> 0 TND"));
+  });
+
+  it("writes the dates, status, amounts and base price line in the form's language", () => {
+    const en = buildLinkedSponsorshipContext(
+      linkedInput({ language: "en", amountApplied: 1350.5 }),
+    );
+    expect(en).toMatchObject({
+      registrationDate: "September 24, 2026",
+      eventDate: "April 20, 2026",
+      eventDateRange: "April 20–22, 2026",
+      paymentStatus: "Pending",
+      sponsorshipAmount: "1,350.500 TND",
+    });
+    expect(en.sponsoredItems).toContain(bullet("<b>Base registration:</b> 150 TND"));
+
+    const ar = buildLinkedSponsorshipContext(linkedInput({ language: "ar" }));
+    expect(ar).toMatchObject({
+      eventDate: "20 أفريل 2026",
+      eventDateRange: "20–22 أفريل 2026",
+      paymentStatus: "في انتظار الدفع",
+    });
+    expect(ar.sponsoredItems).toContain(bullet("<b>التسجيل الأساسي:</b> 150 TND"));
   });
 
   it("uses the beneficiary name without a registrant name, and blanks sponsoredItems when nothing is covered", () => {
@@ -239,7 +266,7 @@ describe("buildEmailContextWithAccess — sponsored items", () => {
       paymentMethod: null,
       accessTypeIds: [],
       sponsorshipCode: "SP-1",
-      language: "en",
+      language: "fr",
       event: {
         slug: "conf",
         name: "Conf",
@@ -311,10 +338,12 @@ describe("buildBatchEmailContext — beneficiary list", () => {
       event: {
         name: "Conf",
         startDate: new Date("2026-04-20T12:00:00Z"),
+        endDate: new Date("2026-04-20T12:00:00Z"),
         location: null,
         client: { name: "Org" },
       },
       currency: "EUR",
+      language: "fr",
     });
 
     expect(ctx.beneficiaryList).toBe(
@@ -323,8 +352,10 @@ describe("buildBatchEmailContext — beneficiary list", () => {
     );
     expect(ctx).toMatchObject({
       paidAmount: "0 EUR",
-      paymentStatus: "N/A",
-      registrationDate: "September 24, 2026",
+      paymentStatus: "",
+      registrationDate: "24 septembre 2026",
+      eventDate: "20 avril 2026",
+      eventDateRange: "20 avril 2026",
       lastName: "",
     });
   });

@@ -13,6 +13,7 @@ export {
   insertEmailTemplate,
   listEmailTemplates,
   updateEmailTemplate,
+  updateEmailTemplateRenderings,
   type EmailTemplateInsert,
   type EmailTemplateRow,
   type ListEmailTemplatesArgs,

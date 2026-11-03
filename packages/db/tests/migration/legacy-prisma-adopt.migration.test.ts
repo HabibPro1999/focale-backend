@@ -78,6 +78,7 @@ const LEGACY_VERDICTS: Record<string, "baseline" | "applied" | "pending"> = {
   "0040": "pending", // meeting undo provenance
   "0041": "pending", // email template attachments
   "0042": "pending", // badge templates
+  "0043": "pending", // free event + auto-accept pricing flags
 };
 
 const PRISMA_EVIDENCE = { finished: 31, latest: "20260814000000_add_committee_invite_tokens" };

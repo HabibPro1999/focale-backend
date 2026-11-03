@@ -10,19 +10,27 @@ import type { LanguageCode } from "@app/contracts";
 import {
   getEventPricingForEmail,
   getEventAccessByIdsForEmail,
+  getRegistrationFormSchema,
   getSponsorshipByCodeForEmail,
   type EventAccessEmailInfo,
   type EventPricingEmailInfo,
   type RegistrationEmailContext,
 } from "@app/db";
 import type { EmailContext } from "./types";
-import { formatDate } from "./locale";
+import { formatDate, formatDateRange } from "./locale";
 import {
-  BASE_PRICE_ITEM_LABEL,
+  basePriceItemLabel,
   bulletListHtml,
   formatCurrency,
+  formatPaymentMethod,
+  formatPaymentStatus,
   sponsoredItemHtml,
 } from "./format";
+import {
+  formatFormData,
+  indexFormFields,
+  type FormFieldIndex,
+} from "./form-values";
 import { integrationsConfig } from "../../config";
 
 // =============================================================================
@@ -66,10 +74,16 @@ export function formatRegistrationNumber(registrationId: string): string {
 // BUILD EMAIL CONTEXT FROM REGISTRATION (sync, no DB)
 // =============================================================================
 
+/**
+ * `formFields`: the event's registration form fields, so `form_*` answers read
+ * as labels, names and dates. Without them, answers are formatted as stored
+ * (objects blank).
+ */
 export function buildEmailContext(
   registration: RegistrationEmailContext,
+  formFields?: FormFieldIndex | null,
 ): EmailContext {
-  const { language } = registration;
+  const { language, currency } = registration;
   const formData =
     (registration.formData as Record<string, unknown>) || {};
 
@@ -96,24 +110,27 @@ export function buildEmailContext(
     eventName: registration.event.name,
     eventDate: formatDate(registration.event.startDate, language),
     eventEndDate: formatDate(registration.event.endDate, language),
+    eventDateRange: formatDateRange(
+      registration.event.startDate,
+      registration.event.endDate,
+      language,
+    ),
     eventLocation: registration.event.location || "",
     eventDescription: registration.event.description || "",
 
-    totalAmount: formatCurrency(
-      registration.totalAmount,
-      registration.currency,
-    ),
-    paidAmount: formatCurrency(registration.paidAmount, registration.currency),
+    totalAmount: formatCurrency(registration.totalAmount, currency, language),
+    paidAmount: formatCurrency(registration.paidAmount, currency, language),
     amountDue: formatCurrency(
       calculateSettlement({
         totalAmount: registration.totalAmount,
         paidAmount: registration.paidAmount,
         sponsorshipAmount: registration.sponsorshipAmount ?? 0,
       }).amountDue,
-      registration.currency,
+      currency,
+      language,
     ),
     paymentStatus: formatPaymentStatus(registration.paymentStatus, language),
-    paymentMethod: registration.paymentMethod || "",
+    paymentMethod: formatPaymentMethod(registration.paymentMethod, language),
 
     selectedAccess: "",
     selectedWorkshops: "",
@@ -130,14 +147,7 @@ export function buildEmailContext(
     bankAccountNumber: "",
   };
 
-  for (const [key, value] of Object.entries(formData)) {
-    context[`form_${key}` as keyof EmailContext] = formatFieldValue(
-      value,
-      language,
-    );
-  }
-
-  return context;
+  return Object.assign(context, formatFormData(formData, formFields, language));
 }
 
 // =============================================================================
@@ -152,20 +162,31 @@ export function buildEmailContext(
 export interface EmailContextLookups {
   eventId: string;
   pricing: EventPricingEmailInfo | null;
+  /** The event's registration form fields (form_* formatting). */
+  formFields: FormFieldIndex;
   /** Access items by id. An id missing here is read from the DB. */
   accessById: ReadonlyMap<string, EventAccessEmailInfo>;
 }
 
-/** Pricing of `eventId` and the access items `accessIds`, in two reads. */
+/**
+ * Pricing of `eventId`, its registration form fields and the access items
+ * `accessIds`, in three reads.
+ */
 export async function loadEmailContextLookups(
   eventId: string,
   accessIds: Iterable<string>,
 ): Promise<EmailContextLookups> {
-  const [pricing, access] = await Promise.all([
+  const [pricing, schema, access] = await Promise.all([
     getEventPricingForEmail(eventId),
+    getRegistrationFormSchema(eventId),
     getEventAccessByIdsForEmail([...new Set(accessIds)]),
   ]);
-  return { eventId, pricing, accessById: new Map(access.map((a) => [a.id, a])) };
+  return {
+    eventId,
+    pricing,
+    formFields: indexFormFields(schema),
+    accessById: new Map(access.map((a) => [a.id, a])),
+  };
 }
 
 /**
@@ -199,13 +220,17 @@ export async function buildEmailContextWithAccess(
   registration: RegistrationEmailContext,
   lookups?: EmailContextLookups,
 ): Promise<EmailContext> {
-  const context = buildEmailContext(registration);
   const eventLookups =
     lookups?.eventId === registration.eventId ? lookups : undefined;
 
-  const pricing = eventLookups
-    ? eventLookups.pricing
-    : await getEventPricingForEmail(registration.eventId);
+  const [pricing, formFields] = eventLookups
+    ? [eventLookups.pricing, eventLookups.formFields]
+    : await Promise.all([
+        getEventPricingForEmail(registration.eventId),
+        getRegistrationFormSchema(registration.eventId).then(indexFormFields),
+      ]);
+  const context = buildEmailContext(registration, formFields);
+  const { language, currency } = registration;
 
   if (pricing) {
     context.bankName = pricing.bankName || "";
@@ -245,7 +270,8 @@ export async function buildEmailContextWithAccess(
       context.sponsorshipCode = sponsorship.code;
       context.sponsorshipAmount = formatCurrency(
         sponsorship.totalAmount,
-        registration.currency,
+        currency,
+        language,
       );
       context.labName = sponsorship.batch.labName;
       context.labContactName = sponsorship.batch.contactName;
@@ -256,9 +282,10 @@ export async function buildEmailContextWithAccess(
       if (sponsorship.coversBasePrice && pricing) {
         sponsoredItems.push(
           sponsoredItemHtml(
-            BASE_PRICE_ITEM_LABEL,
+            basePriceItemLabel(language),
             pricing.basePrice,
-            registration.currency,
+            currency,
+            language,
           ),
         );
       }
@@ -268,7 +295,7 @@ export async function buildEmailContextWithAccess(
         const coveredAccess = await readAccessForEmail(coveredIds, eventLookups);
         for (const access of coveredAccess) {
           sponsoredItems.push(
-            sponsoredItemHtml(access.name, access.price, registration.currency),
+            sponsoredItemHtml(access.name, access.price, currency, language),
           );
         }
       }
@@ -283,7 +310,8 @@ export async function buildEmailContextWithAccess(
           sponsorshipAmount:
             registration.sponsorshipAmount ?? sponsorship.totalAmount,
         }).amountDue,
-        registration.currency,
+        currency,
+        language,
       );
     }
   }
@@ -291,52 +319,12 @@ export async function buildEmailContextWithAccess(
   return context;
 }
 
-// =============================================================================
-// FORMATTING HELPERS
-// Labels follow the registration form's primary language (dates: ./locale).
-// French and Arabic wording follows the registrant-facing form app.
-// =============================================================================
-
-const PAYMENT_STATUS_LABELS: Record<string, Record<LanguageCode, string>> = {
-  PENDING: { fr: "En attente", en: "Pending", ar: "في انتظار الدفع" },
-  VERIFYING: {
-    fr: "En cours de vérification",
-    en: "Verifying payment",
-    ar: "جارٍ التحقّق من الدفع",
-  },
-  PARTIAL: { fr: "Partiellement payé", en: "Partially paid", ar: "مدفوع جزئيًا" },
-  PAID: { fr: "Confirmé", en: "Confirmed", ar: "مؤكَّد" },
-  SPONSORED: { fr: "Sponsorisé", en: "Sponsored", ar: "متكفَّل به" },
-  WAIVED: { fr: "Exonéré", en: "Waived", ar: "معفى" },
-  REFUNDED: { fr: "Remboursé", en: "Refunded", ar: "تم استرجاع المبلغ" },
-};
-
-const YES_NO: Record<LanguageCode, { yes: string; no: string }> = {
-  fr: { yes: "Oui", no: "Non" },
-  en: { yes: "Yes", no: "No" },
-  ar: { yes: "نعم", no: "لا" },
-};
-
 // fullName when the registration carries no name at all.
 const UNNAMED_REGISTRANT: Record<LanguageCode, string> = {
   fr: "Participant",
   en: "Registrant",
   ar: "المشارك",
 };
-
-function formatPaymentStatus(status: string, language: LanguageCode): string {
-  return PAYMENT_STATUS_LABELS[status]?.[language] || status;
-}
-
-function formatFieldValue(value: unknown, language: LanguageCode): string {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "boolean") {
-    return value ? YES_NO[language].yes : YES_NO[language].no;
-  }
-  if (Array.isArray(value)) return value.join(", ");
-  if (value instanceof Date) return formatDate(value, language);
-  return String(value);
-}
 
 // =============================================================================
 // SAMPLE DATA FOR PREVIEW / TEST-SEND
@@ -351,6 +339,7 @@ export const SAMPLE_REGISTRATION_ID = "5a7c3e91-2b4d-4f6a-8c1e-9d0b2a4c6e8f";
 /** Sample values, with dates and labels in the event's form language. */
 export function getSampleEmailContext(language: LanguageCode): EmailContext {
   // Noon UTC keeps the sample's calendar day in any server timezone.
+  const money = (amount: number) => formatCurrency(amount, "TND", language);
   return {
     firstName: "John",
     lastName: "Doe",
@@ -364,14 +353,19 @@ export function getSampleEmailContext(language: LanguageCode): EmailContext {
     eventName: "Medical Conference 2025",
     eventDate: formatDate("2025-04-20T12:00:00Z", language),
     eventEndDate: formatDate("2025-04-22T12:00:00Z", language),
+    eventDateRange: formatDateRange(
+      "2025-04-20T12:00:00Z",
+      "2025-04-22T12:00:00Z",
+      language,
+    ),
     eventLocation: "Tunis, Tunisia",
     eventDescription: "Annual medical conference",
 
-    totalAmount: "250 TND",
-    paidAmount: "250 TND",
-    amountDue: "0 TND",
+    totalAmount: money(250),
+    paidAmount: money(250),
+    amountDue: money(0),
     paymentStatus: formatPaymentStatus("PAID", language),
-    paymentMethod: "Bank Transfer",
+    paymentMethod: formatPaymentMethod("BANK_TRANSFER", language),
 
     selectedAccess: "Workshop A, Gala Dinner",
     selectedWorkshops: "Workshop A",
@@ -390,9 +384,12 @@ export function getSampleEmailContext(language: LanguageCode): EmailContext {
     bankAccountNumber: "TN59 1234 5678 9012 3456 7890",
 
     sponsorshipCode: "SAMPLE-CODE",
-    sponsorshipAmount: "150 TND",
+    sponsorshipAmount: money(150),
     labName: "Laboratoire Exemple",
-    sponsoredItems: "Atelier A - 01/06/2025 (150 TND)",
+    sponsoredItems: bulletListHtml([
+      sponsoredItemHtml(basePriceItemLabel(language), 100, "TND", language),
+      sponsoredItemHtml("Workshop A", 50, "TND", language),
+    ]),
 
     certificateCount: "2",
     certificateList: "Attendance Certificate, Speaker Certificate",

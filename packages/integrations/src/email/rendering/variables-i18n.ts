@@ -12,6 +12,7 @@ const translations: Record<string, [string, string, string, string]> = {
   eventName: ["Nom de l’événement", "Nom de l’événement", "اسم الفعالية", "اسم الفعالية"],
   eventDate: ["Début de l’événement", "Date de début de l’événement", "بداية الفعالية", "تاريخ بداية الفعالية"],
   eventEndDate: ["Fin de l’événement", "Date de fin de l’événement", "نهاية الفعالية", "تاريخ نهاية الفعالية"],
+  eventDateRange: ["Dates de l’événement", "Dates de début et de fin réunies", "تواريخ الفعالية", "تاريخا البداية والنهاية معًا"],
   eventLocation: ["Lieu", "Lieu où se déroule l’événement", "المكان", "مكان انعقاد الفعالية"],
   totalAmount: ["Montant total", "Coût total de l’inscription", "المبلغ الإجمالي", "التكلفة الإجمالية للتسجيل"],
   paidAmount: ["Montant payé", "Montant déjà réglé", "المبلغ المدفوع", "المبلغ الذي تم دفعه"],
