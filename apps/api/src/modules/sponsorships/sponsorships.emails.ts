@@ -8,6 +8,7 @@ export function sponsorshipEventForEmail(event: EmailEvent): EmailEvent {
     name: event.name,
     slug: event.slug,
     startDate: event.startDate,
+    endDate: event.endDate,
     location: event.location,
     client: { name: event.client.name },
   };

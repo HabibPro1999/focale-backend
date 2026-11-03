@@ -4,6 +4,7 @@ import {
   updateEmailTemplate,
 } from "@app/db";
 import { runEmailTemplateStylePreflight } from "../modules/email/email-template-style-preflight";
+import { getTemplateLanguage } from "../modules/email/template-content";
 
 // Run from apps/api with `node --conditions=@app/source -r @swc-node/register src/scripts/email-template-style-preflight.ts`.
 // Review the default dry-run output before rerunning with `--apply`.
@@ -17,14 +18,22 @@ async function main(): Promise<void> {
   const db = getDb();
 
   try {
-    const rows = await db
+    const templates = await db
       .select({
         id: emailTemplates.id,
         name: emailTemplates.name,
         content: emailTemplates.content,
         updatedAt: emailTemplates.updatedAt,
+        eventId: emailTemplates.eventId,
+        abstractTrigger: emailTemplates.abstractTrigger,
       })
       .from(emailTemplates);
+    const rows = await Promise.all(
+      templates.map(async (row) => ({
+        ...row,
+        language: await getTemplateLanguage(row),
+      })),
+    );
 
     const summary = await runEmailTemplateStylePreflight(rows, {
       apply,

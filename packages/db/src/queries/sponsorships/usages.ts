@@ -95,6 +95,7 @@ export interface SponsorshipForLink extends SponsorshipRow {
     name: string;
     slug: string;
     startDate: Date;
+    endDate: Date;
     location: string | null;
     status: string;
     client: SponsorshipClientGate & { name: string };
@@ -114,6 +115,7 @@ export async function findSponsorshipForLink(
         name: events.name,
         slug: events.slug,
         startDate: events.startDate,
+        endDate: events.endDate,
         location: events.location,
         status: events.status,
       },

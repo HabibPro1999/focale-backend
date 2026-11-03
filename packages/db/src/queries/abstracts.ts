@@ -143,12 +143,15 @@ export {
 } from "./abstracts/book-data";
 
 export {
+  findEventForCommitteeEmail,
   findSkippedAbstractEmails,
+  getAbstractConfigLanguage,
   getAbstractForEmailContext,
   listAbstractsForBulkEmail,
   type AbstractEmailTrigger,
   type AbstractForBulkEmail,
   type AbstractForEmailContext,
+  type CommitteeEmailEvent,
   type ListAbstractsForBulkEmailOptions,
   type SkippedAbstractEmailRow,
 } from "./abstracts/email";

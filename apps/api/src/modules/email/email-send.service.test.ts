@@ -7,6 +7,7 @@ vi.mock("@app/db", async (importOriginal) => ({
   withTxn: (fn: (exec: unknown) => unknown) => fn(tx),
   getRegistrationForEmailContext: vi.fn(),
   getRegistrationFormLanguage: vi.fn(),
+  getAbstractConfigLanguage: vi.fn(),
   getRegistrationsByIds: vi.fn(),
   getRegistrationsByFilters: vi.fn(),
   listAbstractsForBulkEmail: vi.fn(),
@@ -18,7 +19,7 @@ vi.mock("@app/db", async (importOriginal) => ({
 const sendEmailMock = vi.fn();
 vi.mock("@app/integrations", () => ({
   getEmailProvider: () => ({ sendEmail: sendEmailMock }),
-  getSampleEmailContext: vi.fn(() => ({})),
+  getSampleEmailContextForEvent: vi.fn(async () => ({})),
   SAMPLE_REGISTRATION_ID: "sample-registration-id",
   buildTemplateAttachments: vi.fn(async () => []),
   resolveEmailParts: vi.fn((parts: unknown) => parts),
@@ -42,6 +43,7 @@ vi.mock("@app/integrations", () => ({
 import {
   getRegistrationForEmailContext,
   getRegistrationFormLanguage,
+  getAbstractConfigLanguage,
   getRegistrationsByIds,
   getRegistrationsByFilters,
   listAbstractsForBulkEmail,
@@ -51,8 +53,10 @@ import {
   type AbstractForBulkEmail,
 } from "@app/db";
 import {
+  buildBatchEmailContext,
   buildTemplateAttachments,
-  getSampleEmailContext,
+  getSampleEmailContextForEvent,
+  renderTemplateToMjml,
   resendUncertainEmail,
   resolveEmailParts,
   sendEmailNow,
@@ -66,6 +70,7 @@ const event = {
   clientId: "client-1",
   name: "Conf",
   startDate: new Date("2025-04-20T00:00:00Z"),
+  endDate: new Date("2025-04-22T00:00:00Z"),
   location: "Tunis",
   pricing: { currency: "TND" },
 };
@@ -118,7 +123,7 @@ describe("testSend", () => {
     sendEmailMock.mockResolvedValue({ success: true, messageId: "m1" });
 
     const badge = { type: "REGISTRATION_BADGE", badgeTemplateId: "11111111-1111-4111-8111-111111111111" };
-    vi.mocked(getSampleEmailContext).mockReturnValueOnce({ fullName: "John Doe" } as never);
+    vi.mocked(getSampleEmailContextForEvent).mockResolvedValueOnce({ fullName: "John Doe" } as never);
     await service.testSend(template({ eventId: "event", attachments: [{ type: "REGISTRATION_QR" }, badge] }), "to@x.com");
 
     // The sample context also feeds the badge's text zones; its event scopes the badge.
@@ -144,7 +149,22 @@ describe("testSend", () => {
     await service.testSend(template({ eventId: "event-1" }), "to@x.com");
 
     expect(getRegistrationFormLanguage).toHaveBeenCalledWith("event-1");
-    expect(getSampleEmailContext).toHaveBeenCalledWith("en");
+    // With the event's form fields filled from their examples.
+    expect(getSampleEmailContextForEvent).toHaveBeenCalledWith("event-1", "en");
+  });
+
+  it("renders an abstract-trigger template's sample in the abstract config's language", async () => {
+    sendEmailMock.mockResolvedValue({ success: true, messageId: "m1" });
+    vi.mocked(getAbstractConfigLanguage).mockResolvedValue("ar");
+
+    await service.testSend(
+      template({ eventId: "event-1", abstractTrigger: "ABSTRACT_ACCEPTED" }),
+      "to@x.com",
+    );
+
+    expect(getAbstractConfigLanguage).toHaveBeenCalledWith("event-1");
+    expect(getRegistrationFormLanguage).not.toHaveBeenCalled();
+    expect(getSampleEmailContextForEvent).toHaveBeenCalledWith("event-1", "ar");
   });
 
   it("falls back to fr for a template without an event", async () => {
@@ -153,7 +173,7 @@ describe("testSend", () => {
     await service.testSend(template({ eventId: null }), "to@x.com");
 
     expect(getRegistrationFormLanguage).not.toHaveBeenCalled();
-    expect(getSampleEmailContext).toHaveBeenCalledWith("fr");
+    expect(getSampleEmailContextForEvent).toHaveBeenCalledWith(null, "fr");
   });
 });
 
@@ -320,8 +340,17 @@ describe("bulkSend — sponsors", () => {
     ]);
     vi.mocked(insertEmailLogsSkippingConflicts).mockResolvedValue(new Set());
 
+    vi.mocked(getRegistrationFormLanguage).mockResolvedValue("ar");
     await service.bulkSend(event, "tmpl-1", { audience: "sponsors", dedupeByEmail: true });
 
+    // The lab email is written in the registration form's language.
+    expect(getRegistrationFormLanguage).toHaveBeenCalledWith("event-1");
+    expect(buildBatchEmailContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        language: "ar",
+        event: expect.objectContaining({ endDate: event.endDate }),
+      }),
+    );
     expect(vi.mocked(insertEmailLogsSkippingConflicts).mock.calls[0][0]).toStrictEqual([
       {
         templateId: "tmpl-1",
@@ -448,6 +477,7 @@ describe("sendCustom", () => {
     email: "reg@x.com",
     firstName: "Reg",
     lastName: "One",
+    language: "en",
   };
   const content = { type: "doc" as const, content: [] };
 
@@ -471,6 +501,8 @@ describe("sendCustom", () => {
     vi.mocked(sendEmailNow).mockResolvedValue({ status: "SENT", emailLogId: "log-1", messageId: "m1" });
 
     const res = await service.sendCustom(event, "reg-1", "Subject", content);
+    // Compiled in the registration form's language.
+    expect(renderTemplateToMjml).toHaveBeenCalledWith(content, { language: "en" });
     expect(resolveEmailParts).toHaveBeenCalledExactlyOnceWith(
       { subject: "Subject", html: "HTML", plain: "PLAIN" },
       { eventName: "Conf", organizerEmail: "org@x.com", organizerName: "Org" },
@@ -547,7 +579,9 @@ describe("unsaved email drafts", () => {
   it("compiles and previews the supplied draft without sending or queuing", async () => {
     const preview = await service.previewDraft("event", { subject: "Draft", content: { type: "doc", content: [] }, language: "fr", attachments: [] });
     expect(preview).toEqual({ subject: "Draft", html: "HTML", plain: "PLAIN" });
-    expect(getSampleEmailContext).toHaveBeenCalledWith("fr");
+    expect(getSampleEmailContextForEvent).toHaveBeenCalledWith("event", "fr");
+    // Link labels and the layout are compiled in the draft's language.
+    expect(renderTemplateToMjml).toHaveBeenCalledWith({ type: "doc", content: [] }, { language: "fr" });
     expect(sendEmailMock).not.toHaveBeenCalled();
     expect(insertEmailLogsSkippingConflicts).not.toHaveBeenCalled();
   });

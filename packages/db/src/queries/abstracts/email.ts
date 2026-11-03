@@ -5,7 +5,7 @@
  */
 import { and, asc, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { getPrimaryLanguage, type LanguageCode } from "@app/contracts";
-import { getDb } from "../../client";
+import { getDb, type DbExecutor } from "../../client";
 import { abstractConfig, abstracts } from "../../schema/abstracts";
 import { events } from "../../schema/events-access";
 import { emailLogs } from "../../schema/email";
@@ -119,7 +119,14 @@ export interface AbstractForEmailContext {
   eventId: string;
   /** Primary language of the event's abstract config (fr when it sets none). */
   language: LanguageCode;
-  event: { name: string; slug: string; clientId: string };
+  event: {
+    name: string;
+    slug: string;
+    clientId: string;
+    startDate: Date;
+    endDate: Date;
+    client: { name: string };
+  };
   config: {
     submissionStartAt: Date | null;
     submissionDeadline: Date | null;
@@ -152,9 +159,13 @@ export async function getAbstractForEmailContext(
       eventName: events.name,
       eventSlug: events.slug,
       eventClientId: events.clientId,
+      eventStartDate: events.startDate,
+      eventEndDate: events.endDate,
+      clientName: clients.name,
     })
     .from(abstracts)
     .innerJoin(events, eq(abstracts.eventId, events.id))
+    .innerJoin(clients, eq(clients.id, events.clientId))
     .where(eq(abstracts.id, abstractId))
     .limit(1);
   if (!row) return null;
@@ -188,7 +199,14 @@ export async function getAbstractForEmailContext(
     linkBaseUrl: row.linkBaseUrl,
     eventId: row.eventId,
     language: getPrimaryLanguage(cfg?.languages),
-    event: { name: row.eventName, slug: row.eventSlug, clientId: row.eventClientId },
+    event: {
+      name: row.eventName,
+      slug: row.eventSlug,
+      clientId: row.eventClientId,
+      startDate: row.eventStartDate,
+      endDate: row.eventEndDate,
+      client: { name: row.clientName },
+    },
     config: {
       submissionStartAt: cfg?.submissionStartAt ?? null,
       submissionDeadline: cfg?.submissionDeadline ?? null,
@@ -199,6 +217,52 @@ export async function getAbstractForEmailContext(
       finalFileUploadEnabled: cfg?.finalFileUploadEnabled ?? false,
     },
   };
+}
+
+/** Primary language of the event's abstract config (fr when it sets none). */
+export async function getAbstractConfigLanguage(
+  eventId: string,
+  exec: DbExecutor = getDb(),
+): Promise<LanguageCode> {
+  const [cfg] = await exec
+    .select({ languages: abstractConfig.languages })
+    .from(abstractConfig)
+    .where(eq(abstractConfig.eventId, eventId))
+    .limit(1);
+  return getPrimaryLanguage(cfg?.languages);
+}
+
+/** What a committee email needs of its event: header values and language. */
+export interface CommitteeEmailEvent {
+  clientId: string;
+  name: string;
+  startDate: Date;
+  endDate: Date;
+  organizerName: string;
+  /** Primary language of the event's abstract config (fr when it sets none). */
+  language: LanguageCode;
+}
+
+export async function findEventForCommitteeEmail(
+  eventId: string,
+): Promise<CommitteeEmailEvent | null> {
+  const [row] = await getDb()
+    .select({
+      clientId: events.clientId,
+      name: events.name,
+      startDate: events.startDate,
+      endDate: events.endDate,
+      organizerName: clients.name,
+      languages: abstractConfig.languages,
+    })
+    .from(events)
+    .innerJoin(clients, eq(clients.id, events.clientId))
+    .leftJoin(abstractConfig, eq(abstractConfig.eventId, events.id))
+    .where(eq(events.id, eventId))
+    .limit(1);
+  if (!row) return null;
+  const { languages, ...event } = row;
+  return { ...event, language: getPrimaryLanguage(languages) };
 }
 
 // ----------------------------------------------------------------------------
@@ -214,8 +278,6 @@ export interface AbstractForBulkEmail extends AbstractForEmailContext {
   authorPhone: string;
   authorAffiliation: string | null;
   event: AbstractForEmailContext["event"] & {
-    startDate: Date;
-    endDate: Date;
     location: string | null;
     client: { name: string; email: string | null; phone: string | null };
   };

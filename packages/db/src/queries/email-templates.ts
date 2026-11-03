@@ -248,6 +248,30 @@ export async function updateEmailTemplate(
   return row ?? null;
 }
 
+/**
+ * Rewrite a template's stored renderings (mjml/html/plain) only, keeping its
+ * `updatedAt`: a CAS on `expectedUpdatedAt`, so a template edited meanwhile is
+ * left alone (false). Returns only the id, so it also runs on a database that
+ * lacks later email_templates columns. For the recompile script.
+ */
+export async function updateEmailTemplateRenderings(
+  id: string,
+  renderings: Pick<EmailTemplateInsert, "mjmlContent" | "htmlContent" | "plainContent">,
+  expectedUpdatedAt: Date,
+): Promise<boolean> {
+  const rows = await getDb()
+    .update(emailTemplates)
+    .set({ ...renderings, updatedAt: expectedUpdatedAt })
+    .where(
+      and(
+        eq(emailTemplates.id, id),
+        eq(emailTemplates.updatedAt, expectedUpdatedAt),
+      ),
+    )
+    .returning({ id: emailTemplates.id });
+  return rows.length > 0;
+}
+
 export async function deleteEmailTemplateById(id: string): Promise<void> {
   await getDb().delete(emailTemplates).where(eq(emailTemplates.id, id));
 }

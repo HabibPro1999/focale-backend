@@ -23,6 +23,8 @@ export interface EmailContext {
   eventName: string;
   eventDate: string;
   eventEndDate: string;
+  /** Start and end dates as one localized range ("20–22 novembre 2026"). */
+  eventDateRange: string;
   eventLocation: string;
   eventDescription: string;
 

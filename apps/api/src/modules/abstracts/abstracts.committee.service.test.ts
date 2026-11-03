@@ -10,6 +10,7 @@ vi.mock("@app/db", () => ({
   findAbstractMembership: vi.fn(),
   deleteUnusedCommitteeInvites: vi.fn(),
   findEventClientId: vi.fn(),
+  findEventForCommitteeEmail: vi.fn(),
   findEventName: vi.fn(),
   listActiveReviewerThemeIds: vi.fn(),
   listCommitteeMembers: vi.fn(),
@@ -59,6 +60,9 @@ vi.mock("@app/integrations", () => ({
   sendEmailNow: (input: never) => sendEmailNowMock(input),
   renderEmailLayout: (body: string, options?: { header?: string }) => `<layout header="${options?.header}">${body}</layout>`,
   compileMjmlToHtml: () => ({ html: "<html></html>" }),
+  formatDate: (date: Date, language: string) => `${language}:${date.toISOString().slice(0, 10)}`,
+  formatDateRange: (start: Date, end: Date, language: string) =>
+    `${language}:${start.toISOString().slice(0, 10)}..${end.toISOString().slice(0, 10)}`,
   // Mirrors the real resolver's modes: html escapes values, text does not.
   resolveVariables: (
     template: string,
@@ -85,6 +89,7 @@ vi.mock("../../core/logger.service", () => ({
 import {
   findAbstractMembership,
   findEventClientId,
+  findEventForCommitteeEmail,
   findEventName,
   listActiveReviewerThemeIds,
   listCommitteeMembers,
@@ -244,10 +249,19 @@ function reviewerAbstractRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+const committeeEvent = {
+  clientId: "client-1",
+  name: "Big Event",
+  startDate: new Date("2026-11-20T12:00:00Z"),
+  endDate: new Date("2026-11-22T12:00:00Z"),
+  organizerName: "Org Co",
+  language: "en",
+};
+
 /** Wire up the assertActiveMembership happy path. */
 function grantActiveMembership() {
   mock(findAbstractMembership).mockResolvedValue({ active: true });
-  mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" });
+  mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" }); mock(findEventForCommitteeEmail).mockResolvedValue(committeeEvent);
   assertClientModuleEnabledMock.mockResolvedValue(undefined);
 }
 
@@ -327,7 +341,7 @@ describe("addCommitteeMember", () => {
     const user = committeeUser({ name: "Zoë Martin & Fils" });
     mock(getUserByEmail).mockResolvedValue(user);
     mock(findEventName).mockResolvedValue("Big Event");
-    mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" });
+    mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" }); mock(findEventForCommitteeEmail).mockResolvedValue(committeeEvent);
     mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
     mock(findAbstractEmailTemplate).mockResolvedValue({
       id: "tmpl-1",
@@ -351,12 +365,13 @@ describe("addCommitteeMember", () => {
     const user = committeeUser();
     mock(getUserByEmail).mockResolvedValue(user);
     mock(findEventName).mockResolvedValue("Big Event");
-    mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" });
+    mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" }); mock(findEventForCommitteeEmail).mockResolvedValue(committeeEvent);
     mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
     mock(findAbstractEmailTemplate).mockResolvedValue({
       id: "tmpl-1",
       subject: "Bienvenue {{reviewerName}} - {{eventName}}",
-      htmlContent: "<p>Bonjour {{reviewerName}}, connectez-vous : {{loginLink}}</p>",
+      htmlContent:
+        "<h1>{{organizerName}}</h1><p>{{eventName}} · {{eventDateRange}}</p><p>Bonjour {{reviewerName}}, connectez-vous : {{loginLink}}</p>",
     });
     sendEmailMock.mockResolvedValue({ success: true });
     mock(listCommitteeMembers).mockResolvedValue([memberDto(user)]);
@@ -380,13 +395,21 @@ describe("addCommitteeMember", () => {
         html: expect.stringContaining("https://admin.example/committee/set-password?token=" + "a".repeat(64)),
       }),
     );
+    // The shared layout's header, in the abstract config's language.
+    expect(sendEmailMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        html: expect.stringContaining(
+          "<h1>Org Co</h1><p>Big Event · en:2026-11-20..2026-11-22</p>",
+        ),
+      }),
+    );
   });
 
   it("M7: falls back to the hardcoded MJML when no template is configured", async () => {
     const user = committeeUser();
     mock(getUserByEmail).mockResolvedValue(user);
     mock(findEventName).mockResolvedValue("Big Event");
-    mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" });
+    mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" }); mock(findEventForCommitteeEmail).mockResolvedValue(committeeEvent);
     mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
     mock(findAbstractEmailTemplate).mockResolvedValue(null);
     sendEmailMock.mockResolvedValue({ success: true });
@@ -414,12 +437,13 @@ describe("addCommitteeMember", () => {
     const user = committeeUser();
     mock(getUserByEmail).mockResolvedValue(user);
     mock(findEventName).mockResolvedValue("Big Event");
-    mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" });
+    mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" }); mock(findEventForCommitteeEmail).mockResolvedValue(committeeEvent);
     mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
     mock(findAbstractEmailTemplate).mockResolvedValue({
       id: "tmpl-1",
       subject: "Bienvenue {{reviewerName}} - {{eventName}}",
-      htmlContent: "<p>Bonjour {{reviewerName}}, connectez-vous : {{loginLink}}</p>",
+      htmlContent:
+        "<h1>{{organizerName}}</h1><p>{{eventName}} · {{eventDateRange}}</p><p>Bonjour {{reviewerName}}, connectez-vous : {{loginLink}}</p>",
     });
     sendEmailMock.mockResolvedValue({ success: true, messageId: "msg-tmpl" });
     mock(listCommitteeMembers).mockResolvedValue([memberDto(user)]);
@@ -445,7 +469,7 @@ describe("addCommitteeMember", () => {
     const user = committeeUser();
     mock(getUserByEmail).mockResolvedValue(user);
     mock(findEventName).mockResolvedValue("Big & Event");
-    mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" });
+    mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" }); mock(findEventForCommitteeEmail).mockResolvedValue(committeeEvent);
     mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
     mock(findAbstractEmailTemplate).mockResolvedValue(null);
     sendEmailMock.mockResolvedValue({ success: true, messageId: "msg-mjml" });
@@ -476,7 +500,7 @@ describe("addCommitteeMember", () => {
     const user = committeeUser();
     mock(getUserByEmail).mockResolvedValue(user);
     mock(findEventName).mockResolvedValue("Big Event");
-    mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" });
+    mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" }); mock(findEventForCommitteeEmail).mockResolvedValue(committeeEvent);
     mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
     mock(findAbstractEmailTemplate).mockResolvedValue(null);
     sendEmailMock.mockRejectedValue(new Error("socket hang up"));
@@ -521,7 +545,7 @@ describe("addCommitteeMember", () => {
     mock(getUserByEmail).mockResolvedValue(undefined);
     usersMock.createUser.mockResolvedValue(user);
     mock(findEventName).mockResolvedValue("Big Event");
-    mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" });
+    mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" }); mock(findEventForCommitteeEmail).mockResolvedValue(committeeEvent);
     mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
     mock(findAbstractEmailTemplate).mockResolvedValue(null);
     sendEmailMock.mockResolvedValue({ success: true });
@@ -993,7 +1017,7 @@ describe("reviewer reads (anonymized)", () => {
 
   it("propagates a module-disabled gate and never queries abstracts", async () => {
     mock(findAbstractMembership).mockResolvedValue({ active: true });
-    mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" });
+    mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" }); mock(findEventForCommitteeEmail).mockResolvedValue(committeeEvent);
     assertClientModuleEnabledMock.mockRejectedValue(new Error("module disabled"));
 
     await expect(

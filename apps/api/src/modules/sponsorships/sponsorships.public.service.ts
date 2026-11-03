@@ -18,6 +18,7 @@ import {
   findEventForBatch,
   findRegistrationsForBatch,
   findSponsorFormById,
+  getRegistrationFormLanguage,
   getActiveSponsorForm,
   getDb,
   getEventPricingForBatch,
@@ -541,6 +542,7 @@ export class SponsorshipsPublicService {
   ): Promise<void> {
     const currency = context.pricing?.currency ?? "TND";
     const eventForEmail = sponsorshipEventForEmail(context.event);
+    const language = await getRegistrationFormLanguage(eventId, tx);
 
     const batchContext = buildBatchEmailContext({
       batch,
@@ -551,6 +553,7 @@ export class SponsorshipsPublicService {
       })),
       event: eventForEmail,
       currency,
+      language,
     });
 
     await enqueueSponsorshipEmailOutbox(
@@ -587,6 +590,7 @@ export class SponsorshipsPublicService {
           : null,
         accessItems: context.accessItems,
         currency,
+        language,
       });
 
       await queueRegistrantSponsorshipEmail(tx, {

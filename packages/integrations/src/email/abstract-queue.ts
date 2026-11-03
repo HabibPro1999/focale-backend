@@ -40,7 +40,7 @@ import {
 } from "@app/db";
 import { queueEmail } from "./queue";
 import { integrationsConfig } from "../config";
-import { formatDate } from "./rendering/index";
+import { formatDate, formatDateRange } from "./rendering/index";
 
 const logger = createLogger({ name: "email:abstract-queue" });
 
@@ -200,6 +200,14 @@ function buildAbstractEmailContext(
     // Back-compat alias for templates authored before explicit date variables.
     deadlineDate: editingDeadline,
     committeeComments: "",
+    // The shared email layout's header: organizer, event name and dates.
+    organizerName: abstract.event.client.name,
+    eventName: abstract.event.name,
+    eventDateRange: formatDateRange(
+      abstract.event.startDate,
+      abstract.event.endDate,
+      language,
+    ),
   };
 }
 
@@ -227,6 +235,7 @@ export function buildAbstractBulkEmailContext(
     eventName: event.name,
     eventDate: formatDate(event.startDate, language),
     eventEndDate: formatDate(event.endDate, language),
+    eventDateRange: formatDateRange(event.startDate, event.endDate, language),
     eventLocation: event.location ?? "",
     organizerName: event.client.name,
     organizerEmail: event.client.email ?? "",

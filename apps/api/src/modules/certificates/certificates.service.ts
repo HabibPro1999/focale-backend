@@ -40,7 +40,7 @@ import {
 } from "@app/db";
 import {
   getEmailProvider,
-  getSampleEmailContext,
+  getSampleEmailContextForEvent,
   resolveEmailParts,
   generateCertificatePdf,
   resolveCertificateVariable,
@@ -164,7 +164,10 @@ export class CertificatesService {
     if (!template.templateUrl) throw badRequest("Upload a certificate image before sending a test.");
     const emailTemplate = await getTemplateByTrigger(template.eventId, "CERTIFICATE_SENT");
     if (!emailTemplate) throw badRequest("No CERTIFICATE_SENT email template configured.");
-    const context = getSampleEmailContext(await getRegistrationFormLanguage(template.eventId));
+    const context = await getSampleEmailContextForEvent(
+      template.eventId,
+      await getRegistrationFormLanguage(template.eventId),
+    );
     const data = toCertificateTemplateData([template])[0];
     const values = Object.fromEntries(data.zones.map((zone) => [zone.variable,
       resolveCertificateVariable(zone.variable, { ...context, accessName: template.access?.name })]));
