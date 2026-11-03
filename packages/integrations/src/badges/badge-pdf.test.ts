@@ -117,7 +117,8 @@ describe("generateBadgePdf", () => {
       { fullName: "ليلى Müller", form_company: "Focale", registrationNumber: "", phone: "—" },
       GOLDEN_REGISTRATION_ID,
     );
-    expect(texts.mock.calls.map(([text]) => text)).toEqual(["ليلى Müller", "Focale"]);
+    // "ليلى Müller" starts right-to-left: drawn as bidi runs, Müller at the visual left.
+    expect(texts.mock.calls.map(([text]) => text)).toEqual(["Müller", "ليلى ", "Focale"]);
     const [, options] = texts.mock.calls[0]!;
     expect(options).toMatchObject({ color: { red: 0x11 / 255, green: 0x22 / 255, blue: 0x33 / 255 } });
   });
