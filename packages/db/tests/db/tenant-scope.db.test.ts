@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  badgeTemplates,
   certificateTemplates,
   emailTemplates,
   getAccessItemTenantScope,
+  getBadgeTemplateTenantScope,
   getCertificateTemplateTenantScope,
   getClientTenantScope,
   getDb,
@@ -119,6 +121,19 @@ describe.runIf(dbTestsEnabled())("db tier: tenant scope reads (5.4)", () => {
       ...expected,
     });
     await expect(getCertificateTemplateTenantScope(event.id)).resolves.toBeNull();
+  });
+
+  it("badge template: through its event to the client", async () => {
+    const { event, expected } = await setup();
+    const [badge] = await getDb()
+      .insert(badgeTemplates)
+      .values({ eventId: event.id, name: "Attendee", widthMm: 90, heightMm: 55 })
+      .returning();
+    await expect(getBadgeTemplateTenantScope(badge!.id)).resolves.toEqual({
+      badgeTemplate: { id: badge!.id },
+      ...expected,
+    });
+    await expect(getBadgeTemplateTenantScope(event.id)).resolves.toBeNull();
   });
 
   it("form: its type, through its event to the client (5.4b)", async () => {

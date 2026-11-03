@@ -1,6 +1,7 @@
 // Declarative tenant scoping for admin routes (plan 5.4).
 export {
   AccessItemScoped,
+  BadgeTemplateScoped,
   CertificateTemplateScoped,
   ClientScoped,
   EmailTemplateScoped,

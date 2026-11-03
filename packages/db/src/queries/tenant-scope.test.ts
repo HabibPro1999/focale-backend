@@ -3,6 +3,7 @@ import { drizzle } from "drizzle-orm/pg-proxy";
 import type { DbExecutor } from "../client";
 import {
   getAccessItemTenantScope,
+  getBadgeTemplateTenantScope,
   getCertificateTemplateTenantScope,
   getClientTenantScope,
   getEmailTemplateTenantScope,
@@ -112,6 +113,18 @@ describe("tenant scope reads (5.4)", () => {
     );
   });
 
+  it("badge template: one statement through the event to the client", async () => {
+    const { db, statements } = recordingDb([["badge-1", ...eventRow, ...clientRow]]);
+    await expect(getBadgeTemplateTenantScope("badge-1", db)).resolves.toEqual({
+      badgeTemplate: { id: "badge-1" },
+      ...scope,
+    });
+    expect(statements).toHaveLength(1);
+    expect(statements[0]!.sql).toMatch(
+      /from "badge_templates" inner join "events" on "events"\."id" = "badge_templates"\."event_id" inner join "clients" on "clients"\."id" = "events"\."client_id" where "badge_templates"\."id" = \$1/,
+    );
+  });
+
   it("form: one statement with the form type, through the event to the client (5.4b)", async () => {
     const { db, statements } = recordingDb([["form-1", "SPONSOR", ...eventRow, ...clientRow]]);
     await expect(getFormTenantScope("form-1", db)).resolves.toEqual({
@@ -140,6 +153,7 @@ describe("tenant scope reads (5.4)", () => {
       getEmailTemplateTenantScope,
       getAccessItemTenantScope,
       getCertificateTemplateTenantScope,
+      getBadgeTemplateTenantScope,
       getFormTenantScope,
       getClientTenantScope,
     ]) {

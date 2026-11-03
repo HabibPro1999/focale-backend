@@ -3,12 +3,14 @@ import {
   ErrorCodes,
   type AutomaticEmailTrigger,
   type AbstractEmailTrigger,
+  type EmailTemplateAttachment,
   type EmailTemplateCategory,
   type ListEmailTemplatesQuery,
   type ListEventEmailLogsQuery,
   type TiptapDocument,
 } from "@app/contracts";
 import {
+  getBadgeTemplate,
   getEmailTemplateById,
   getEventEmailLog,
   findActiveTemplateForTrigger,
@@ -62,6 +64,45 @@ function validateTemplateTriggerState({
   }
 }
 
+/** Abstract-triggered emails have no registration, so nothing built from one can be attached. */
+function validateTemplateAttachments(
+  attachments: readonly EmailTemplateAttachment[],
+  abstractTrigger: AbstractEmailTrigger | null,
+): void {
+  if (abstractTrigger && attachments.length > 0) {
+    throw new AppException(
+      ErrorCodes.EMAIL_ATTACHMENT_NOT_SUPPORTED,
+      "Abstract emails have no registration: the check-in QR code and the badge cannot be attached",
+      400,
+    );
+  }
+}
+
+/** A badge attachment must name a (live) badge of the template's event. */
+async function assertBadgeAttachmentsOfEvent(
+  attachments: readonly EmailTemplateAttachment[],
+  eventId: string | null,
+): Promise<void> {
+  for (const attachment of attachments) {
+    if (attachment.type !== "REGISTRATION_BADGE") continue;
+    if (!eventId) {
+      throw new AppException(
+        ErrorCodes.EMAIL_ATTACHMENT_BADGE_INVALID,
+        "Only an event's email templates can attach a badge",
+        400,
+      );
+    }
+    const badge = await getBadgeTemplate(attachment.badgeTemplateId);
+    if (!badge || badge.eventId !== eventId) {
+      throw new AppException(
+        ErrorCodes.EMAIL_ATTACHMENT_BADGE_INVALID,
+        "The attached badge must be one of the event's badges",
+        400,
+      );
+    }
+  }
+}
+
 export interface CreateTemplateArgs {
   clientId: string;
   eventId: string;
@@ -73,6 +114,7 @@ export interface CreateTemplateArgs {
   trigger?: AutomaticEmailTrigger | null;
   abstractTrigger?: AbstractEmailTrigger | null;
   isActive?: boolean;
+  attachments?: EmailTemplateAttachment[];
 }
 
 export interface UpdateTemplateArgs {
@@ -84,6 +126,7 @@ export interface UpdateTemplateArgs {
   trigger?: AutomaticEmailTrigger | null;
   abstractTrigger?: AbstractEmailTrigger | null;
   isActive?: boolean;
+  attachments?: EmailTemplateAttachment[];
   /** M11: optimistic-concurrency precondition from GET's `updatedAt`. Omitted → last-write-wins (back-compat). */
   expectedUpdatedAt?: string;
 }
@@ -124,6 +167,9 @@ export class EmailTemplateService {
       abstractTrigger: input.abstractTrigger ?? null,
     };
     validateTemplateTriggerState(triggerState);
+    const attachments = input.attachments ?? [];
+    validateTemplateAttachments(attachments, triggerState.abstractTrigger);
+    await assertBadgeAttachmentsOfEvent(attachments, input.eventId);
     await this.assertNoActiveTemplateForTrigger({
       eventId: input.eventId,
       trigger: triggerState.trigger,
@@ -147,6 +193,7 @@ export class EmailTemplateService {
       trigger: triggerState.trigger,
       abstractTrigger: triggerState.abstractTrigger,
       isActive: input.isActive ?? true,
+      attachments,
     };
 
     const result = await insertEmailTemplate(values);
@@ -180,6 +227,14 @@ export class EmailTemplateService {
             abstractTrigger: finalAbstractTrigger,
           };
     validateTemplateTriggerState(triggerState);
+    validateTemplateAttachments(
+      input.attachments ?? existing.attachments,
+      triggerState.abstractTrigger,
+    );
+    // Checked when written: a badge deleted later is skipped at send time.
+    if (input.attachments !== undefined) {
+      await assertBadgeAttachmentsOfEvent(input.attachments, existing.eventId);
+    }
 
     const triggerChanged =
       triggerState.trigger !== existing.trigger ||
@@ -212,6 +267,7 @@ export class EmailTemplateService {
       patch.abstractTrigger = triggerState.abstractTrigger;
     }
     if (input.isActive !== undefined) patch.isActive = input.isActive;
+    if (input.attachments !== undefined) patch.attachments = input.attachments;
 
     let expectedUpdatedAt: Date | undefined;
     if (input.expectedUpdatedAt !== undefined) {
@@ -262,6 +318,7 @@ export class EmailTemplateService {
       trigger: null,
       abstractTrigger: null,
       isActive: false, // Start as inactive
+      attachments: existing.attachments,
     };
 
     const result = await insertEmailTemplate(values);

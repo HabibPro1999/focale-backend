@@ -1,6 +1,7 @@
 // =============================================================================
-// CERTIFICATE RENDER IMAGE (3.8)
-// The copy of a template image the certificate renderer embeds: a flattened
+// TEMPLATE RENDER IMAGE (3.8)
+// The copy of a template image a PDF renderer embeds (certificate templates,
+// badge backgrounds): a flattened
 // JPEG that pdf-lib's embedJpg copies into the PDF as is, instead of the pure
 // JavaScript PNG decode (and re-encode) embedPng runs for every certificate.
 // Derived once, when the image is uploaded (or by the backfill script), and
@@ -34,7 +35,7 @@ export interface CertificateRenderImage {
  * and the page keeps the original's pixel size, so positions do not move.
  * Throws when the input cannot be decoded or is over the limits.
  */
-export async function deriveCertificateRenderImage(
+export async function deriveTemplateRenderImage(
   input: Buffer,
 ): Promise<CertificateRenderImage> {
   const { data, info } = await sharp(input, IMAGE_INPUT_LIMITS)
@@ -54,16 +55,30 @@ export async function deriveCertificateRenderImage(
   };
 }
 
+/** Where a kind of template keeps its images, under the event's storage prefix. */
+export type TemplateImageFolder = "certificates" | "badges";
+
 /**
  * Storage key of a render image, beside the template originals of the event:
- * `<eventId>/certificates/<templateId>-<id>-render.jpg`. On upload `id` is the
+ * `<eventId>/<folder>/<templateId>-<id>-render.jpg`. On upload `id` is the
  * one in the original's key (`<templateId>-<id>.<ext>`); the backfill uses a
  * fresh one, so a key is never written twice.
  */
+export function templateRenderImageKey(
+  folder: TemplateImageFolder,
+  eventId: string,
+  templateId: string,
+  id: string,
+): string {
+  return `${eventId}/${folder}/${templateId}-${id}-render.jpg`;
+}
+
+// The certificate names of the helpers above, used by the certificate paths.
+export const deriveCertificateRenderImage = deriveTemplateRenderImage;
 export function certificateRenderImageKey(
   eventId: string,
   templateId: string,
   id: string,
 ): string {
-  return `${eventId}/certificates/${templateId}-${id}-render.jpg`;
+  return templateRenderImageKey("certificates", eventId, templateId, id);
 }

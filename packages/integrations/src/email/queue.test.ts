@@ -39,7 +39,21 @@ vi.mock("@app/db", async () => ({
   getEmailLogRealtimeTarget: vi.fn(),
   enqueueRealtimeOutboxEvent: vi.fn(),
   getDb: vi.fn(() => "db-handle"),
+  getBadgeTemplate: vi.fn(),
 }));
+
+// The badge renderer is real; the spy shows what it was given.
+const badgePdf = vi.hoisted(() => ({ spy: vi.fn() }));
+vi.mock("../badges/badge-pdf", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../badges/badge-pdf")>();
+  return {
+    ...actual,
+    generateBadgePdf: (...args: Parameters<typeof actual.generateBadgePdf>) => {
+      badgePdf.spy(...args);
+      return actual.generateBadgePdf(...args);
+    },
+  };
+});
 
 const sendEmailMock = vi.fn();
 let providerName: "sendgrid" | "resend" = "sendgrid";
@@ -54,6 +68,7 @@ vi.mock("./rendering/index", () => ({
 }));
 
 import {
+  getBadgeTemplate,
   getTemplateByTrigger,
   createEmailLog,
   hasActiveEmailLogForRegistrationTrigger,
@@ -83,6 +98,8 @@ import {
   emitEmailLogRealtimeEvent,
   resendUncertainEmail,
 } from "./queue";
+import { renderRegistrationQrPng } from "./attachments/registration-qr";
+import { seedBadgeZones } from "@app/contracts";
 
 const mocked = <T>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
 
@@ -124,6 +141,17 @@ function claimed(overrides: Record<string, unknown> = {}): any {
     },
     registration: null,
     ...overrides,
+  };
+}
+
+const REGISTRATION_ID = "3f2b8c1e-6a4d-4e2f-9b7a-1c5d8e9f0a12";
+
+async function qrAttachment() {
+  return {
+    filename: "checkin-qr-3F2B8C1E.png",
+    type: "image/png",
+    disposition: "attachment",
+    content: (await renderRegistrationQrPng(REGISTRATION_ID)).toString("base64"),
   };
 }
 
@@ -827,6 +855,38 @@ describe("processEmailQueue", () => {
     });
   });
 
+  describe("template attachments", () => {
+    const qrLog = (overrides: Record<string, unknown> = {}) =>
+      claimed({
+        registrationId: REGISTRATION_ID,
+        template: { ...claimed().template, attachments: [{ type: "REGISTRATION_QR" }] },
+        ...overrides,
+      });
+
+    it("attaches the registration's check-in QR", async () => {
+      const res = await runOne(qrLog());
+      expect(sendEmailMock).toHaveBeenCalledWith(
+        expect.objectContaining({ attachments: [await qrAttachment()] }),
+      );
+      expect(res.sent).toBe(1);
+    });
+
+    it("sends without the QR, with a warning, when the row has no registration", async () => {
+      const res = await runOne(qrLog({ registrationId: null }));
+      expect(sendEmailMock).toHaveBeenCalledWith(expect.objectContaining({ attachments: undefined }));
+      expect(log.warn).toHaveBeenCalledWith(
+        { emailLogId: "log-1", attachment: "REGISTRATION_QR" },
+        "Template attachment skipped: the email has no registration",
+      );
+      expect(res.sent).toBe(1);
+    });
+
+    it("attaches nothing for a template without attachments", async () => {
+      await runOne(claimed({ registrationId: REGISTRATION_ID }));
+      expect(sendEmailMock).toHaveBeenCalledWith(expect.objectContaining({ attachments: undefined }));
+    });
+  });
+
   describe("certificate attachments", () => {
     const certLog = () =>
       claimed({
@@ -928,6 +988,79 @@ describe("processEmailQueue", () => {
         3,
       );
       expect(res.failed).toBe(1);
+    });
+
+    it("merges the template's check-in QR after the certificates", async () => {
+      const gen = vi.fn().mockResolvedValue([attachment, attachment]);
+      const row = certLog();
+      row.registrationId = REGISTRATION_ID;
+      row.template.attachments = [{ type: "REGISTRATION_QR" }];
+      queue.claim.mockResolvedValue(["log-1"]);
+      mocked(getClaimedEmailLogsForProcessing).mockResolvedValue([row]);
+      const res = await processEmailQueue(50, {
+        workerId: "w1",
+        generateCertificateAttachments: gen,
+      });
+      expect(sendEmailMock).toHaveBeenCalledWith(
+        expect.objectContaining({ attachments: [attachment, attachment, await qrAttachment()] }),
+      );
+      expect(res.sent).toBe(1);
+    });
+
+    it("merges the template's QR and badge after the certificates; the badge reads the email's context", async () => {
+      const badge = {
+        id: "11111111-1111-4111-8111-111111111111",
+        eventId: "evt-1",
+        widthMm: 90,
+        heightMm: 55,
+        renderImageKey: null,
+        zones: seedBadgeZones(90, 55),
+      };
+      mocked(getBadgeTemplate).mockResolvedValue(badge);
+      const gen = vi.fn().mockResolvedValue([attachment, attachment]);
+      const row = certLog();
+      row.registrationId = REGISTRATION_ID;
+      row.contextSnapshot = { ...row.contextSnapshot, fullName: "Leila Ben Ali" };
+      row.template.eventId = "evt-1";
+      row.template.attachments = [
+        { type: "REGISTRATION_QR" },
+        { type: "REGISTRATION_BADGE", badgeTemplateId: badge.id },
+      ];
+      queue.claim.mockResolvedValue(["log-1"]);
+      mocked(getClaimedEmailLogsForProcessing).mockResolvedValue([row]);
+
+      const res = await processEmailQueue(50, { workerId: "w1", generateCertificateAttachments: gen });
+
+      const sent = sendEmailMock.mock.calls[0]![0].attachments;
+      expect(sent.slice(0, 3)).toEqual([attachment, attachment, await qrAttachment()]);
+      expect(sent[3]).toMatchObject({ filename: "badge-3F2B8C1E.pdf", type: "application/pdf", disposition: "attachment" });
+      expect(Buffer.from(sent[3].content, "base64").subarray(0, 5).toString()).toBe("%PDF-");
+      expect(getBadgeTemplate).toHaveBeenCalledWith(badge.id);
+      expect(badgePdf.spy).toHaveBeenCalledWith(
+        badge,
+        { eventName: "Conf", fullName: "Leila Ben Ali" },
+        REGISTRATION_ID,
+      );
+      expect(res.sent).toBe(1);
+    });
+
+    it("still sends, without the badge and with a warning, when the badge was deleted", async () => {
+      mocked(getBadgeTemplate).mockResolvedValue(null);
+      const row = claimed({
+        registrationId: REGISTRATION_ID,
+        template: {
+          ...claimed().template,
+          eventId: "evt-1",
+          attachments: [{ type: "REGISTRATION_BADGE", badgeTemplateId: "11111111-1111-4111-8111-111111111111" }],
+        },
+      });
+      const res = await runOne(row);
+      expect(sendEmailMock).toHaveBeenCalledWith(expect.objectContaining({ attachments: undefined }));
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ emailLogId: "log-1", attachment: "REGISTRATION_BADGE" }),
+        "Template attachment skipped: the badge template is deleted or not the event's",
+      );
+      expect(res.sent).toBe(1);
     });
 
     // H2: abstract-linked CERTIFICATE_SENT rows carry abstractId with

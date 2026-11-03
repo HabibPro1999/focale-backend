@@ -57,6 +57,11 @@ export function buildRegistrationSelfLinks(input: {
   };
 }
 
+/** The short registration number shown to registrants: the id's first 8 characters, upper-cased. */
+export function formatRegistrationNumber(registrationId: string): string {
+  return registrationId.slice(0, 8).toUpperCase();
+}
+
 // =============================================================================
 // BUILD EMAIL CONTEXT FROM REGISTRATION (sync, no DB)
 // =============================================================================
@@ -86,7 +91,7 @@ export function buildEmailContext(
     phone: registration.phone || String(formData.phone || ""),
     registrationDate: formatDate(registration.submittedAt, language),
     registrationId: registration.id,
-    registrationNumber: registration.id.slice(0, 8).toUpperCase(),
+    registrationNumber: formatRegistrationNumber(registration.id),
 
     eventName: registration.event.name,
     eventDate: formatDate(registration.event.startDate, language),
@@ -337,6 +342,12 @@ function formatFieldValue(value: unknown, language: LanguageCode): string {
 // SAMPLE DATA FOR PREVIEW / TEST-SEND
 // =============================================================================
 
+/**
+ * The sample registration's id: a valid UUID, so a test send can attach a
+ * real check-in QR code built from it.
+ */
+export const SAMPLE_REGISTRATION_ID = "5a7c3e91-2b4d-4f6a-8c1e-9d0b2a4c6e8f";
+
 /** Sample values, with dates and labels in the event's form language. */
 export function getSampleEmailContext(language: LanguageCode): EmailContext {
   // Noon UTC keeps the sample's calendar day in any server timezone.
@@ -347,8 +358,8 @@ export function getSampleEmailContext(language: LanguageCode): EmailContext {
     email: "john.doe@example.com",
     phone: "+216 12 345 678",
     registrationDate: formatDate("2025-03-15T12:00:00Z", language),
-    registrationId: "abc123",
-    registrationNumber: "ABC123",
+    registrationId: SAMPLE_REGISTRATION_ID,
+    registrationNumber: formatRegistrationNumber(SAMPLE_REGISTRATION_ID),
 
     eventName: "Medical Conference 2025",
     eventDate: formatDate("2025-04-20T12:00:00Z", language),
@@ -366,10 +377,9 @@ export function getSampleEmailContext(language: LanguageCode): EmailContext {
     selectedWorkshops: "Workshop A",
     selectedDinners: "Gala Dinner",
 
-    registrationLink: "https://events.example.com/registration/abc123/abc123",
-    editRegistrationLink:
-      "https://events.example.com/registration/abc123/abc123",
-    paymentLink: "https://events.example.com/payment/abc123/abc123",
+    registrationLink: `https://events.example.com/registration/${SAMPLE_REGISTRATION_ID}/sample-token`,
+    editRegistrationLink: `https://events.example.com/registration/${SAMPLE_REGISTRATION_ID}/sample-token`,
+    paymentLink: `https://events.example.com/payment/${SAMPLE_REGISTRATION_ID}/sample-token`,
 
     organizerName: "Medical Events Co.",
     organizerEmail: "contact@medicalevents.com",

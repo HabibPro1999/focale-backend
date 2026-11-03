@@ -1,7 +1,7 @@
 // =============================================================================
 // CERTIFICATE IMAGE CACHE (3.8)
-// One cache per process for the template image bytes certificate rendering
-// embeds, bounded by total bytes, least recently used entry evicted first. It
+// One cache per process for the template image bytes PDF rendering embeds
+// (certificate templates and badge backgrounds), bounded by total bytes, least recently used entry evicted first. It
 // replaces the Map each email-queue run used to create. Entries are keyed by
 // storage key; a key is never overwritten (every upload writes fresh keys, and
 // the backfill a fresh render key), so a cached entry never goes stale.
@@ -91,7 +91,7 @@ const inFlight = new Map<string, Promise<Buffer>>();
  * errors (StorageObjectNotFoundError included) reach the caller and nothing
  * is cached.
  */
-export function loadCertificateImage(key: string): Promise<Buffer> {
+export function loadTemplateImage(key: string): Promise<Buffer> {
   const cached = certificateImageCache.get(key);
   if (cached) return Promise.resolve(cached);
 
@@ -110,3 +110,6 @@ export function loadCertificateImage(key: string): Promise<Buffer> {
   inFlight.set(key, download);
   return download;
 }
+
+/** The certificate name of loadTemplateImage, used by the certificate renderer. */
+export const loadCertificateImage = loadTemplateImage;

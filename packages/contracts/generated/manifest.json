@@ -145,6 +145,42 @@
       "module": "packages/contracts/src/sponsorships.responses.ts",
       "type": "AvailableSponsorshipsResponse"
     },
+    "BadgeEventIdParamSchema": {
+      "module": "packages/contracts/src/badges.ts",
+      "type": "BadgeEventIdParam"
+    },
+    "BadgeIdParamSchema": {
+      "module": "packages/contracts/src/badges.ts",
+      "type": "BadgeIdParam"
+    },
+    "BadgeQrZoneSchema": {
+      "module": "packages/contracts/src/badges.ts",
+      "type": "BadgeQrZone"
+    },
+    "BadgeRegistrationIdParamSchema": {
+      "module": "packages/contracts/src/badges.ts",
+      "type": "BadgeRegistrationIdParam"
+    },
+    "BadgeTemplateListResponseSchema": {
+      "module": "packages/contracts/src/badges.ts",
+      "type": "BadgeTemplateListResponse"
+    },
+    "BadgeTemplateResponseSchema": {
+      "module": "packages/contracts/src/badges.ts",
+      "type": "BadgeTemplateResponse"
+    },
+    "BadgeTextZoneSchema": {
+      "module": "packages/contracts/src/badges.ts",
+      "type": "BadgeTextZone"
+    },
+    "BadgeZoneSchema": {
+      "module": "packages/contracts/src/badges.ts",
+      "type": "BadgeZone"
+    },
+    "BadgeZonesSchema": {
+      "module": "packages/contracts/src/badges.ts",
+      "type": "BadgeZones"
+    },
     "BatchSyncBodySchema": {
       "module": "packages/contracts/src/checkin.ts",
       "type": "BatchSyncBody"
@@ -273,6 +309,10 @@
       "module": "packages/contracts/src/condition.schema.ts",
       "type": "Condition"
     },
+    "CreateBadgeTemplateSchema": {
+      "module": "packages/contracts/src/badges.ts",
+      "type": "CreateBadgeTemplate"
+    },
     "CreateCertificateTemplateSchema": {
       "module": "packages/contracts/src/certificates.ts",
       "type": "CreateCertificateTemplate"
@@ -400,6 +440,14 @@
     "EmailStatusSchema": {
       "module": "packages/contracts/src/email.ts",
       "type": "EmailStatus"
+    },
+    "EmailTemplateAttachmentSchema": {
+      "module": "packages/contracts/src/email.ts",
+      "type": "EmailTemplateAttachment"
+    },
+    "EmailTemplateAttachmentsSchema": {
+      "module": "packages/contracts/src/email.ts",
+      "type": "EmailTemplateAttachments"
     },
     "EmailTemplateCategorySchema": {
       "module": "packages/contracts/src/email.ts",
@@ -1260,6 +1308,10 @@
       "module": "packages/contracts/src/registrations.ts",
       "type": "RegistrationAuditLog"
     },
+    "RegistrationBadgeQuerySchema": {
+      "module": "packages/contracts/src/badges.ts",
+      "type": "RegistrationBadgeQuery"
+    },
     "RegistrationColumnsResponseSchema": {
       "module": "packages/contracts/src/registrations.ts",
       "type": "RegistrationColumnsResponse"
@@ -1429,6 +1481,11 @@
       "module": "packages/contracts/src/forms.ts",
       "type": "StepTranslationEntry"
     },
+    "StoredBadgeZonesSchema": {
+      "module": "packages/contracts/src/badges.ts",
+      "type": "StoredBadgeZones",
+      "aliasOf": "BadgeZonesSchema"
+    },
     "StoredCertificateZonesSchema": {
       "module": "packages/contracts/src/certificates.ts",
       "type": "StoredCertificateZones"
@@ -1542,6 +1599,10 @@
       "module": "packages/contracts/src/checkin.ts",
       "type": "UndoCheckInResult"
     },
+    "UpdateBadgeTemplateSchema": {
+      "module": "packages/contracts/src/badges.ts",
+      "type": "UpdateBadgeTemplate"
+    },
     "UpdateCertificateTemplateSchema": {
       "module": "packages/contracts/src/certificates.ts",
       "type": "UpdateCertificateTemplate"
@@ -1649,6 +1710,16 @@
     {
       "direction": "input",
       "pointer": "/$defs/AdminRegistrationResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/BadgeTemplateResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/BadgeTemplateResponseSchema/properties/updatedAt",
       "reason": "date"
     },
     {
@@ -2514,6 +2585,16 @@
     {
       "direction": "output",
       "pointer": "/$defs/AdminRegistrationResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/BadgeTemplateResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/BadgeTemplateResponseSchema/properties/updatedAt",
       "reason": "date"
     },
     {

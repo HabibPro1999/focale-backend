@@ -26,6 +26,7 @@ import {
   getAbstractBookStorageKeysTx,
   getAbstractFinalFileKeysTx,
   getCertificateTemplateUrlsTx,
+  getBadgeTemplateImagesTx,
   getEventIdBySlugTx,
   getEventWithPricing,
   getEventWithPricingAndClient,
@@ -243,6 +244,7 @@ export class EventsService {
     let filesToDelete: {
       bannerUrl: string | null;
       certificateTemplateImages: Array<{ templateUrl: string }>;
+      badgeImages: Array<{ backgroundUrl: string | null; renderImageKey: string | null }>;
       abstractFinalFiles: Array<{ finalFileKey: string | null }>;
       abstractBookFiles: Array<{ storageKey: string | null }>;
       networkingLogoKey: string | null;
@@ -264,6 +266,7 @@ export class EventsService {
           }
 
           const certificateTemplateImages = await getCertificateTemplateUrlsTx(tx, id);
+          const badgeImages = await getBadgeTemplateImagesTx(tx, id);
           const abstractFinalFiles = await getAbstractFinalFileKeysTx(tx, id);
           const abstractBookFiles = await getAbstractBookStorageKeysTx(tx, id);
           // Only the organizer-uploaded branding object is owned; an external logo URL is never deleted.
@@ -278,6 +281,7 @@ export class EventsService {
           return {
             bannerUrl: found.event.bannerUrl,
             certificateTemplateImages,
+            badgeImages,
             abstractFinalFiles,
             abstractBookFiles,
             networkingLogoKey,
@@ -304,6 +308,10 @@ export class EventsService {
       ...filesToDelete.certificateTemplateImages.map((t) =>
         deleteStoredObjectBestEffort(t.templateUrl, { eventId: id }),
       ),
+      ...filesToDelete.badgeImages.flatMap((b) => [
+        deleteStoredObjectBestEffort(b.backgroundUrl, { eventId: id }),
+        deleteStoredObjectBestEffort(b.renderImageKey, { eventId: id }),
+      ]),
       ...filesToDelete.abstractFinalFiles.map((a) =>
         deleteStoredObjectBestEffort(a.finalFileKey, { eventId: id }),
       ),

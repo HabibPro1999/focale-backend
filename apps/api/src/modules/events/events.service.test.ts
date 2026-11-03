@@ -17,6 +17,7 @@ vi.mock("@app/db", async (importOriginal) => ({
   getAbstractBookStorageKeysTx: vi.fn(),
   getAbstractFinalFileKeysTx: vi.fn(),
   getCertificateTemplateUrlsTx: vi.fn(),
+  getBadgeTemplateImagesTx: vi.fn(),
   getEventIdBySlugTx: vi.fn(),
   getEventWithPricing: vi.fn(),
   getEventWithPricingAndClient: vi.fn(),
@@ -552,6 +553,7 @@ describe("EventsService", () => {
   describe("deleteEvent", () => {
     beforeEach(() => {
       vi.mocked(db.getCertificateTemplateUrlsTx).mockResolvedValue([]);
+      vi.mocked(db.getBadgeTemplateImagesTx).mockResolvedValue([]);
       vi.mocked(db.getAbstractFinalFileKeysTx).mockResolvedValue([]);
       vi.mocked(db.getAbstractBookStorageKeysTx).mockResolvedValue([]);
       vi.mocked(db.getNetworkingConfig).mockResolvedValue({ logoUrl: null } as never);
@@ -565,6 +567,24 @@ describe("EventsService", () => {
       await service.deleteEvent(eventId);
       expect(db.deleteEmailTemplatesByEventTx).toHaveBeenCalledWith(expect.anything(), eventId);
       expect(db.deleteEventTx).toHaveBeenCalledWith(expect.anything(), eventId);
+    });
+
+    it("deletes every badge's background and render image (deleted badges too)", async () => {
+      vi.mocked(db.getEventWithRegistrationCountTx).mockResolvedValue({
+        event: createMockEvent() as never,
+        registrations: 0,
+      });
+      vi.mocked(db.getBadgeTemplateImagesTx).mockResolvedValue([
+        { backgroundUrl: `https://storage.googleapis.com/bucket/${eventId}/badges/b-1-u.png`, renderImageKey: `${eventId}/badges/b-1-u-render.jpg` },
+        { backgroundUrl: null, renderImageKey: null },
+      ]);
+
+      await service.deleteEvent(eventId);
+
+      expect(db.getBadgeTemplateImagesTx).toHaveBeenCalledWith(expect.anything(), eventId);
+      expect(storageDeleteMock).toHaveBeenCalledWith(`${eventId}/badges/b-1-u.png`);
+      expect(storageDeleteMock).toHaveBeenCalledWith(`${eventId}/badges/b-1-u-render.jpg`);
+      expect(storageDeleteMock).toHaveBeenCalledTimes(2);
     });
 
     it("collects banner + certificate + abstract + book storage keys", async () => {

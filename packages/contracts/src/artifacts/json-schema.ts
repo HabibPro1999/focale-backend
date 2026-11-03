@@ -17,6 +17,7 @@ import { z } from "zod";
 import * as abstracts from "../abstracts";
 import * as abstractsResponses from "../abstracts.responses";
 import * as access from "../access";
+import * as badges from "../badges";
 import * as certificates from "../certificates";
 import * as checkin from "../checkin";
 import * as clients from "../clients";
@@ -52,6 +53,7 @@ export const CONTRACT_MODULES: Readonly<Record<string, Record<string, unknown>>>
   abstracts,
   "abstracts.responses": abstractsResponses,
   access,
+  badges,
   certificates,
   checkin,
   clients,
