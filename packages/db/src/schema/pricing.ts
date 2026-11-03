@@ -17,6 +17,10 @@ export const eventPricing = pgTable(
       .notNull()
       .references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
     basePrice: moneyColumn().notNull().default(0),
+    /** Free event: the base price is held at 0 (rules and paid access still apply). */
+    isFree: boolean().notNull().default(false),
+    /** Settle a free public signup (gross 0, no code) as WAIVED; only honoured with isFree. */
+    autoAccept: boolean().notNull().default(false),
     currency: text().notNull().default("TND"),
     rules: jsonbOf(StoredPricingRulesSchema).notNull().default([]),
     onlinePaymentEnabled: boolean().notNull().default(false),

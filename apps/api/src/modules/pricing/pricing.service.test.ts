@@ -39,6 +39,8 @@ function mockPricing(
     id: "pricing-1",
     eventId,
     basePrice: 0,
+    isFree: false,
+    autoAccept: false,
     currency: "TND",
     rules: [],
     onlinePaymentEnabled: false,
@@ -241,6 +243,112 @@ describe("updateEventPricing", () => {
     await expect(
       service.updateEventPricing(eventId, { basePrice: 300 }),
     ).rejects.toThrow(AppException);
+  });
+
+  describe("free event + auto-accept", () => {
+    it("isFree forces the base price to 0, whatever price is sent", async () => {
+      pricingRead.mockResolvedValue(mockPricing({ basePrice: 250 }));
+      upsert.mockResolvedValue(mockPricing({ isFree: true }));
+
+      await service.updateEventPricing(eventId, { isFree: true, basePrice: 300 });
+
+      expect(upsert).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ basePrice: 0, isFree: true, autoAccept: false }),
+        expect.objectContaining({ basePrice: 0, isFree: true, autoAccept: false }),
+      );
+    });
+
+    it("isFree alone zeroes a stored base price", async () => {
+      pricingRead.mockResolvedValue(mockPricing({ basePrice: 250 }));
+      upsert.mockResolvedValue(mockPricing({ isFree: true }));
+
+      await service.updateEventPricing(eventId, { isFree: true });
+
+      expect(upsert.mock.calls[0][2]).toMatchObject({ basePrice: 0, isFree: true });
+    });
+
+    it("a base price sent alone to a stored free event stays 0", async () => {
+      pricingRead.mockResolvedValue(mockPricing({ isFree: true, autoAccept: true }));
+      upsert.mockResolvedValue(mockPricing({ isFree: true, autoAccept: true }));
+
+      await service.updateEventPricing(eventId, { basePrice: 300 });
+
+      const update = upsert.mock.calls[0][2];
+      expect(update.basePrice).toBe(0);
+      // Flags were not sent: they keep their stored values (not written).
+      expect(update).not.toHaveProperty("isFree");
+      expect(update).not.toHaveProperty("autoAccept");
+    });
+
+    it("enables auto-accept together with isFree", async () => {
+      upsert.mockResolvedValue(mockPricing({ isFree: true, autoAccept: true }));
+
+      await service.updateEventPricing(eventId, { isFree: true, autoAccept: true });
+
+      expect(upsert.mock.calls[0][2]).toMatchObject({ basePrice: 0, isFree: true, autoAccept: true });
+    });
+
+    it("enables auto-accept on an event already stored free", async () => {
+      pricingRead.mockResolvedValue(mockPricing({ isFree: true }));
+      upsert.mockResolvedValue(mockPricing({ isFree: true, autoAccept: true }));
+
+      await service.updateEventPricing(eventId, { autoAccept: true });
+
+      expect(upsert.mock.calls[0][2]).toMatchObject({ isFree: true, autoAccept: true, basePrice: 0 });
+    });
+
+    it.each([
+      ["no pricing row yet", null],
+      ["a paid event", mockPricing({ basePrice: 100 })],
+    ])("400 PRC_6009 for auto-accept on %s; nothing is written", async (_, stored) => {
+      pricingRead.mockResolvedValue(stored);
+
+      await expect(service.updateEventPricing(eventId, { autoAccept: true })).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.AUTO_ACCEPT_REQUIRES_FREE_EVENT,
+      });
+      expect(ErrorCodes.AUTO_ACCEPT_REQUIRES_FREE_EVENT).toBe("PRC_6009");
+      expect(upsert).not.toHaveBeenCalled();
+    });
+
+    it("400 PRC_6009 when turning the event paid while asking for auto-accept", async () => {
+      pricingRead.mockResolvedValue(mockPricing({ isFree: true, autoAccept: true }));
+
+      await expect(
+        service.updateEventPricing(eventId, { isFree: false, autoAccept: true }),
+      ).rejects.toMatchObject({ statusCode: 400, code: ErrorCodes.AUTO_ACCEPT_REQUIRES_FREE_EVENT });
+      expect(upsert).not.toHaveBeenCalled();
+    });
+
+    it("turning free off clears auto-accept and keeps the price sent", async () => {
+      pricingRead.mockResolvedValue(mockPricing({ isFree: true, autoAccept: true }));
+      upsert.mockResolvedValue(mockPricing({ basePrice: 120 }));
+
+      await service.updateEventPricing(eventId, { isFree: false, basePrice: 120 });
+
+      expect(upsert.mock.calls[0][2]).toMatchObject({ isFree: false, autoAccept: false, basePrice: 120 });
+    });
+
+    it("autoAccept false alone keeps the stored isFree", async () => {
+      pricingRead.mockResolvedValue(mockPricing({ isFree: true, autoAccept: true }));
+      upsert.mockResolvedValue(mockPricing({ isFree: true }));
+
+      await service.updateEventPricing(eventId, { autoAccept: false });
+
+      expect(upsert.mock.calls[0][2]).toMatchObject({ isFree: true, autoAccept: false, basePrice: 0 });
+    });
+
+    it("omitted flags are preserved: a payment-only PATCH writes neither flag nor the price", async () => {
+      pricingRead.mockResolvedValue(mockPricing({ isFree: true, autoAccept: true }));
+      upsert.mockResolvedValue(mockPricing({ isFree: true, autoAccept: true, cashPaymentEnabled: true }));
+
+      await service.updateEventPricing(eventId, { cashPaymentEnabled: true });
+
+      const update = upsert.mock.calls[0][2];
+      expect(update).toEqual({ cashPaymentEnabled: true });
+      expect(pricingRead).not.toHaveBeenCalled();
+    });
   });
 });
 

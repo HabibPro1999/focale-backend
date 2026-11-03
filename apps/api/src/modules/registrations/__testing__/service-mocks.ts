@@ -75,6 +75,7 @@ export const db = {
   listRegistrationEmailLogRows: vi.fn(),
   getRegistrationFormSchemaForEvent: vi.fn(),
   getFormForPriceQuote: vi.fn(),
+  getEventPricing: vi.fn(),
   pgUniqueViolation: (err: unknown) => {
     const e = err as { code?: unknown; constraint?: unknown } | null;
     return e?.code === "23505"
@@ -422,6 +423,8 @@ export function installServiceMocks(): {
   db.findRegistrationUsagesForRecalc.mockResolvedValue([]);
   db.getRegistrationFormSchemaForEvent.mockResolvedValue({ schema: ANSWER_SCHEMA });
   db.getFormForPriceQuote.mockResolvedValue({ schema: ANSWER_SCHEMA });
+  // No pricing row: the event is neither free nor auto-accepting.
+  db.getEventPricing.mockResolvedValue(null);
 
   ft.fileTypeFromBuffer.mockResolvedValue({ mime: "application/pdf", ext: "pdf" });
   integ.compressFile.mockResolvedValue({

@@ -35,6 +35,7 @@ const db = vi.hoisted(() => ({
   findAccessDetailsByIds: vi.fn(),
   enqueueNetworkingRegistrationSyncs: vi.fn(),
   enqueueNetworkingRegistrationCreatedSync: vi.fn(),
+  getEventPricing: vi.fn(),
 }));
 vi.mock("@app/db", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -143,6 +144,7 @@ beforeEach(() => {
   db.withTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn({}));
   db.withLockingTxn.mockImplementation((fn: (tx: unknown) => unknown) => db.withTxn(fn));
   db.lockRegistrationForUpdate.mockResolvedValue(true);
+  db.getEventPricing.mockResolvedValue(null);
   db.getEventWithPricing.mockResolvedValue({ id: EVENT_ID, ...openEvent });
   db.findClientModuleState.mockResolvedValue(client);
   db.getRegistrationFormSchemaForEvent.mockResolvedValue({ schema: SCHEMA });

@@ -384,6 +384,15 @@ describe("EventsService", () => {
       });
     });
 
+    it("holds a free event's base price at 0 when the event PATCH sends one", async () => {
+      const event = { ...createMockEvent(), pricing: createMockEventPricing({ isFree: true }) };
+      vi.mocked(db.getEventWithPricing)
+        .mockResolvedValueOnce(event as never)
+        .mockResolvedValueOnce(event as never);
+      await service.updateEvent(eventId, { basePrice: 300 });
+      expect(db.upsertEventPricingTx).toHaveBeenCalledWith(expect.anything(), eventId, { basePrice: 0 });
+    });
+
     it("normalizes currency before comparing (case-only difference)", async () => {
       const event = { ...createMockEvent(), pricing: createMockEventPricing({ currency: "TND" }) };
       vi.mocked(db.getEventWithPricing)
