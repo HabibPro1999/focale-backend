@@ -541,10 +541,16 @@ export async function processEmailQueue(
         }
       }
 
-      // The template's own attachments (check-in QR), read at send time like its HTML.
+      // The template's own attachments (check-in QR, badge), read at send
+      // time like its HTML; the badge's text reads the same context.
       const templateAttachments = await buildTemplateAttachments(
         emailLog.template?.attachments ?? [],
-        { registrationId: emailLog.registrationId, emailLogId: emailLog.id },
+        {
+          registrationId: emailLog.registrationId,
+          eventId: emailLog.template?.eventId,
+          context,
+          emailLogId: emailLog.id,
+        },
       );
       if (templateAttachments.length > 0) {
         attachments = [...(attachments ?? []), ...templateAttachments];

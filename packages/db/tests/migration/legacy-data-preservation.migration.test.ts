@@ -771,6 +771,7 @@ describe.runIf(dbTestsEnabled())("legacy production data across the cutover", ()
         "forms.schema": { scanned: 4, invalid: [] },
         "email_logs.context_snapshot": { scanned: 17, invalid: [] },
         "registrations.price_breakdown": { scanned: 17, invalid: [] },
+        "badge_templates.zones": { scanned: 0, invalid: [] }, // 0042: a new table, no legacy rows
       });
     });
 

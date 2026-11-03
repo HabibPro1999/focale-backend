@@ -13,6 +13,7 @@ export * from "./registrations";
 export * from "./platform-registrations";
 export * from "./abstracts";
 export * from "./certificates";
+export * from "./badges";
 export * from "./checkin";
 export * from "./reports";
 export * from "./committee-invites";

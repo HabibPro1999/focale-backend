@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@app/db", () => ({
+  getBadgeTemplate: vi.fn(),
   getEmailTemplateById: vi.fn(),
   findActiveTemplateForTrigger: vi.fn(),
   insertEmailTemplate: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock("@app/integrations", () => ({
 }));
 
 import {
+  getBadgeTemplate,
   getEmailTemplateById,
   findActiveTemplateForTrigger,
   insertEmailTemplate,
@@ -419,5 +421,65 @@ describe("list / listLogs", () => {
     vi.mocked(listEventEmailLogs).mockResolvedValue({ data: rows(2), total: 4, totalCapped: false });
     const exact = await service.listLogs("event-1", { page: 2, limit: 2 } as never);
     expect(exact.meta).toMatchObject({ hasNext: false, totalCapped: false });
+  });
+});
+
+describe("badge attachment (EML_15004)", () => {
+  const BADGE_ID = "11111111-1111-4111-8111-111111111111";
+  const badge = { type: "REGISTRATION_BADGE" as const, badgeTemplateId: BADGE_ID };
+  const baseArgs = { clientId: "client-1", eventId: "event-1", name: "Welcome", subject: "Hi", content };
+
+  it("creates a template attaching one of its event's badges", async () => {
+    vi.mocked(getBadgeTemplate).mockResolvedValue({ id: BADGE_ID, eventId: "event-1" } as never);
+    const created = (await service.create({
+      ...baseArgs,
+      category: "AUTOMATIC",
+      trigger: "REGISTRATION_CREATED",
+      attachments: [{ type: "REGISTRATION_QR" }, badge],
+    })) as Record<string, unknown>;
+    expect(getBadgeTemplate).toHaveBeenCalledWith(BADGE_ID);
+    expect(created.attachments).toEqual([{ type: "REGISTRATION_QR" }, badge]);
+  });
+
+  it.each([
+    ["missing or deleted", null],
+    ["of another event", { id: BADGE_ID, eventId: "event-2" }],
+  ])("refuses a badge %s on create and update (400 EML_15004)", async (_case, row) => {
+    vi.mocked(getBadgeTemplate).mockResolvedValue(row as never);
+    await expect(service.create({ ...baseArgs, category: "MANUAL", attachments: [badge] })).rejects.toMatchObject({
+      status: 400,
+      code: "EML_15004",
+    });
+    expect(insertEmailTemplate).not.toHaveBeenCalled();
+
+    vi.mocked(getEmailTemplateById).mockResolvedValue(templateRow());
+    await expect(service.update("tmpl-1", { attachments: [badge] })).rejects.toMatchObject({
+      status: 400,
+      code: "EML_15004",
+    });
+    expect(updateEmailTemplate).not.toHaveBeenCalled();
+  });
+
+  it("refuses a badge on a client-level template (no event) (400 EML_15004)", async () => {
+    vi.mocked(getEmailTemplateById).mockResolvedValue(templateRow({ eventId: null }));
+    await expect(service.update("tmpl-1", { attachments: [badge] })).rejects.toMatchObject({
+      status: 400,
+      code: "EML_15004",
+    });
+    expect(getBadgeTemplate).not.toHaveBeenCalled();
+  });
+
+  it("refuses a badge on an abstract-triggered template with EML_15003, before any badge read", async () => {
+    await expect(
+      service.create({ ...baseArgs, category: "AUTOMATIC", abstractTrigger: "ABSTRACT_SUBMISSION_ACK", attachments: [badge] }),
+    ).rejects.toMatchObject({ status: 400, code: "EML_15003" });
+    expect(getBadgeTemplate).not.toHaveBeenCalled();
+  });
+
+  it("does not re-check a stored badge when an update leaves the attachments alone", async () => {
+    vi.mocked(getEmailTemplateById).mockResolvedValue(templateRow({ attachments: [badge] }));
+    await service.update("tmpl-1", { subject: "New" });
+    expect(getBadgeTemplate).not.toHaveBeenCalled();
+    expect(updateEmailTemplate).toHaveBeenCalled();
   });
 });

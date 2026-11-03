@@ -162,12 +162,17 @@ const triggerXorMessage = {
 };
 
 /**
- * One attachment a template's emails carry, built at send time. A
- * discriminated union so further kinds can be added beside REGISTRATION_QR
- * (the registrant's check-in QR code as a PNG).
+ * One attachment a template's emails carry, built at send time:
+ * - REGISTRATION_QR: the registrant's check-in QR code as a PNG;
+ * - REGISTRATION_BADGE: the registrant's badge, rendered from one of the
+ *   event's badge templates as a PDF.
  */
 export const EmailTemplateAttachmentSchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("REGISTRATION_QR") }),
+  z.strictObject({
+    type: z.literal("REGISTRATION_BADGE"),
+    badgeTemplateId: z.string().uuid(),
+  }),
 ]);
 
 /**

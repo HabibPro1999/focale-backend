@@ -2,47 +2,15 @@ import jsQR from "jsqr";
 import QRCode from "qrcode";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
-import { buildCheckinQrPayload, CHECKIN_QR_OPTIONS, renderRegistrationQrPng } from "./registration-qr";
+import {
+  buildCheckinQrMatrix,
+  buildCheckinQrPayload,
+  CHECKIN_QR_OPTIONS,
+  qrModuleRuns,
+  renderRegistrationQrPng,
+} from "./registration-qr";
+import { GOLDEN_MATRIX, GOLDEN_REGISTRATION_ID as REGISTRATION_ID } from "./checkin-qr.golden";
 
-const REGISTRATION_ID = "3f2b8c1e-6a4d-4e2f-9b7a-1c5d8e9f0a12";
-
-/**
- * GOLDEN: the module matrix qrcode@1.5.4 builds for REGISTRATION_ID at ECC
- * level M (rows of modules.get(row, col)). The admin repo's checkinQr test
- * holds this exact matrix: change neither the library version nor the options
- * on one side only, or the emailed QR stops matching registration details.
- */
-const GOLDEN_MATRIX = [
-  "11111110000101010011101111111",
-  "10000010011111110010101000001",
-  "10111010111001000001101011101",
-  "10111010101000111110101011101",
-  "10111010110110000111001011101",
-  "10000010111000011000001000001",
-  "11111110101010101010101111111",
-  "00000000100100110001000000000",
-  "10111110010010011110001111100",
-  "01111100110111100001111110011",
-  "00101110000101111010100010100",
-  "01110001010011010000010110011",
-  "11110110001110110101110101110",
-  "10101101111010001011011010101",
-  "10100010111100010110101110010",
-  "10100001001010110000100011011",
-  "11000111110100011111010000100",
-  "11000101000111100001001110011",
-  "10101011000001110000000001100",
-  "10010101110001001001110110001",
-  "10010011100100110100111111110",
-  "00000000101100001010100010001",
-  "11111110011110011001101011010",
-  "10000010110100110011100011010",
-  "10111010111110001110111110100",
-  "10111010100011100100100101011",
-  "10111010101110111010011011010",
-  "10000010001100011011100110010",
-  "11111110110001110100000100100",
-];
 
 function moduleRows(registrationId: string): string[] {
   const { modules } = QRCode.create(buildCheckinQrPayload(registrationId), {
@@ -72,6 +40,39 @@ describe("registration check-in QR", () => {
     const qr = QRCode.create(buildCheckinQrPayload(REGISTRATION_ID), { errorCorrectionLevel: "M" });
     expect([qr.modules.size, qr.version, qr.maskPattern]).toEqual([29, 3, 2]);
     expect(moduleRows(REGISTRATION_ID)).toEqual(GOLDEN_MATRIX);
+  });
+
+  it("builds the golden matrix through buildCheckinQrMatrix (what the badge PDF draws)", () => {
+    const matrix = buildCheckinQrMatrix(REGISTRATION_ID);
+    expect(matrix.size).toBe(29);
+    expect(
+      Array.from({ length: matrix.size }, (_, row) =>
+        Array.from({ length: matrix.size }, (_, col) => (matrix.get(row, col) ? "1" : "0")).join(""),
+      ),
+    ).toEqual(GOLDEN_MATRIX);
+  });
+
+  it("qrModuleRuns: maximal row runs that rebuild the golden matrix exactly", () => {
+    const runs = qrModuleRuns(buildCheckinQrMatrix(REGISTRATION_ID));
+    const rows = GOLDEN_MATRIX.map((line) => Array.from(line, () => "0"));
+    for (const { row, col, length } of runs) {
+      expect(length).toBeGreaterThan(0);
+      for (let c = col; c < col + length; c++) {
+        expect(rows[row]![c]).toBe("0"); // no overlap
+        rows[row]![c] = "1";
+      }
+    }
+    expect(rows.map((r) => r.join(""))).toEqual(GOLDEN_MATRIX);
+    // Maximal: a run is never followed by a dark module, nor touches the next run.
+    for (const { row, col, length } of runs) expect(GOLDEN_MATRIX[row]![col + length] ?? "0").toBe("0");
+    // One run per maximal block of 1s.
+    expect(runs).toHaveLength(GOLDEN_MATRIX.join("|").match(/1+/g)!.length);
+    expect(runs[0]).toEqual({ row: 0, col: 0, length: 7 });
+  });
+
+  it("qrModuleRuns: an empty matrix has no runs, a full row is one run", () => {
+    expect(qrModuleRuns({ size: 3, get: () => 0 })).toEqual([]);
+    expect(qrModuleRuns({ size: 2, get: (row) => row === 1 })).toEqual([{ row: 1, col: 0, length: 2 }]);
   });
 
   it("renders a 400 px PNG that decodes back to the registration id", async () => {

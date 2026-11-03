@@ -15,6 +15,7 @@ import { SponsorshipsModule } from "./modules/sponsorships/sponsorships.module";
 import { RegistrationsModule } from "./modules/registrations/registrations.module";
 import { AbstractsModule } from "./modules/abstracts/abstracts.module";
 import { CertificatesModule } from "./modules/certificates/certificates.module";
+import { BadgesModule } from "./modules/badges/badges.module";
 import { CheckinModule } from "./modules/checkin/checkin.module";
 import { ReportsModule } from "./modules/reports/reports.module";
 
@@ -33,6 +34,7 @@ import { ReportsModule } from "./modules/reports/reports.module";
     RegistrationsModule,
     AbstractsModule,
     CertificatesModule,
+    BadgesModule,
     CheckinModule,
     ReportsModule,
     NetworkingModule,

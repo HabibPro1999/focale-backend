@@ -78,6 +78,7 @@ describe("loadStoredJsonReport", () => {
       ["forms.schema", 1, 1, { invalid_type: 1 }],
       ["email_logs.context_snapshot", 3, 1, { invalid_type: 1 }],
       ["registrations.price_breakdown", 3, 1, { stripped_key: 1 }],
+      ["badge_templates.zones", 0, 0, {}],
     ]);
     // Keyset paging: 2 rows per page, the next page starts after the last id.
     expect(
@@ -126,6 +127,7 @@ describe("loadStoredJsonReport", () => {
       "forms.schema: scanned 0 row(s), 0 invalid",
       "email_logs.context_snapshot: scanned 0 row(s), 0 invalid",
       "registrations.price_breakdown: scanned 0 row(s), 0 invalid",
+      "badge_templates.zones: scanned 0 row(s), 0 invalid",
       "Every typed JSON document matches its schema: JSONB_VALIDATION=enforce would refuse nothing. Nothing was changed.",
     ]);
   });

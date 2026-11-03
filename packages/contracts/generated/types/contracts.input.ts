@@ -303,6 +303,66 @@ export type AvailableSponsorshipsResponse = {
   }>;
 };
 
+export type BadgeEventIdParam = {
+  eventId: string;
+};
+
+export type BadgeIdParam = {
+  id: string;
+};
+
+export type BadgeQrZone = {
+  kind: "qr";
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type BadgeRegistrationIdParam = {
+  registrationId: string;
+};
+
+export type BadgeTemplateListResponse = BadgeTemplateResponse[];
+
+export type BadgeTemplateResponse = {
+  id: string;
+  eventId: string;
+  name: string;
+  widthMm: number;
+  heightMm: number;
+  backgroundUrl: string | null;
+  backgroundWidth: number | null;
+  backgroundHeight: number | null;
+  zones: BadgeZone[];
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
+};
+
+export type BadgeTextZone = {
+  kind: "text";
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  variable: string;
+  fontSize: number | null;
+  /** @default "normal" */
+  fontWeight?: "normal" | "bold";
+  /** @default "#000000" */
+  color?: string;
+  /** @default "center" */
+  textAlign?: "left" | "center" | "right";
+};
+
+export type BadgeZone = BadgeTextZone | BadgeQrZone;
+
+export type BadgeZones = BadgeZone[];
+
 export type BatchSyncBody = {
   checkIns: Array<{
     registrationId: string;
@@ -495,6 +555,15 @@ export type Condition = {
   fieldId: string;
   operator: "equals" | "not_equals" | "contains" | "not_contains" | "greater_than" | "less_than" | "is_empty" | "is_not_empty" | "in";
   value?: string | number | boolean | null | string[];
+};
+
+export type CreateBadgeTemplate = {
+  name: string;
+  /** @default 90 */
+  widthMm?: number;
+  /** @default 55 */
+  heightMm?: number;
+  zones?: BadgeZones;
 };
 
 export type CreateCertificateTemplate = {
@@ -852,6 +921,9 @@ export type EmailStatus = "QUEUED" | "SENDING" | "SENT" | "DELIVERED" | "OPENED"
 
 export type EmailTemplateAttachment = {
   type: "REGISTRATION_QR";
+} | {
+  type: "REGISTRATION_BADGE";
+  badgeTemplateId: string;
 };
 
 export type EmailTemplateAttachments = EmailTemplateAttachment[];
@@ -882,7 +954,7 @@ export type EmbeddedPricingRule = {
   active?: boolean;
 };
 
-export type ErrorCode = "NETWORKING_MFA_REQUIRED" | "NETWORKING_AUTH_UNAVAILABLE" | "NETWORKING_BADGE_INVALID" | "NETWORKING_BADGE_WRONG_PARTICIPANT" | "NETWORKING_MEETING_CHECKIN_UNCONFIRMED" | "NETWORKING_MEETING_CHECKIN_UNAVAILABLE" | "NETWORKING_NOT_ELIGIBLE" | "NETWORKING_CLOSED" | "NETWORKING_FEATURE_DISABLED" | "NETWORKING_CONNECTION_REQUIRED" | "NETWORKING_SLOT_INVALID" | "NETWORKING_SLOT_CONFLICT" | "NETWORKING_MEETING_LOCKED" | "NETWORKING_MEETING_CHECKED_IN" | "NETWORKING_RATE_LIMITED" | "NETWORKING_CONFIG_STALE" | "NETWORKING_VALIDATION" | "NETWORKING_SESSION_EXPIRED" | "NETWORKING_NOT_FOUND" | "NETWORKING_ACTION_NOT_ALLOWED" | "NETWORKING_MFA_ENFORCED" | "NETWORKING_CONSENT_REQUIRED" | "NETWORKING_BUSY" | "NETWORKING_RETENTION_ENDED" | "NETWORKING_PROFILE_WITHDRAWN" | "AUTH_1001" | "AUTH_1002" | "AUTH_1004" | "AUTH_1005" | "AUTH_1006" | "VAL_2001" | "RES_3001" | "RES_3002" | "RES_3003" | "RATE_4001" | "SRV_5001" | "SRV_5002" | "SRV_5003" | "PRC_6001" | "PRC_6002" | "PRC_6003" | "PRC_6004" | "PRC_6005" | "PRC_6006" | "PRC_6007" | "PRC_6008" | "ACC_7001" | "ACC_7002" | "ACC_7004" | "ACC_7005" | "ACC_7006" | "ACC_7007" | "ACC_7008" | "ACC_7009" | "ACC_7010" | "ACC_7011" | "ACC_7012" | "EVT_8000" | "EVT_8001" | "EVT_8002" | "EVT_8003" | "REG_8001" | "REG_8002" | "REG_8003" | "REG_8004" | "REG_8005" | "REG_8006" | "REG_8007" | "REG_8008" | "REG_8009" | "REG_8010" | "REG_8011" | "REG_8012" | "REG_8013" | "REG_8014" | "REG_8015" | "FRM_9001" | "FRM_9002" | "FRM_9003" | "FRM_9004" | "FRM_9005" | "FRM_9006" | "FIL_10001" | "FIL_10002" | "RPT_11001" | "RPT_11002" | "RPT_11003" | "EXPORT_BUSY" | "STT_12001" | "STT_12002" | "DEP_13001" | "SPO_14001" | "SPO_14002" | "SPO_14003" | "SPO_14004" | "SPO_14005" | "EML_15001" | "EML_15002" | "EML_15003" | "CON_16001" | "CHK_17001" | "CHK_17003" | "CHK_17004" | "CHK_17005" | "CHK_17006" | "ABS_18001" | "ABS_18002" | "ABS_18003" | "ABS_18004" | "ABS_18005" | "ABS_18006" | "ABS_18007" | "ABS_18008" | "ABS_18009" | "ABS_18010" | "ABS_18011" | "INV_19001" | "INV_19002" | "INV_19003" | "CLT_20001" | "CLT_20002";
+export type ErrorCode = "NETWORKING_MFA_REQUIRED" | "NETWORKING_AUTH_UNAVAILABLE" | "NETWORKING_BADGE_INVALID" | "NETWORKING_BADGE_WRONG_PARTICIPANT" | "NETWORKING_MEETING_CHECKIN_UNCONFIRMED" | "NETWORKING_MEETING_CHECKIN_UNAVAILABLE" | "NETWORKING_NOT_ELIGIBLE" | "NETWORKING_CLOSED" | "NETWORKING_FEATURE_DISABLED" | "NETWORKING_CONNECTION_REQUIRED" | "NETWORKING_SLOT_INVALID" | "NETWORKING_SLOT_CONFLICT" | "NETWORKING_MEETING_LOCKED" | "NETWORKING_MEETING_CHECKED_IN" | "NETWORKING_RATE_LIMITED" | "NETWORKING_CONFIG_STALE" | "NETWORKING_VALIDATION" | "NETWORKING_SESSION_EXPIRED" | "NETWORKING_NOT_FOUND" | "NETWORKING_ACTION_NOT_ALLOWED" | "NETWORKING_MFA_ENFORCED" | "NETWORKING_CONSENT_REQUIRED" | "NETWORKING_BUSY" | "NETWORKING_RETENTION_ENDED" | "NETWORKING_PROFILE_WITHDRAWN" | "AUTH_1001" | "AUTH_1002" | "AUTH_1004" | "AUTH_1005" | "AUTH_1006" | "VAL_2001" | "RES_3001" | "RES_3002" | "RES_3003" | "RATE_4001" | "SRV_5001" | "SRV_5002" | "SRV_5003" | "PRC_6001" | "PRC_6002" | "PRC_6003" | "PRC_6004" | "PRC_6005" | "PRC_6006" | "PRC_6007" | "PRC_6008" | "ACC_7001" | "ACC_7002" | "ACC_7004" | "ACC_7005" | "ACC_7006" | "ACC_7007" | "ACC_7008" | "ACC_7009" | "ACC_7010" | "ACC_7011" | "ACC_7012" | "EVT_8000" | "EVT_8001" | "EVT_8002" | "EVT_8003" | "REG_8001" | "REG_8002" | "REG_8003" | "REG_8004" | "REG_8005" | "REG_8006" | "REG_8007" | "REG_8008" | "REG_8009" | "REG_8010" | "REG_8011" | "REG_8012" | "REG_8013" | "REG_8014" | "REG_8015" | "FRM_9001" | "FRM_9002" | "FRM_9003" | "FRM_9004" | "FRM_9005" | "FRM_9006" | "FIL_10001" | "FIL_10002" | "RPT_11001" | "RPT_11002" | "RPT_11003" | "EXPORT_BUSY" | "STT_12001" | "STT_12002" | "DEP_13001" | "SPO_14001" | "SPO_14002" | "SPO_14003" | "SPO_14004" | "SPO_14005" | "EML_15001" | "EML_15002" | "EML_15003" | "EML_15004" | "CON_16001" | "CHK_17001" | "CHK_17003" | "CHK_17004" | "CHK_17005" | "CHK_17006" | "ABS_18001" | "ABS_18002" | "ABS_18003" | "ABS_18004" | "ABS_18005" | "ABS_18006" | "ABS_18007" | "ABS_18008" | "ABS_18009" | "ABS_18010" | "ABS_18011" | "INV_19001" | "INV_19002" | "INV_19003" | "CLT_20001" | "CLT_20002" | "BDG_21001" | "BDG_21002" | "BDG_21003";
 
 export type EventAccessIdParam = {
   id: string;
@@ -3431,6 +3503,10 @@ export type RegistrationAuditLog = {
   ipAddress: string | null;
 };
 
+export type RegistrationBadgeQuery = {
+  badgeId: string;
+};
+
 export type RegistrationColumnsResponse = {
   formColumns: TableColumn[];
   fixedColumns: TableColumn[];
@@ -3810,6 +3886,8 @@ export type StepTranslationEntry = {
   description?: string;
 };
 
+export type StoredBadgeZones = BadgeZones;
+
 export type StoredCertificateZones = CertificateZone[];
 
 export type StoredEmailContextSnapshot = {
@@ -4007,6 +4085,13 @@ export type UndoCheckInBody = {
 
 export type UndoCheckInResult = {
   outcome: "UNDONE" | "ALREADY_UNDONE";
+};
+
+export type UpdateBadgeTemplate = {
+  name?: string;
+  widthMm?: number;
+  heightMm?: number;
+  zones?: BadgeZones;
 };
 
 export type UpdateCertificateTemplate = {

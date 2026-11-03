@@ -10,6 +10,7 @@ import {
   type TiptapDocument,
 } from "@app/contracts";
 import {
+  getBadgeTemplate,
   getEmailTemplateById,
   getEventEmailLog,
   findActiveTemplateForTrigger,
@@ -68,12 +69,37 @@ function validateTemplateAttachments(
   attachments: readonly EmailTemplateAttachment[],
   abstractTrigger: AbstractEmailTrigger | null,
 ): void {
-  if (abstractTrigger && attachments.some((a) => a.type === "REGISTRATION_QR")) {
+  if (abstractTrigger && attachments.length > 0) {
     throw new AppException(
       ErrorCodes.EMAIL_ATTACHMENT_NOT_SUPPORTED,
-      "Abstract emails have no registration: the check-in QR code cannot be attached",
+      "Abstract emails have no registration: the check-in QR code and the badge cannot be attached",
       400,
     );
+  }
+}
+
+/** A badge attachment must name a (live) badge of the template's event. */
+async function assertBadgeAttachmentsOfEvent(
+  attachments: readonly EmailTemplateAttachment[],
+  eventId: string | null,
+): Promise<void> {
+  for (const attachment of attachments) {
+    if (attachment.type !== "REGISTRATION_BADGE") continue;
+    if (!eventId) {
+      throw new AppException(
+        ErrorCodes.EMAIL_ATTACHMENT_BADGE_INVALID,
+        "Only an event's email templates can attach a badge",
+        400,
+      );
+    }
+    const badge = await getBadgeTemplate(attachment.badgeTemplateId);
+    if (!badge || badge.eventId !== eventId) {
+      throw new AppException(
+        ErrorCodes.EMAIL_ATTACHMENT_BADGE_INVALID,
+        "The attached badge must be one of the event's badges",
+        400,
+      );
+    }
   }
 }
 
@@ -143,6 +169,7 @@ export class EmailTemplateService {
     validateTemplateTriggerState(triggerState);
     const attachments = input.attachments ?? [];
     validateTemplateAttachments(attachments, triggerState.abstractTrigger);
+    await assertBadgeAttachmentsOfEvent(attachments, input.eventId);
     await this.assertNoActiveTemplateForTrigger({
       eventId: input.eventId,
       trigger: triggerState.trigger,
@@ -204,6 +231,10 @@ export class EmailTemplateService {
       input.attachments ?? existing.attachments,
       triggerState.abstractTrigger,
     );
+    // Checked when written: a badge deleted later is skipped at send time.
+    if (input.attachments !== undefined) {
+      await assertBadgeAttachmentsOfEvent(input.attachments, existing.eventId);
+    }
 
     const triggerChanged =
       triggerState.trigger !== existing.trigger ||

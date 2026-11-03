@@ -117,10 +117,15 @@ describe("testSend", () => {
     vi.mocked(buildTemplateAttachments).mockResolvedValueOnce([qr] as never);
     sendEmailMock.mockResolvedValue({ success: true, messageId: "m1" });
 
-    await service.testSend(template({ attachments: [{ type: "REGISTRATION_QR" }] }), "to@x.com");
+    const badge = { type: "REGISTRATION_BADGE", badgeTemplateId: "11111111-1111-4111-8111-111111111111" };
+    vi.mocked(getSampleEmailContext).mockReturnValueOnce({ fullName: "John Doe" } as never);
+    await service.testSend(template({ eventId: "event", attachments: [{ type: "REGISTRATION_QR" }, badge] }), "to@x.com");
 
-    expect(buildTemplateAttachments).toHaveBeenCalledWith([{ type: "REGISTRATION_QR" }], {
+    // The sample context also feeds the badge's text zones; its event scopes the badge.
+    expect(buildTemplateAttachments).toHaveBeenCalledWith([{ type: "REGISTRATION_QR" }, badge], {
       registrationId: "sample-registration-id",
+      eventId: "event",
+      context: { fullName: "John Doe" },
     });
     expect(sendEmailMock).toHaveBeenCalledWith(expect.objectContaining({ attachments: [qr] }));
   });
@@ -562,6 +567,8 @@ describe("unsaved email drafts", () => {
     });
     expect(buildTemplateAttachments).toHaveBeenCalledWith([{ type: "REGISTRATION_QR" }], {
       registrationId: "sample-registration-id",
+      eventId: "event",
+      context: {},
     });
     expect(sendEmailMock).toHaveBeenCalledWith(expect.objectContaining({ attachments: [qr] }));
   });

@@ -47,6 +47,7 @@ describe.runIf(dbTestsEnabled())("API code on the migrated legacy production dat
       ["forms.schema", 4, 0, {}],
       ["email_logs.context_snapshot", 17, 0, {}],
       ["registrations.price_breakdown", 17, 0, {}],
+      ["badge_templates.zones", 0, 0, {}], // 0042: a new table, no legacy rows
     ]);
     expect(formatStoredJsonReport(report).at(-1)).toBe(
       "Every typed JSON document matches its schema: JSONB_VALIDATION=enforce would refuse nothing. Nothing was changed.",

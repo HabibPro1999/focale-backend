@@ -139,9 +139,35 @@ describe("template attachments", () => {
   });
 
   it("rejects an unknown type, extra keys and more than five entries", () => {
-    expect(EmailTemplateAttachmentsSchema.safeParse([{ type: "BADGE_PDF" }]).success).toBe(false);
+    expect(EmailTemplateAttachmentsSchema.safeParse([{ type: "INVOICE_PDF" }]).success).toBe(false);
     expect(EmailTemplateAttachmentsSchema.safeParse([{ ...qr, url: "x" }]).success).toBe(false);
     expect(EmailTemplateAttachmentsSchema.safeParse(Array(6).fill(qr)).success).toBe(false);
+  });
+
+  describe("registration badge", () => {
+    const badge = { type: "REGISTRATION_BADGE" as const, badgeTemplateId: "11111111-1111-4111-8111-111111111111" };
+
+    it("accepts a badge beside the QR code, on create, update and the draft test send", () => {
+      expect(EmailTemplateAttachmentsSchema.parse([qr, badge])).toEqual([qr, badge]);
+      expect(CreateEmailTemplateBodySchema.parse({ ...body, attachments: [badge] }).attachments).toEqual([badge]);
+      expect(UpdateEmailTemplateSchema.parse({ attachments: [badge, qr] }).attachments).toEqual([badge, qr]);
+      expect(
+        DraftEmailTestSendSchema.parse({ subject: "s", content, recipientEmail: "a@b.co", attachments: [badge] })
+          .attachments,
+      ).toEqual([badge]);
+    });
+
+    it("requires a badge template uuid and no other key", () => {
+      expect(EmailTemplateAttachmentsSchema.safeParse([{ type: "REGISTRATION_BADGE" }]).success).toBe(false);
+      expect(EmailTemplateAttachmentsSchema.safeParse([{ ...badge, badgeTemplateId: "nope" }]).success).toBe(false);
+      expect(EmailTemplateAttachmentsSchema.safeParse([{ ...badge, filename: "x.pdf" }]).success).toBe(false);
+      expect(EmailTemplateAttachmentsSchema.safeParse([{ type: "REGISTRATION_QR", badgeTemplateId: badge.badgeTemplateId }]).success).toBe(false);
+    });
+
+    it("allows one badge per template, even of two different badges", () => {
+      const other = { ...badge, badgeTemplateId: "22222222-2222-4222-8222-222222222222" };
+      expect(EmailTemplateAttachmentsSchema.safeParse([badge, other]).success).toBe(false);
+    });
   });
 });
 

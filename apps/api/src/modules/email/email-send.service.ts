@@ -83,28 +83,55 @@ export class EmailSendService {
       sampleContext,
     );
 
-    return this.deliverTest(resolved, template.attachments, recipientEmail, recipientName);
+    return this.deliverTest(
+      resolved,
+      { attachments: template.attachments, eventId: template.eventId, context: sampleContext },
+      recipientEmail,
+      recipientName,
+    );
   }
 
   async previewDraft(eventId: string, input: DraftEmailPreview) {
-    const compiled = await compileTemplateContent(input.content);
-    const language = input.language ?? await getRegistrationFormLanguage(eventId);
-    return resolveEmailParts({ subject: input.subject, html: compiled.htmlContent, plain: compiled.plainContent }, getSampleEmailContext(language));
+    return (await this.resolveDraft(eventId, input)).resolved;
   }
 
   async testSendDraft(eventId: string, input: DraftEmailTestSend) {
-    return this.deliverTest(await this.previewDraft(eventId, input), input.attachments, input.recipientEmail, input.recipientName);
+    const { resolved, context } = await this.resolveDraft(eventId, input);
+    return this.deliverTest(
+      resolved,
+      { attachments: input.attachments, eventId, context },
+      input.recipientEmail,
+      input.recipientName,
+    );
   }
 
-  /** Template attachments are built from the sample registration, so the test email carries a real QR code. */
+  /** The unsaved draft compiled and resolved against the sample context. */
+  private async resolveDraft(eventId: string, input: DraftEmailPreview) {
+    const compiled = await compileTemplateContent(input.content);
+    const language = input.language ?? await getRegistrationFormLanguage(eventId);
+    const context = getSampleEmailContext(language);
+    const resolved = resolveEmailParts({ subject: input.subject, html: compiled.htmlContent, plain: compiled.plainContent }, context);
+    return { resolved, context };
+  }
+
+  /**
+   * Template attachments are built from the sample registration and the
+   * sample context, so the test email carries a real QR code and badge.
+   */
   private async deliverTest(
     resolved: { subject: string; html: string; plain: string },
-    attachmentConfig: readonly EmailTemplateAttachment[],
+    sample: {
+      attachments: readonly EmailTemplateAttachment[];
+      eventId: string | null;
+      context: ReturnType<typeof getSampleEmailContext>;
+    },
     recipientEmail: string,
     recipientName?: string,
   ): Promise<{ success: true; message: string; messageId?: string }> {
-    const attachments = await buildTemplateAttachments(attachmentConfig, {
+    const attachments = await buildTemplateAttachments(sample.attachments, {
       registrationId: SAMPLE_REGISTRATION_ID,
+      eventId: sample.eventId,
+      context: sample.context,
     });
     const result = await getEmailProvider().sendEmail({
       to: recipientEmail,
