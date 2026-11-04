@@ -16,7 +16,7 @@ import {
 } from "../queries/networking-vector-search";
 
 /** The migration that creates the CockroachDB vector index; deferred while embeddings exist. */
-export const NETWORKING_VECTOR_INDEX_MIGRATION = "0017";
+const NETWORKING_VECTOR_INDEX_MIGRATION = "0017";
 
 export interface NetworkingVectorIndexReport extends NetworkingVectorIndexStatus {
   /** Ledger state of 0017 on CockroachDB: applied, deferred, pending or no-ledger. */

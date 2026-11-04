@@ -50,7 +50,7 @@ import {
  */
 
 /** Tables a migration of this build drops on purpose; their rows are exported by the preflight. */
-export const TABLE_DROP_EXCEPTIONS: Record<string, string> = {
+const TABLE_DROP_EXCEPTIONS: Record<string, string> = {
   abstract_code_sequences:
     "dropped by 0033_drop_abstract_code_sequences.sql; the preflight exported its rows to affected/0033.json",
 };
@@ -92,7 +92,7 @@ export interface DataCheckEntry {
   error?: string;
 }
 
-export interface AdoptDryRun {
+interface AdoptDryRun {
   ran: boolean;
   /** Why it did not run (a database that already has a ledger). */
   skipped?: string;
@@ -104,7 +104,7 @@ export interface AdoptDryRun {
   lines?: string[];
 }
 
-export interface MigrationOverview {
+interface MigrationOverview {
   id: string;
   name: string;
   variant: string;

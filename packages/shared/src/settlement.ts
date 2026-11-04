@@ -52,7 +52,7 @@ export function calculateSettlement(reg: {
  */
 export const STICKY_SETTLEMENT_STATUSES = ["REFUNDED", "WAIVED", "PAID", "VERIFYING"] as const;
 
-export function isStickySettlementStatus(status: SettlementStatus): boolean {
+function isStickySettlementStatus(status: SettlementStatus): boolean {
   return (STICKY_SETTLEMENT_STATUSES as readonly SettlementStatus[]).includes(status);
 }
 

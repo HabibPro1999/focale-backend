@@ -20,7 +20,6 @@ import {
   networkingWindow,
   touchNetworkingProfileActivity,
   networkingStore,
-  type NetworkingAccess,
   type NetworkingDiscoveryFilters,
   type NetworkingRow,
   type NetworkingStore,
@@ -47,7 +46,7 @@ export type NetworkingContext = {
   /** Signed in without consent yet (K1b): only the consent allow-list may proceed. */
   consentPending?: boolean;
 };
-export type { NetworkingAccess };
+
 const unavailable = () => new ForbiddenException({ code: ErrorCodes.NETWORKING_FEATURE_DISABLED, message: "Networking is not available for this event" });
 const notEligible = (message = "Networking participation is no longer eligible") =>
   new ForbiddenException({ code: ErrorCodes.NETWORKING_NOT_ELIGIBLE, message });

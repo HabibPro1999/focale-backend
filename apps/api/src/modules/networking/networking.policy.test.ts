@@ -1,4 +1,4 @@
-import { networkingSearchMatches } from "@app/db";
+import { networkingSearchScore } from "@app/db";
 import { describe, expect, it, vi } from "vitest";
 import { BadRequestException } from "@nestjs/common";
 import {
@@ -30,11 +30,9 @@ describe("networking boundary policies", () => {
         city: "Tunis",
       }).sectors,
     ).toEqual(["Finance", "Health"]);
-    expect(networkingSearchMatches("Mohammed", "Mohamed investor")).toBe(true);
-    expect(networkingSearchMatches("medecin", "Médecin cardiologue")).toBe(
-      true,
-    );
-    expect(networkingSearchMatches("engineer", "chef restaurant")).toBe(false);
+    expect(networkingSearchScore("Mohammed", "Mohamed investor")).not.toBeNull();
+    expect(networkingSearchScore("medecin", "Médecin cardiologue")).not.toBeNull();
+    expect(networkingSearchScore("engineer", "chef restaurant")).toBeNull();
   });
   it("generates UTC slots in event timezone and excludes closures", () => {
     const config = NetworkingConfigSchema.parse({

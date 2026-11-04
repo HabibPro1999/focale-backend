@@ -29,7 +29,7 @@ export type DataCheckStatus =
   /** The check itself could not run; see `error`. */
   | "error";
 
-export interface DataCheckResult {
+interface DataCheckResult {
   status: Exclude<DataCheckStatus, "skipped" | "error">;
   /** One sentence for report.md. */
   summary: string;
@@ -42,7 +42,7 @@ export interface DataCheckResult {
   review?: boolean;
 }
 
-export interface DataCheckContext {
+interface DataCheckContext {
   client: Client;
   migration: MigrationDefinition;
   /** Runs `run` under a savepoint, rolled back (and rethrown) on error. */

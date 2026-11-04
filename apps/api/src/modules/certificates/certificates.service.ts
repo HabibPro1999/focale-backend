@@ -100,14 +100,14 @@ export interface SendCertificatesResult {
 // (first/corresponding author), and per-abstract dedupe differ.
 // ============================================================================
 
-export type AbstractCertificateSendStatus =
+type AbstractCertificateSendStatus =
   | "queued"
   | "already_sent"
   // 2.12: a unique index refused the email row; nothing was queued.
   | "skipped_conflict"
   | "ineligible";
 
-export interface AbstractCertificateSendResult {
+interface AbstractCertificateSendResult {
   abstractId: string;
   status: AbstractCertificateSendStatus;
   reason?: string;

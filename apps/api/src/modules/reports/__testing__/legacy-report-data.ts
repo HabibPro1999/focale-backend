@@ -30,7 +30,7 @@ export interface LegacyAccessRegistrantsReportData {
   }>;
 }
 
-export interface LegacySponsorshipReportUsage {
+interface LegacySponsorshipReportUsage {
   amountApplied: number;
   appliedAt: Date;
   registration: { firstName: string | null; lastName: string | null; email: string } | null;

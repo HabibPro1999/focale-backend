@@ -10,7 +10,7 @@ import { forms, getDb } from "@app/db";
  * only lists candidates and writes nothing.
  */
 
-export type FormConditionFindingKind =
+type FormConditionFindingKind =
   /** `conditionLogic` is not lowercase: the form app treats anything but `'and'` as OR. */
   | "UPPERCASE_LOGIC"
   /** A text comparison with a non-string value: the form app throws once the field is answered. */

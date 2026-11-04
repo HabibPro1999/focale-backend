@@ -49,32 +49,17 @@ import type {
 
 // Re-exported so existing imports from ./runner keep working.
 export {
-  detectDatabaseEngine,
   normalizeAppliedBy,
   databaseEngine,
   setUtcSession,
 } from "./session";
 export {
-  schemaHasApplicationObjects,
   migrationLedgerExists,
-  createMigrationLedger,
   assertAdoptionRequiredIfNonEmpty,
   listMigrationRecords,
   listMigrationStepRecords,
-  writeMigrationRecord,
-  writeMigrationStepRecord,
-  migrationLedgerAccess,
-  migrationCatalogAccess,
-  migrationAdoptionSupport,
 } from "./ledger";
 export {
-  acquireMigrationLease,
-  refreshMigrationLease,
-  releaseMigrationLease,
-  type LeaseHeartbeat,
-  startLeaseHeartbeat,
-  assertLeaseAlive,
-  commitWithLeaseFence,
   LEASE_FENCED_TRANSACTION_ATTEMPTS,
   runLeaseFencedTransaction,
 } from "./lease";

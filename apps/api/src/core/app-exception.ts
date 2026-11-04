@@ -27,11 +27,6 @@ export class AppException extends HttpException {
   }
 }
 
-/** Throw the standard coded 403 (shared by the tenant-gated controllers). */
-export function forbidden(): never {
-  throw new AppException(ErrorCodes.FORBIDDEN, "Insufficient permissions", 403);
-}
-
 /** Standard coded 404. */
 export function notFound(message: string): AppException {
   return new AppException(ErrorCodes.NOT_FOUND, message, 404);

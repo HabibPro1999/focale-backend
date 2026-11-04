@@ -8,7 +8,7 @@ export const REPLAY_RING_SIZE = 500;
 
 export type AppEventHandler = (ev: AppEvent, id: string) => void;
 
-export interface BufferedEvent {
+interface BufferedEvent {
   id: string;
   ev: AppEvent;
 }

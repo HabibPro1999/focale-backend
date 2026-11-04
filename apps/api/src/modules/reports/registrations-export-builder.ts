@@ -25,7 +25,10 @@ import {
 import { HEADER_FILL as COLUMN_HEADER_FILL, HEADER_FONT as COLUMN_HEADER_FONT, THIN_BORDER as BORDER } from "./excel-style";
 import { GROUP_LABELS, SHEET_NAME } from "./registrations-export/labels";
 import { resolveExportColumns, needsSponsorshipLabDetails, type ColumnDescriptor, type RowContext } from "./registrations-export/columns";
-export { GROUP_LABELS, IDENTITY_HEADERS, SHEET_NAME } from "./registrations-export/labels";
+export {
+  GROUP_LABELS,
+  SHEET_NAME,
+} from "./registrations-export/labels";
 export { resolveExportColumns, type ColumnDescriptor, type RowContext } from "./registrations-export/columns";
 
 // ============================================================================

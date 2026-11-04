@@ -8,14 +8,14 @@ import {
 import { eventAcceptsPublicActions } from "../events";
 
 /** Why a registrant cannot edit anything, in the order the edit checks them. */
-export type EditBlock =
+type EditBlock =
   | "REFUNDED"
   | "EVENT_CLOSED"
   | "REGISTRATIONS_DISABLED"
   | "PRICING_DISABLED";
 
 /** Why a registrant cannot change access selections, in check order. */
-export type AccessEditBlock = "VERIFYING" | "WAIVED" | "FULLY_SPONSORED";
+type AccessEditBlock = "VERIFYING" | "WAIVED" | "FULLY_SPONSORED";
 
 export interface EditPolicyInput {
   registration: {

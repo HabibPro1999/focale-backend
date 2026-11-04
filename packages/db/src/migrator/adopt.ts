@@ -57,8 +57,6 @@ export {
   describeProbe,
   supersededObjectProbes,
   adoptionCatalogState,
-  type AdoptionDecisionInput,
-  type AdoptionDecision,
   decideAdoption,
 } from "./adopt-rules";
 export {
@@ -69,7 +67,7 @@ export {
 } from "./legacy-networking";
 export { formatAdoptionReport } from "./adopt-report";
 
-export interface LegacyEvidence {
+interface LegacyEvidence {
   /** Null when the `networking_migrations` table does not exist. */
   networkingRows: LegacyNetworkingRow[] | null;
   /** Null when `_prisma_migrations` does not exist. */
@@ -78,7 +76,7 @@ export interface LegacyEvidence {
   hasApplicationObjects: boolean;
 }
 
-export async function readLegacyEvidence(client: Client): Promise<LegacyEvidence> {
+async function readLegacyEvidence(client: Client): Promise<LegacyEvidence> {
   const networkingRows = (await tableExists(client, "networking_migrations"))
     ? (await client.query<LegacyNetworkingRow>(
         "SELECT name, checksum FROM public.networking_migrations ORDER BY name",
@@ -107,7 +105,7 @@ export async function readLegacyEvidence(client: Client): Promise<LegacyEvidence
 }
 
 /** Classify every migration without writing anything. */
-export async function assessAdoption(
+async function assessAdoption(
   client: Client,
   migrations: MigrationDefinition[],
   support: MigrationAdoptionSupport,

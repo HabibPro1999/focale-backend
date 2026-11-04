@@ -16,7 +16,6 @@ import { getDb, type DbExecutor } from "../client";
 import { rowsOf } from "../helpers";
 import { pgUniqueViolation } from "../txn";
 import { emailLogs, emailTemplates } from "../schema/email";
-import { events } from "../schema/events-access";
 import { registrations } from "../schema/registrations";
 import { abstracts } from "../schema/abstracts";
 import type { EmailTemplateRow } from "./email-templates";
@@ -311,64 +310,6 @@ export async function updateEmailLogById(
   patch: Partial<EmailLogInsert>,
 ): Promise<void> {
   await getDb().update(emailLogs).set(patch).where(eq(emailLogs.id, id));
-}
-
-/** Resolved realtime fan-out target for an EmailLog (N3). */
-export interface EmailLogRealtimeTarget {
-  clientId: string;
-  eventId: string;
-  registrationId: string | null;
-}
-
-/**
- * Resolve the (clientId, eventId, registrationId) a given EmailLog's realtime
- * `emailLog.statusChanged` event should carry, mirroring the legacy
- * `emitEmailLogChanged` — extended (per N3) to abstract-linked rows: via the
- * registration relation when registrationId is set, via the abstract → event
- * relation when abstractId is set. Returns null when the log (or its relation)
- * no longer exists, or when it is linked to neither (nothing to resolve).
- */
-export async function getEmailLogRealtimeTarget(
-  emailLogId: string,
-  exec: DbExecutor = getDb(),
-): Promise<EmailLogRealtimeTarget | null> {
-  const [log] = await exec
-    .select({
-      registrationId: emailLogs.registrationId,
-      abstractId: emailLogs.abstractId,
-    })
-    .from(emailLogs)
-    .where(eq(emailLogs.id, emailLogId))
-    .limit(1);
-  if (!log) return null;
-
-  if (log.registrationId) {
-    const [row] = await exec
-      .select({ clientId: events.clientId, eventId: events.id })
-      .from(registrations)
-      .innerJoin(events, eq(events.id, registrations.eventId))
-      .where(eq(registrations.id, log.registrationId))
-      .limit(1);
-    if (!row) return null;
-    return {
-      clientId: row.clientId,
-      eventId: row.eventId,
-      registrationId: log.registrationId,
-    };
-  }
-
-  if (log.abstractId) {
-    const [row] = await exec
-      .select({ clientId: events.clientId, eventId: events.id })
-      .from(abstracts)
-      .innerJoin(events, eq(events.id, abstracts.eventId))
-      .where(eq(abstracts.id, log.abstractId))
-      .limit(1);
-    if (!row) return null;
-    return { clientId: row.clientId, eventId: row.eventId, registrationId: null };
-  }
-
-  return null;
 }
 
 // ----------------------------------------------------------------------------

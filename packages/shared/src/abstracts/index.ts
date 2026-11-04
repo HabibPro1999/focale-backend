@@ -5,4 +5,3 @@ export {
   DEFAULT_REVIEWERS_PER_ABSTRACT,
   DEFAULT_DIVERGENCE_THRESHOLD,
 } from "./score-stats";
-export type { ScoreStatistics } from "./score-stats";

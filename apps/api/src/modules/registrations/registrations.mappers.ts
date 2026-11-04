@@ -45,14 +45,14 @@ export function toAdminRegistration<T extends RegistrationMoneySource>(registrat
 // Public (registrant) responses — explicit allowlist
 // ============================================================================
 
-export interface PublicRegistrationForm {
+interface PublicRegistrationForm {
   id: string;
   name: string;
   /** Present on GET-for-edit only (the form renders the edit page from it). */
   schema?: unknown;
 }
 
-export interface PublicRegistrationEvent {
+interface PublicRegistrationEvent {
   id: string;
   name: string;
   slug: string;

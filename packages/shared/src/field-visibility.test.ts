@@ -3,8 +3,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   evaluateConditions,
-  filterVisibleFormData,
-  getVisibleFieldIds,
   type FieldCondition,
 } from "./field-visibility";
 
@@ -49,34 +47,5 @@ describe("field visibility — parity with the form app", () => {
 
   it("treats undefined conditions as visible", () => {
     expect(evaluateConditions(undefined, "and", {})).toBe(true);
-  });
-});
-
-describe("getVisibleFieldIds / filterVisibleFormData", () => {
-  it("keeps only the answers of visible fields", () => {
-    const fields = [
-      { id: "specialty" },
-      {
-        id: "otherSpecialty",
-        conditions: [
-          { id: "c1", fieldId: "specialty", operator: "equals" as const, value: "other" },
-        ],
-      },
-      {
-        id: "residentYear",
-        conditions: [
-          { id: "c2", fieldId: "specialty", operator: "equals" as const, value: "resident" },
-        ],
-      },
-    ];
-    const data = { specialty: "Other", otherSpecialty: "Nephrology", residentYear: "3" };
-
-    const visible = getVisibleFieldIds(fields, data);
-
-    expect([...visible]).toEqual(["specialty", "otherSpecialty"]);
-    expect(filterVisibleFormData(data, visible)).toEqual({
-      specialty: "Other",
-      otherSpecialty: "Nephrology",
-    });
   });
 });

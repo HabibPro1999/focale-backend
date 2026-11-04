@@ -1,5 +1,5 @@
 import { assertAbstractModuleEnabled } from "./abstracts.gates";
-export { assertAbstractModuleEnabled } from "./abstracts.gates";
+
 import { Inject, Injectable } from "@nestjs/common";
 import {
   ABSTRACT_TYPE_LABELS_FR,

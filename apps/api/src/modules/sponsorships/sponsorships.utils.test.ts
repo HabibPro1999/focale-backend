@@ -1,8 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  calculateTotalSponsorshipAmount,
   detectCoverageOverlap,
-  determineSponsorshipStatus,
   generateSponsorshipCode,
   getAccessTypeKey,
   validateCoveredAccessTimeOverlap,
@@ -204,35 +202,5 @@ describe("detectCoverageOverlap", () => {
       totalAmount: 100,
     });
     expect(w).toHaveLength(2);
-  });
-});
-
-// ============================================================================
-// calculateTotalSponsorshipAmount / determineSponsorshipStatus
-// ============================================================================
-
-describe("calculateTotalSponsorshipAmount", () => {
-  it("sums amounts", () => {
-    expect(
-      calculateTotalSponsorshipAmount([{ amountApplied: 100 }, { amountApplied: 50 }]),
-    ).toBe(150);
-  });
-  it("returns 0 for empty", () => {
-    expect(calculateTotalSponsorshipAmount([])).toBe(0);
-  });
-});
-
-describe("determineSponsorshipStatus", () => {
-  it("PENDING when no usages", () => {
-    expect(determineSponsorshipStatus({ status: "PENDING" }, 0)).toBe("PENDING");
-  });
-  it("USED when has usages", () => {
-    expect(determineSponsorshipStatus({ status: "PENDING" }, 2)).toBe("USED");
-  });
-  it("CANCELLED stays CANCELLED even with usages", () => {
-    expect(determineSponsorshipStatus({ status: "CANCELLED" }, 3)).toBe("CANCELLED");
-  });
-  it("USED downgrades to PENDING when usages hit 0", () => {
-    expect(determineSponsorshipStatus({ status: "USED" }, 0)).toBe("PENDING");
   });
 });

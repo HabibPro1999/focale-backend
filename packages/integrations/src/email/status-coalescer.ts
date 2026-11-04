@@ -73,7 +73,7 @@ export function coalesceEmailStatusChanges(
  * realtime events: one event per (tenant, event, status). A single log keeps
  * the uncoalesced shape (`id`, `status`, `registrationId`); several logs are
  * listed in `ids` (`id` is the first). Logs without a registration or
- * abstract to resolve are skipped, as in emitEmailLogRealtimeEvent.
+ * abstract to resolve are skipped.
  */
 export async function emitEmailLogRealtimeEvents(changes: EmailStatusChange[]): Promise<void> {
   const groups = new Map<

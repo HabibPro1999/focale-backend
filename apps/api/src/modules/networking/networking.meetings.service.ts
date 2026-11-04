@@ -45,7 +45,7 @@ import {
 import { networkingInventoryResource } from "./networking.inventory-policy";
 type MeetingRow = NetworkingRow<"meetings">;
 /** Cancellation provenance is internal, including for organizer responses. */
-export function meetingResponse({ cancellationState: _state, ...row }: MeetingRow) { return row; }
+function meetingResponse({ cancellationState: _state, ...row }: MeetingRow) { return row; }
 /** Re-plans after the meeting moved between the lock plan's read and the lock. */
 const ALLOCATION_PLAN_ATTEMPTS = 3;
 /** The slot a meeting would occupy from `start`, or none when `start` is not a valid instant. */

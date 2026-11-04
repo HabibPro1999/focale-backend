@@ -19,11 +19,11 @@ import { networkingNotificationHub } from "../../core/networking-notification-hu
 import { eventBus } from "./bus";
 
 /** Poll period: a UI event reaches its streams within about a second. */
-export const REALTIME_PUMP_INTERVAL_MS = 1_000;
+const REALTIME_PUMP_INTERVAL_MS = 1_000;
 /** Rows claimed per batch; a full batch claims the next one at once. */
-export const REALTIME_PUMP_BATCH = 100;
+const REALTIME_PUMP_BATCH = 100;
 /** One tick drains at most this long, then the next tick carries on. */
-export const REALTIME_PUMP_DRAIN_MS = 5_000;
+const REALTIME_PUMP_DRAIN_MS = 5_000;
 
 /**
  * Realtime outbox pump: every second it claims `scope: "realtime"` outbox

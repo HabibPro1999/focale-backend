@@ -29,7 +29,7 @@ interface CacheEntry<T> {
   expiresAt: number;
 }
 
-export class SimpleCache<T> {
+class SimpleCache<T> {
   private cache = new Map<string, CacheEntry<T>>();
   private readonly ttlMs: number;
   private readonly maxSize: number;

@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 export type DatabaseEngine = "postgres" | "cockroach";
-export type TransactionMode = "per-file" | "per-statement" | "none";
+type TransactionMode = "per-file" | "per-statement" | "none";
 export type MigrationVariant = "shared" | "cockroach";
 
 export interface MigrationDirectives {
@@ -180,7 +180,7 @@ function semicolonCount(sql: string): number {
   return (stripSqlCommentsAndStrings(sql).match(/;/g) ?? []).length;
 }
 
-export function lintMigration(migration: MigrationDefinition): string[] {
+function lintMigration(migration: MigrationDefinition): string[] {
   const errors: string[] = [];
   const executableSql = stripSqlCommentsAndStrings(migration.source);
   if (/\bCREATE\s+EXTENSION\b/i.test(executableSql)) {

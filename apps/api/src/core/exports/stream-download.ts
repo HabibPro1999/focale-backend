@@ -18,13 +18,13 @@ import { ExportAbortedError, type ExportDownload } from "./stream-io";
 // =============================================================================
 
 /** Retry-After (seconds) sent with 503 EXPORT_BUSY. */
-export const EXPORT_BUSY_RETRY_AFTER_SECONDS = 10;
+const EXPORT_BUSY_RETRY_AFTER_SECONDS = 10;
 
 /** Longest a request waits in the export queue before 503 EXPORT_BUSY. */
-export const EXPORT_QUEUE_WAIT_MS = 30_000;
+const EXPORT_QUEUE_WAIT_MS = 30_000;
 
 /** Bytes buffered between the file generator and the socket before it pauses. */
-export const EXPORT_STREAM_HIGH_WATER_MARK = 1024 * 1024;
+const EXPORT_STREAM_HIGH_WATER_MARK = 1024 * 1024;
 
 /** Every export slot and queue place is taken (or the queue wait ran out). */
 export class ExportBusyError extends Error {

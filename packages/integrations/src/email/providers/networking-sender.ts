@@ -41,11 +41,3 @@ export async function resolveVerifiedNetworkingSender(input: Pick<SendEmailInput
   verified.set(cacheKey, Date.now() + lifetime);
   return sender.email;
 }
-export async function networkingEmailSenderStatus(clientId: string) {
-  const email = integrationsConfig().email;
-  const provider: ProviderName = email.provider;
-  const sender = getNetworkingEmailSender(clientId, provider);
-  if (!sender) return { configured: false as const, provider };
-  try { await resolveVerifiedNetworkingSender({ fromEmail: sender.email, senderClientId: clientId }, provider, email[provider].apiKey); return { configured: true as const, verified: true, provider, email: sender.email, name: sender.name }; }
-  catch (error) { return { configured: true as const, verified: false, provider, email: sender.email, name: sender.name, error: error instanceof Error ? error.message : "Sender verification failed" }; }
-}

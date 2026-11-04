@@ -6,7 +6,7 @@ import { JOBS, JobTimeoutError, WorkerShutdownError, type Job } from "./job";
 const log = createLogger({ name: "worker" });
 
 /** After the shutdown deadline aborts running jobs, how long they get to settle. */
-export const JOB_ABORT_SETTLE_MS = 3_000;
+const JOB_ABORT_SETTLE_MS = 3_000;
 
 type Outcome = NonNullable<WorkerJobHeartbeat["lastOutcome"]>;
 

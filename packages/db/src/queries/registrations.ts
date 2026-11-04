@@ -21,7 +21,6 @@ import type { OffsetPagination } from "@app/shared";
 import type { PlatformRegistrationsQuery, ListRegistrationsQuery, StoredFormSchemaJson } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
 import { escapeLike } from "../like";
-import { SETTLEMENT_COLUMNS, type RegistrationFieldsPatch } from "../settlement/writer";
 import { registrationReferenceCounters, registrations } from "../schema/registrations";
 import { events, eventAccess, accessCheckIns } from "../schema/events-access";
 import { forms } from "../schema/forms";
@@ -613,22 +612,6 @@ export async function insertRegistrationRow(
     .values(values)
     .returning({ id: registrations.id });
   return row;
-}
-
-/**
- * Update a registration's non-money columns. Money columns (payment status,
- * amounts, breakdown) are written only by applyRegistrationSettlement.
- */
-export async function updateRegistrationRow(
-  id: string,
-  patch: RegistrationFieldsPatch,
-  db: DbExecutor,
-): Promise<void> {
-  const smuggled = SETTLEMENT_COLUMNS.filter((column) => column in patch);
-  if (smuggled.length) {
-    throw new Error(`Money columns are written only through the settlement: ${smuggled.join(", ")}`);
-  }
-  await db.update(registrations).set(patch).where(eq(registrations.id, id));
 }
 
 export async function deleteRegistrationRow(

@@ -26,7 +26,6 @@ import {
   CERTIFICATE_TEMPLATE_IDS_KEY,
   EMAIL_FALLBACK_BODY_KEY,
   EMAIL_FALLBACK_SUBJECT_KEY,
-  type AppEvent,
   type AutomaticEmailTrigger,
   type EmailStatus,
 } from "@app/contracts";
@@ -49,9 +48,6 @@ import {
   markEmailUncertain,
   readEmailLogStatus,
   updateEmailLogStatusGuarded,
-  getEmailLogRealtimeTarget,
-  enqueueRealtimeOutboxEvent,
-  getDb,
   pgUniqueViolation,
   resendUncertainEmailLog,
   readEmailContextSnapshot,
@@ -88,10 +84,9 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 // on the in-process EventBus. In the split architecture realtime fan-out goes
 // through the outbox / EventBus in the api process, which this framework-free
 // package cannot reach. The worker/api bootstrap wires a listener here (N3):
-// see `emitEmailLogRealtimeEvent` below, installed via setEmailStatusChangeListener
-// by configureRuntime (runtime.ts), which both apps/worker/src/main.ts and
-// apps/api/src/main.ts call at process startup — emails can be queued/updated
-// from either process.
+// configureRuntime (runtime.ts), called by both processes at startup, installs
+// the coalesced listener from status-coalescer.ts — emails can be queued or
+// updated from either process.
 // -----------------------------------------------------------------------------
 export type EmailStatusChangeListener = (
   emailLogId: string,
@@ -126,36 +121,6 @@ export function notifyStatusChange(emailLogId: string, status: string): void {
   } catch (err) {
     logger.warn({ err, emailLogId }, "Failed to notify emailLog status change");
   }
-}
-
-/**
- * Default realtime listener body (N3): resolve the (clientId, eventId,
- * registrationId) an EmailLog belongs to — via its registration when
- * registrationId is set, via its abstract → event when abstractId is set —
- * and enqueue a `realtime.emit` outbox event carrying `emailLog.statusChanged`.
- * Installed as the process's EmailStatusChangeListener at startup. A log with
- * neither relation (or one that's since vanished) resolves to null and is a
- * silent no-op — nothing to fan out to.
- */
-export async function emitEmailLogRealtimeEvent(
-  emailLogId: string,
-  status: string,
-): Promise<void> {
-  const target = await getEmailLogRealtimeTarget(emailLogId);
-  if (!target) return;
-
-  const event: AppEvent = {
-    type: "emailLog.statusChanged",
-    clientId: target.clientId,
-    eventId: target.eventId,
-    payload: {
-      id: emailLogId,
-      status,
-      registrationId: target.registrationId ?? undefined,
-    },
-    ts: Date.now(),
-  };
-  await enqueueRealtimeOutboxEvent(getDb(), event);
 }
 
 // -----------------------------------------------------------------------------

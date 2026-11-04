@@ -9,7 +9,7 @@
  * updatedAt before it, so a decision made again after a reopen sends again.
  */
 
-export type AbstractDecisionEmailTrigger =
+type AbstractDecisionEmailTrigger =
   | "ABSTRACT_ACCEPTED"
   | "ABSTRACT_REJECTED"
   | "ABSTRACT_DECISION"

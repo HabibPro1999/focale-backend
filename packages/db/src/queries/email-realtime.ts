@@ -5,11 +5,16 @@ import { emailLogs } from "../schema/email";
 import { events } from "../schema/events-access";
 import { registrations } from "../schema/registrations";
 import { abstracts } from "../schema/abstracts";
-import type { EmailLogRealtimeTarget } from "./email-logs";
+/** Resolved realtime fan-out target for an email log. */
+export interface EmailLogRealtimeTarget {
+  clientId: string;
+  eventId: string;
+  registrationId: string | null;
+}
 
 /**
- * getEmailLogRealtimeTarget for many email logs in one query (the coalesced
- * email status events): the registration relation when registrationId is set,
+ * Resolve many email logs in one query for coalesced status events:
+ * use the registration relation when registrationId is set,
  * else the abstract → event relation. Logs that are unknown, linked to
  * neither, or whose relation no longer exists are absent from the map.
  */

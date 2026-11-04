@@ -49,7 +49,7 @@ import * as sponsorshipsResponses from "../sponsorships.responses";
  * DB settings, keys, error catalog) are deliberately absent; a test fails when
  * the barrel exports a Zod schema from a module that is not listed here.
  */
-export const CONTRACT_MODULES: Readonly<Record<string, Record<string, unknown>>> = {
+const CONTRACT_MODULES: Readonly<Record<string, Record<string, unknown>>> = {
   abstracts,
   "abstracts.responses": abstractsResponses,
   access,
@@ -123,7 +123,7 @@ export interface JsonSchemaDocument {
   $defs: Record<string, JsonSchema>;
 }
 
-export type UnrepresentableReason = "date" | "transform" | "preprocess" | "opaque";
+type UnrepresentableReason = "date" | "transform" | "preprocess" | "opaque";
 
 export interface UnrepresentableEntry {
   direction: SchemaDirection;
@@ -135,7 +135,7 @@ export interface UnrepresentableEntry {
 const DRAFT_2020_12 = "https://json-schema.org/draft/2020-12/schema";
 
 /** `$comment` markers; `findUnrepresentable` reads them back. */
-export const UNREPRESENTABLE_COMMENTS: Readonly<Record<UnrepresentableReason, string>> = {
+const UNREPRESENTABLE_COMMENTS: Readonly<Record<UnrepresentableReason, string>> = {
   date: "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
   transform: "unrepresentable: transform. The server computes this value in code; JSON Schema cannot describe the result.",
   preprocess: "unrepresentable: preprocess. The server converts the raw value in code first (e.g. a query string); this describes the converted value.",

@@ -4,7 +4,7 @@ vi.mock("@sendgrid/mail", () => ({ default: { setApiKey: vi.fn(), setTimeout: vi
 vi.mock("resend", () => ({ Resend: class { emails = { send: mocks.resend }; webhooks = { verify: vi.fn() }; } }));
 import { SendgridProvider } from "./sendgrid.provider";
 import { ResendProvider } from "./resend.provider";
-import { getNetworkingEmailSender, resolveVerifiedNetworkingSender, resetNetworkingSenderVerificationCache, networkingEmailSenderStatus } from "./networking-sender";
+import { getNetworkingEmailSender, resolveVerifiedNetworkingSender, resetNetworkingSenderVerificationCache } from "./networking-sender";
 const resendMap = { "client-a": { provider: "resend", email: "networking@client-a.example", domainId: "domain-a", name: "Client A" } };
 const sendgridMap = { "client-a": { provider: "sendgrid", email: "networking@client-a.example", domainId: "123" } };
 const response = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
@@ -48,7 +48,7 @@ describe("server-owned verified networking sender identities", () => {
   it("fails closed on verification permission errors and removes authority immediately when allowlist changes", async () => {
     vi.stubEnv("NETWORKING_EMAIL_SENDERS", JSON.stringify(resendMap)); vi.stubEnv("EMAIL_PROVIDER", "resend"); vi.stubEnv("RESEND_API_KEY", "re_test");
     vi.stubGlobal("fetch", vi.fn(async (_url: string, _init?: RequestInit) => response({ error: "test only" }, 403)));
-    expect(await networkingEmailSenderStatus("client-a")).toMatchObject({ configured: true, verified: false });
+    await expect(resolveVerifiedNetworkingSender({ senderClientId: "client-a", fromEmail: resendMap["client-a"].email }, "resend", "re_test")).rejects.toThrow("denied by the provider");
     const fetcher = vi.fn(async (_url: string, _init?: RequestInit) => response({ id: "domain-a", name: "client-a.example", status: "verified", capabilities: { sending: "enabled" } })); vi.stubGlobal("fetch", fetcher);
     await resolveVerifiedNetworkingSender({ senderClientId: "client-a", fromEmail: resendMap["client-a"].email }, "resend", "re_test");
     await resolveVerifiedNetworkingSender({ senderClientId: "client-a", fromEmail: resendMap["client-a"].email }, "resend", "re_test"); expect(fetcher).toHaveBeenCalledOnce();
