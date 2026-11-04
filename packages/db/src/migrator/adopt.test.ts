@@ -234,9 +234,17 @@ describe("superseded probes", () => {
       // rebuilds two 0001 email_logs indexes under the same names; 0031
       // replaces 0025's withdrawn-profile index with the erasure-due one;
       // 0033 drops the abstract_code_sequences table (with its columns) and
-      // index from 0000.
+      // index from 0000; 0044 rebuilds 0024's template + recipient index and
+      // re-adds 0000's email_logs registration foreign key with ON DELETE CASCADE.
       expect(nonEmpty).toEqual([
         ["0025", new Map([["index:networking_profiles_withdrawn_idx", "0031"]])],
+        [
+          "0024",
+          new Map([
+            ["index:email_logs_template_recipient_trigger_active_key_rebuild", "0044"],
+            ["index:email_logs_template_recipient_trigger_active_key", "0044"],
+          ]),
+        ],
         ["0012", new Map([["index:networking_tables_event_name_key", "0018"]])],
         [
           "0001",
@@ -254,6 +262,7 @@ describe("superseded probes", () => {
             ["column:abstract_code_sequences:last_value", "0033"],
             ["column:abstract_code_sequences:created_at", "0033"],
             ["column:abstract_code_sequences:updated_at", "0033"],
+            ["constraint:email_logs:email_logs_registration_id_registrations_id_fk", "0044"],
             ["index:abstract_code_sequences_final_type_key", "0033"],
           ]),
         ],
