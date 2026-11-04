@@ -79,6 +79,7 @@ const LEGACY_VERDICTS: Record<string, "baseline" | "applied" | "pending"> = {
   "0041": "pending", // email template attachments
   "0042": "pending", // badge templates
   "0043": "pending", // free event + auto-accept pricing flags
+  "0044": "pending", // email_logs: recipient index narrowed, registration FK cascades
 };
 
 const PRISMA_EVIDENCE = { finished: 31, latest: "20260814000000_add_committee_invite_tokens" };
@@ -265,7 +266,8 @@ describe.runIf(dbTestsEnabled())("migrate adopt on the legacy Prisma production 
   // The verifier's reproduction: 0000 built by the runner, 0001 and 0007-0009
   // run as raw SQL, the 43 foreign keys renamed to Prisma's names, and main's
   // real _prisma_migrations. Before the aliases this aborted with
-  // "0000 ABORT probes 138/181 (partial)".
+  // "0000 ABORT probes 138/181 (partial)". 0044 re-adds the email_logs
+  // registration foreign key, so 0000 no longer probes it (648, not 649).
   describe("the verifier's reproduction (runner-built 0000, Prisma foreign key names)", () => {
     let database: ScratchDatabase;
     beforeAll(async () => {
@@ -297,7 +299,7 @@ describe.runIf(dbTestsEnabled())("migrate adopt on the legacy Prisma production 
       const report = await adopt(database, false);
       expect(report.errors).toEqual([]);
       expect(formatAdoptionReport(report, false)[1]).toBe(
-        `  0000 baseline [shared] probes 649/649 (all); _prisma_migrations 31 finished (latest ${PRISMA_EVIDENCE.latest})`,
+        `  0000 baseline [shared] probes 648/648 (all); _prisma_migrations 31 finished (latest ${PRISMA_EVIDENCE.latest})`,
       );
       const verdicts = classifications(report);
       // As on the full legacy schema, except 0010: the runner made timestamp(3) check-in columns, so it stays pending.

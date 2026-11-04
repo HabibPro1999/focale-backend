@@ -274,7 +274,13 @@ async function queueAutomaticEmail(
   }
   const result = await queueEmail(options.input(template.id));
   if (!result.ok) {
-    logger.info(options.duplicateContext(), options.duplicateMessage);
+    // A unique index refused the row although the pre-check found no active
+    // log: either a concurrent send won the race or an index blocks a send it
+    // should not (the 0044 re-registration case). Warn with the index name.
+    logger.warn(
+      { ...options.duplicateContext(), conflictIndex: result.conflictIndex },
+      options.duplicateMessage,
+    );
     return false;
   }
   logger.info(options.queuedContext(), options.queuedMessage);

@@ -75,8 +75,9 @@ export const emailLogs = pgTable(
       onDelete: "set null",
       onUpdate: "cascade",
     }),
+    // 0044: deleting a registration deletes its email logs.
     registrationId: text().references(() => registrations.id, {
-      onDelete: "set null",
+      onDelete: "cascade",
       onUpdate: "cascade",
     }),
     abstractId: text().references(() => abstracts.id, {
@@ -154,9 +155,11 @@ export const emailLogs = pgTable(
     uniqueIndex("email_logs_abstract_submission_ack_active_key")
       .on(t.abstractId, t.abstractTrigger, t.recipientEmail)
       .where(sql`${t.abstractId} IS NOT NULL AND ${t.abstractTrigger} = 'ABSTRACT_SUBMISSION_ACK' AND ${t.status} IN ('QUEUED', 'SENDING', 'SENT', 'DELIVERED')`),
+    // 0044: only logs with no registration; a registration's logs dedupe per
+    // registration above, so a re-registration with the same address is not blocked.
     uniqueIndex("email_logs_template_recipient_trigger_active_key")
       .on(t.templateId, t.recipientEmail, t.trigger)
-      .where(sql`${t.templateId} IS NOT NULL AND ${t.trigger} IS NOT NULL AND ${t.status} IN ('QUEUED', 'SENDING', 'SENT', 'DELIVERED') AND ${t.queuedAt} >= TIMESTAMP '2026-05-29 00:03:03' AND ${t.trigger} <> 'CERTIFICATE_SENT'`),
+      .where(sql`${t.templateId} IS NOT NULL AND ${t.trigger} IS NOT NULL AND ${t.registrationId} IS NULL AND ${t.status} IN ('QUEUED', 'SENDING', 'SENT', 'DELIVERED') AND ${t.queuedAt} >= TIMESTAMP '2026-05-29 00:03:03' AND ${t.trigger} <> 'CERTIFICATE_SENT'`),
     uniqueIndex("email_logs_dedupe_key_active_key")
       .on(t.dedupeKey)
       .where(sql`${t.dedupeKey} IS NOT NULL AND ${t.status} IN ('QUEUED', 'SENDING', 'SENT', 'DELIVERED')`),

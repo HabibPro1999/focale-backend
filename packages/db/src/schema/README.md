@@ -82,7 +82,7 @@ names byte-for-byte (application error mapping and dedupe guards depend on them)
 | `abstracts_event_id_author_email_normalized_key` | abstracts | partial unique (`WHERE ... IS NOT NULL`) |
 | `email_logs_registration_trigger_active_key` | email_logs | partial unique (status + queued_at cutoff) |
 | `email_logs_abstract_submission_ack_active_key` | email_logs | partial unique |
-| `email_logs_template_recipient_trigger_active_key` | email_logs | partial unique (status + queued_at cutoff) |
+| `email_logs_template_recipient_trigger_active_key` | email_logs | partial unique (status + queued_at cutoff; since 0044 only rows with `registration_id IS NULL`) |
 | `outbox_events_dedupe_key_key` | outbox_events | partial unique (`WHERE dedupe_key IS NOT NULL`) |
 | `registrations_access_type_ids_inverted_idx` | registrations | GIN (CRDB `INVERTED INDEX`) |
 | `email_logs_dedupe_key_active_key` | email_logs | partial unique (active statuses only) |

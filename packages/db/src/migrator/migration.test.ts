@@ -309,10 +309,16 @@ describe("unified migration format", () => {
       }
       expect(own.filter((probe) => "query" in probe)).toHaveLength(1);
 
+      // 0044 rebuilds the template + recipient index the same way, so the
+      // final probe for that name belongs to 0044.
       const effective = [...deriveEffectiveCatalogProbes(migrations).values()].flat();
+      const lastRebuild: Record<string, string> = {
+        email_logs_registration_trigger_active_key: "0024",
+        email_logs_template_recipient_trigger_active_key: "0044",
+      };
       for (const name of indexNames) {
         const finalProbes = effective.filter((probe) => "kind" in probe && probe.name === name);
-        expect(finalProbes).toEqual([expect.objectContaining({ migrationId: "0024", expectedPresent: true })]);
+        expect(finalProbes).toEqual([expect.objectContaining({ migrationId: lastRebuild[name], expectedPresent: true })]);
       }
     }
   });
