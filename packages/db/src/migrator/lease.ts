@@ -173,7 +173,7 @@ export async function assertLeaseAlive(
   }
 }
 
-export async function commitWithLeaseFence(
+async function commitWithLeaseFence(
   client: Client,
   owner: string,
   heartbeat: LeaseHeartbeat | undefined,

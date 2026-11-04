@@ -12,7 +12,7 @@ export const XLSX_CONTENT_TYPE =
  * 60-column row costs about 1 ms, so a fixed row count would not bound the
  * pause; the clock does.
  */
-export const YIELD_AFTER_MS = 20;
+const YIELD_AFTER_MS = 20;
 
 /**
  * An ExcelJS streaming workbook writing into `out`: styles on, inline strings

@@ -7,7 +7,7 @@ import { registrations } from "../../src/schema/registrations";
 import { syncNetworkingEvent } from "../../src/queries/networking";
 import { networkingStore, type NetworkingRow } from "../../src/queries/networking-store";
 
-export type NetworkingWriteParticipant = {
+type NetworkingWriteParticipant = {
   profile: NetworkingRow<"profiles">;
   session: NetworkingRow<"sessions">;
   token: string;

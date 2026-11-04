@@ -9,7 +9,7 @@ import {
 } from "@app/contracts";
 import { compileTemplateContent } from "./template-content";
 
-export interface EmailTemplateStyleChange {
+interface EmailTemplateStyleChange {
   path: string;
   attribute: "textAlign" | "fontSize" | "lineHeight";
   action: "removed" | "normalized";
@@ -31,14 +31,14 @@ export interface EmailTemplatePreflightRow {
   language?: LanguageCode;
 }
 
-export interface EmailTemplatePreflightUpdate {
+interface EmailTemplatePreflightUpdate {
   content: TiptapDocument;
   mjmlContent: string;
   htmlContent: string;
   plainContent: string;
 }
 
-export interface EmailTemplatePreflightReport {
+interface EmailTemplatePreflightReport {
   id: string;
   name: string;
   changes: EmailTemplateStyleChange[];

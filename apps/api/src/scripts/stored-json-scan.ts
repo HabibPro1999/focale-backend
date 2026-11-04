@@ -11,17 +11,17 @@ import { STORED_JSONB_COLUMNS, readStoredJsonbPage, type StoredJsonbColumn } fro
  */
 
 /** Rows read per READ ONLY transaction (keyset on the primary key). */
-export const STORED_JSON_SCAN_BATCH = 500;
+const STORED_JSON_SCAN_BATCH = 500;
 /** Findings kept per column for the listing; the counts cover every row. */
-export const STORED_JSON_FINDINGS_PER_COLUMN = 200;
+const STORED_JSON_FINDINGS_PER_COLUMN = 200;
 
-export interface StoredJsonFinding {
+interface StoredJsonFinding {
   column: string;
   id: string;
   issues: StoredJsonIssue[];
 }
 
-export interface StoredJsonColumnSummary {
+interface StoredJsonColumnSummary {
   column: string;
   scanned: number;
   invalid: number;

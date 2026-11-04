@@ -19,8 +19,8 @@ import {
 // Every command is a dry run unless --apply is given, and --apply is refused
 // without --backup-verified=<reference> naming the verified backup taken first.
 
-export const NETWORKING_RETENTION_COMMANDS = ["purge-leftovers", "erase-withdrawn", "orphan-photos"] as const;
-export type NetworkingRetentionCommand = (typeof NETWORKING_RETENTION_COMMANDS)[number];
+const NETWORKING_RETENTION_COMMANDS = ["purge-leftovers", "erase-withdrawn", "orphan-photos"] as const;
+type NetworkingRetentionCommand = (typeof NETWORKING_RETENTION_COMMANDS)[number];
 
 export interface NetworkingRetentionOptions {
   command: NetworkingRetentionCommand;
@@ -36,7 +36,7 @@ export interface NetworkingRetentionOptions {
   minAgeHours: number;
 }
 
-export const NETWORKING_RETENTION_USAGE = [
+const NETWORKING_RETENTION_USAGE = [
   "Usage: networking-retention <purge-leftovers | erase-withdrawn | orphan-photos>",
   "         [--event <id>] [--batch-size <n>] [--limit <n>] [--min-age-hours <n>]",
   "         [--apply --backup-verified=<backup reference>]",

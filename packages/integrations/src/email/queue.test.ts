@@ -36,9 +36,6 @@ vi.mock("@app/db", async () => ({
   resendUncertainEmailLog: vi.fn(),
   readEmailLogStatus: vi.fn(),
   updateEmailLogStatusGuarded: vi.fn(),
-  getEmailLogRealtimeTarget: vi.fn(),
-  enqueueRealtimeOutboxEvent: vi.fn(),
-  getDb: vi.fn(() => "db-handle"),
   getBadgeTemplate: vi.fn(),
 }));
 
@@ -83,8 +80,6 @@ import {
   resendUncertainEmailLog,
   readEmailLogStatus,
   updateEmailLogStatusGuarded,
-  getEmailLogRealtimeTarget,
-  enqueueRealtimeOutboxEvent,
 } from "@app/db";
 import { JobTimeoutError, WorkerShutdownError } from "@app/shared";
 import { buildEmailContextWithAccess, resolveEmailParts } from "./rendering/index";
@@ -95,7 +90,6 @@ import {
   processEmailQueue,
   updateEmailStatusFromWebhook,
   setEmailStatusChangeListener,
-  emitEmailLogRealtimeEvent,
   resendUncertainEmail,
 } from "./queue";
 import { renderRegistrationQrPng } from "./attachments/registration-qr";
@@ -1306,50 +1300,6 @@ describe("updateEmailStatusFromWebhook", () => {
     expect(log.error).not.toHaveBeenCalled();
     expect(listener).not.toHaveBeenCalled();
     setEmailStatusChangeListener(undefined);
-  });
-});
-
-// =============================================================================
-// N3: realtime status-change fan-out
-// =============================================================================
-describe("emitEmailLogRealtimeEvent", () => {
-  it("enqueues a realtime.emit outbox event resolved via the registration relation", async () => {
-    mocked(getEmailLogRealtimeTarget).mockResolvedValue({
-      clientId: "client-1",
-      eventId: "ev-1",
-      registrationId: "reg-1",
-    });
-    await emitEmailLogRealtimeEvent("log-1", "SENT");
-
-    expect(enqueueRealtimeOutboxEvent).toHaveBeenCalledWith(
-      "db-handle",
-      expect.objectContaining({
-        type: "emailLog.statusChanged",
-        clientId: "client-1",
-        eventId: "ev-1",
-        payload: { id: "log-1", status: "SENT", registrationId: "reg-1" },
-      }),
-    );
-  });
-
-  it("enqueues via the abstract → event relation with no registrationId in the payload", async () => {
-    mocked(getEmailLogRealtimeTarget).mockResolvedValue({
-      clientId: "client-2",
-      eventId: "ev-2",
-      registrationId: null,
-    });
-    await emitEmailLogRealtimeEvent("log-2", "QUEUED");
-
-    const [, event] = mocked(enqueueRealtimeOutboxEvent).mock.calls[0];
-    expect(event.payload.registrationId).toBeUndefined();
-    expect(event.clientId).toBe("client-2");
-    expect(event.eventId).toBe("ev-2");
-  });
-
-  it("no-ops when the target cannot be resolved (log/relation gone)", async () => {
-    mocked(getEmailLogRealtimeTarget).mockResolvedValue(null);
-    await emitEmailLogRealtimeEvent("log-3", "SENT");
-    expect(enqueueRealtimeOutboxEvent).not.toHaveBeenCalled();
   });
 });
 

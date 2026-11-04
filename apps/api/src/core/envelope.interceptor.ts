@@ -21,7 +21,7 @@ export const SKIP_ENVELOPE = "skipEnvelope";
 export const SkipEnvelope = () => SetMetadata(SKIP_ENVELOPE, true);
 
 /** A route returned data its response contract does not accept (non-production only). */
-export class ResponseContractViolation extends Error {
+class ResponseContractViolation extends Error {
   constructor(
     readonly handler: string,
     readonly issues: ReadonlyArray<{ path: string; code: string }>,

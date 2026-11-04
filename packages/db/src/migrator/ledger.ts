@@ -198,7 +198,7 @@ export async function unrecordMigrationWork(
   );
 }
 
-export const migrationLedgerAccess: MigrationLedgerAccess = {
+const migrationLedgerAccess: MigrationLedgerAccess = {
   ensureSchema: createMigrationLedger,
   listMigrations: listMigrationRecords,
   listSteps: listMigrationStepRecords,
@@ -206,7 +206,7 @@ export const migrationLedgerAccess: MigrationLedgerAccess = {
   writeStep: writeMigrationStepRecord,
 };
 
-export const migrationCatalogAccess: MigrationCatalogAccess = {
+const migrationCatalogAccess: MigrationCatalogAccess = {
   inspect: inspectMigrationCatalog,
 };
 

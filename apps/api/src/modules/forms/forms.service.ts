@@ -63,7 +63,7 @@ function throwModeChangeFailure(
 // ============================================================================
 
 /** Default registration form schema. */
-export function createDefaultSchema(): FormSchemaJson {
+function createDefaultSchema(): FormSchemaJson {
   return {
     steps: [
       {

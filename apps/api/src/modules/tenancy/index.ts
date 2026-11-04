@@ -14,11 +14,4 @@ export {
   SponsorshipScoped,
   TENANT_SCOPE,
   TenantScopeGuard,
-  type ClientScope,
-  type EventScope,
-  type FormScopeOptions,
-  type TenantScope,
-  type TenantScopeKind,
-  type TenantScopeOptions,
-  type TenantScopeRule,
 } from "./tenant-scope";

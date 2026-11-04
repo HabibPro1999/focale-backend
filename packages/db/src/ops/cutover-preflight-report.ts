@@ -16,11 +16,11 @@ export const PERSONAL_DATA_NOTICE =
   "amounts and timestamps). Store this directory with restricted access, share it only with the people " +
   "who sign off the cutover, and delete it once the cutover is accepted.";
 
-export const POSTFLIGHT_TIMING_NOTICE =
+const POSTFLIGHT_TIMING_NOTICE =
   "Run postflight right after `apply` and `verify --schema`, before the Nest worker starts: its retention " +
   "jobs delete old outbox rows, and normal application deletes also lower counts.";
 
-export const POSTFLIGHT_COMMAND = "node packages/db/dist/ops/cutover-preflight-cli.js postflight --baseline <dir>/table-counts.json";
+const POSTFLIGHT_COMMAND = "node packages/db/dist/ops/cutover-preflight-cli.js postflight --baseline <dir>/table-counts.json";
 
 /**
  * Whether `apply` will execute a migration: pending in the ledger, or (no

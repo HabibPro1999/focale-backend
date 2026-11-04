@@ -50,7 +50,7 @@ export async function embedZoneFonts(pdfDoc: PDFDocument): Promise<ZoneFonts> {
   return { regularFont, boldFont };
 }
 
-export function findFitFontSize(
+function findFitFontSize(
   font: PDFFont,
   text: string,
   maxWidth: number,
@@ -164,7 +164,7 @@ export function hexToRgb(hex: string): { r: number; g: number; b: number } {
   return { r: 0, g: 0, b: 0 };
 }
 
-export function fitTextToZone(
+function fitTextToZone(
   font: PDFFont,
   text: string,
   maxWidth: number,

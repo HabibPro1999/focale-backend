@@ -68,7 +68,7 @@ function participantBearerIdentity(req: ThrottledRequest): BearerIdentity {
 }
 
 // Shared by every participant handler of one event behind one venue IP (500–2,000 attendees).
-export const networkingVenueThrottler: ThrottlerOptions = {
+const networkingVenueThrottler: ThrottlerOptions = {
   name: "networking-venue",
   ttl: 60_000,
   limit: 24_000,
@@ -78,7 +78,7 @@ export const networkingVenueThrottler: ThrottlerOptions = {
 };
 
 // Sign-in endpoints per venue IP and event, alongside their per-email/per-challenge/per-session quotas.
-export const networkingAuthThrottler: ThrottlerOptions = {
+const networkingAuthThrottler: ThrottlerOptions = {
   name: "networking-auth",
   ttl: 60_000,
   limit: 300,
@@ -107,7 +107,7 @@ export const networkingUnverifiedThrottler: ThrottlerOptions = {
 
 // Organizer networking routes (/api/events/:eventId/networking/**): a per-IP backstop over per-bearer quotas.
 export const NETWORKING_ORGANIZER_LIMIT = 600;
-export const networkingOrganizerThrottler: ThrottlerOptions = {
+const networkingOrganizerThrottler: ThrottlerOptions = {
   name: "networking-organizer",
   ttl: 60_000,
   limit: NETWORKING_ORGANIZER_LIMIT,

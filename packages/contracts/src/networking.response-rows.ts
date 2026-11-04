@@ -9,7 +9,7 @@ export const NetworkingAdminConfigUiLabelsItemSchema = z.object({
   ar: z.string().optional(),
 });
 
-export const NetworkingAdminConfigEmailTemplatesItemSchema = z.object({
+const NetworkingAdminConfigEmailTemplatesItemSchema = z.object({
   subject: z.string(),
   body: z.string(),
 });
@@ -140,19 +140,19 @@ export const NetworkingDeletedSchema = z.object({
   deleted: z.boolean(),
 });
 
-export const NetworkingRepresentativeSummarySchema = z.object({
+const NetworkingRepresentativeSummarySchema = z.object({
   id: z.string(),
   firstName: z.string(),
   lastName: z.string(),
   company: z.string(),
 });
 
-export const NetworkingTableBaseSchema = NetworkingSpaceRowSchema.extend({
+const NetworkingTableBaseSchema = NetworkingSpaceRowSchema.extend({
   spaceId: z.string().nullable(),
   ownerProfileId: z.string().nullable(),
 });
 
-export const NetworkingTableWithSpaceSchema = NetworkingTableBaseSchema.extend({
+const NetworkingTableWithSpaceSchema = NetworkingTableBaseSchema.extend({
   space: NetworkingSpaceRowSchema.nullable(),
 });
 
@@ -223,7 +223,7 @@ export const NetworkingFacetSchema = z.object({
   count: z.number(),
 });
 
-export const NetworkingMessageSummarySchema = z.object({
+const NetworkingMessageSummarySchema = z.object({
   id: z.string(),
   connectionId: z.string(),
   senderId: z.string(),

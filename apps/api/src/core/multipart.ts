@@ -2,7 +2,7 @@ import type { HttpException } from "@nestjs/common";
 import type { FastifyRequest } from "fastify";
 
 // @fastify/multipart augments the request with .file(); minimal shape used here.
-export type MultipartFile = {
+type MultipartFile = {
   filename: string;
   mimetype: string;
   toBuffer(): Promise<Buffer>;

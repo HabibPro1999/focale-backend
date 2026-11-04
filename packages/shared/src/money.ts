@@ -3,7 +3,7 @@ import type { MoneySnapshot, PriceBreakdown } from "@app/contracts";
 const MAX_MINOR = BigInt(Number.MAX_SAFE_INTEGER);
 
 /** ISO currency precision from the runtime's ICU data (TND=3, EUR=2, JPY=0). */
-export function currencyScale(currency: string): number {
+function currencyScale(currency: string): number {
   const scale = new Intl.NumberFormat("en", { style: "currency", currency: currency.toUpperCase() })
     .resolvedOptions().maximumFractionDigits!;
   if (scale > 4) throw new RangeError("Unsupported currency precision");

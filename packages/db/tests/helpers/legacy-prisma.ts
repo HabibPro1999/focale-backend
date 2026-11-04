@@ -8,7 +8,7 @@ import { createScratchDatabase, type ScratchDatabase } from "../../src/testing/d
 // plus a finished `_prisma_migrations`, and no unified migration ledger. The
 // fixture's header says how it was generated.
 
-export const LEGACY_PRISMA_FIXTURE = resolve(__dirname, "../migration/fixtures/legacy-prisma-schema.cockroach.sql");
+const LEGACY_PRISMA_FIXTURE = resolve(__dirname, "../migration/fixtures/legacy-prisma-schema.cockroach.sql");
 
 /** main's prisma/migrations directories (commit 0f86c91d): the fixture records each one as finished. */
 export const LEGACY_PRISMA_MIGRATION_NAMES = [
@@ -108,7 +108,7 @@ export function legacyPrismaStatements(engine: DatabaseEngine, options: LegacyPr
  * Builds the legacy schema in an empty database, one statement per transaction:
  * CockroachDB cannot use a table in a schema change made earlier in the same transaction.
  */
-export async function loadLegacyPrismaSchema(
+async function loadLegacyPrismaSchema(
   client: Client,
   engine: DatabaseEngine,
   options: LegacyPrismaSchemaOptions = {},

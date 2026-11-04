@@ -1,13 +1,13 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { getDb, emailLogs, getEmailLogRealtimeTarget, getEmailLogRealtimeTargets } from "@app/db";
+import { getDb, emailLogs, getEmailLogRealtimeTargets } from "@app/db";
 import { dbTestsEnabled } from "@app/db/testing";
 import { cleanupDatabase } from "../helpers/cleanup";
 import { seedEvent, seedRegistration, seedAbstract } from "../helpers/factories";
 
-// N3: real-DB coverage for getEmailLogRealtimeTarget's resolution logic — the
+// N3: real-DB coverage for getEmailLogRealtimeTargets' resolution logic — the
 // registration relation and the abstract → event relation each need an actual
 // multi-table join, which a hand-rolled drizzle-builder mock can't credibly fake.
-describe.runIf(dbTestsEnabled())("db tier: getEmailLogRealtimeTarget (N3)", () => {
+describe.runIf(dbTestsEnabled())("db tier: getEmailLogRealtimeTargets", () => {
   beforeEach(cleanupDatabase);
   afterEach(cleanupDatabase);
 
@@ -23,7 +23,7 @@ describe.runIf(dbTestsEnabled())("db tier: getEmailLogRealtimeTarget (N3)", () =
       })
       .returning();
 
-    const target = await getEmailLogRealtimeTarget(log.id);
+    const target = (await getEmailLogRealtimeTargets([log.id])).get(log.id);
     expect(target).toEqual({
       clientId: event.clientId,
       eventId: event.id,
@@ -43,7 +43,7 @@ describe.runIf(dbTestsEnabled())("db tier: getEmailLogRealtimeTarget (N3)", () =
       })
       .returning();
 
-    const target = await getEmailLogRealtimeTarget(log.id);
+    const target = (await getEmailLogRealtimeTargets([log.id])).get(log.id);
     expect(target).toEqual({
       clientId: event.clientId,
       eventId: event.id,
@@ -51,17 +51,17 @@ describe.runIf(dbTestsEnabled())("db tier: getEmailLogRealtimeTarget (N3)", () =
     });
   });
 
-  it("returns null for a log linked to neither a registration nor an abstract", async () => {
+  it("omits a log linked to neither a registration nor an abstract", async () => {
     const [log] = await getDb()
       .insert(emailLogs)
       .values({ recipientEmail: "a@x.com", subject: "s" })
       .returning();
 
-    await expect(getEmailLogRealtimeTarget(log.id)).resolves.toBeNull();
+    await expect(getEmailLogRealtimeTargets([log.id])).resolves.toEqual(new Map());
   });
 
-  it("returns null for an unknown emailLogId", async () => {
-    await expect(getEmailLogRealtimeTarget("nope")).resolves.toBeNull();
+  it("omits an unknown emailLogId", async () => {
+    await expect(getEmailLogRealtimeTargets(["nope"])).resolves.toEqual(new Map());
   });
 
   it("prefers the registration relation when both registrationId and abstractId are set", async () => {
@@ -79,7 +79,7 @@ describe.runIf(dbTestsEnabled())("db tier: getEmailLogRealtimeTarget (N3)", () =
       })
       .returning();
 
-    const target = await getEmailLogRealtimeTarget(log.id);
+    const target = (await getEmailLogRealtimeTargets([log.id])).get(log.id);
     expect(target?.eventId).toBe(regEvent.id);
     expect(target?.registrationId).toBe(registration.id);
   });
@@ -107,9 +107,6 @@ describe.runIf(dbTestsEnabled())("db tier: getEmailLogRealtimeTarget (N3)", () =
       [viaAbstract]: { clientId: absEvent.clientId, eventId: absEvent.id, registrationId: null },
       [both]: { clientId: regEvent.clientId, eventId: regEvent.id, registrationId: registration.id },
     });
-    for (const id of [viaRegistration, viaAbstract, both, neither]) {
-      expect(targets.get(id) ?? null).toEqual(await getEmailLogRealtimeTarget(id));
-    }
     await expect(getEmailLogRealtimeTargets([])).resolves.toEqual(new Map());
   });
 });

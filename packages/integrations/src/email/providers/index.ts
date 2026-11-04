@@ -39,4 +39,4 @@ export {
   type ResendProviderOptions,
 } from "./resend.provider";
 
-export { getNetworkingEmailSender, networkingEmailSenderStatus } from "./networking-sender";
+export { getNetworkingEmailSender } from "./networking-sender";

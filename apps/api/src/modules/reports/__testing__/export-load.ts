@@ -153,7 +153,7 @@ function sink(bytesPerSecond?: number): Writable & { bytes: number } {
   return target;
 }
 
-export async function measure(run: () => Promise<number>) {
+async function measure(run: () => Promise<number>) {
   // Baseline once the module graph is loaded and collected: what the export adds.
   (globalThis as { gc?: () => void }).gc?.();
   const baseline = process.memoryUsage();

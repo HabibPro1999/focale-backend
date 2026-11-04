@@ -151,21 +151,3 @@ export function validateCoveredAccessTimeOverlap(
 
   return errors;
 }
-
-// ============================================================================
-// Amount / status derivation
-// ============================================================================
-
-export function calculateTotalSponsorshipAmount(
-  usages: Array<{ amountApplied: number }>,
-): number {
-  return usages.reduce((sum, usage) => sum + usage.amountApplied, 0);
-}
-
-export function determineSponsorshipStatus(
-  sponsorship: { status: string },
-  usageCount: number,
-): "PENDING" | "USED" | "CANCELLED" {
-  if (sponsorship.status === "CANCELLED") return "CANCELLED";
-  return usageCount > 0 ? "USED" : "PENDING";
-}

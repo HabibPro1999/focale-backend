@@ -21,11 +21,10 @@ import {
  * format, so a rollback to a build without the keyring can still read them.
  * A recovery-only key verifies recovery codes and nothing else.
  */
-export const NETWORKING_KEY_PURPOSES = ["session", "otp", "badge", "seal", "recovery"] as const;
-export type NetworkingKeyPurpose = (typeof NETWORKING_KEY_PURPOSES)[number];
+export type NetworkingKeyPurpose = "session" | "otp" | "badge" | "seal" | "recovery";
 export const NETWORKING_LEGACY_KID = "legacy";
 
-export interface NetworkingKeyringKey {
+interface NetworkingKeyringKey {
   kid: string;
   secret: string;
   recoveryOnly?: boolean;

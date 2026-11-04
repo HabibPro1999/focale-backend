@@ -198,14 +198,6 @@ export async function createScratchDatabase(
   return connectScratch(name, adminParsed, engine, adminUrl, options.empty ? "empty" : "migrate", options.to);
 }
 
-/** Reapply the unified runner to a scratch database; applied migrations are skipped. */
-export async function applyMigrations(
-  database: ScratchDatabase,
-  options: { to?: string } = {},
-): Promise<ApplyMigrationsResult> {
-  return database.applyMigrations(options);
-}
-
 /**
  * Clone the per-run migrated PostgreSQL template. CockroachDB 26.2.5 does not
  * implement CREATE DATABASE ... TEMPLATE, so it gets a fresh migrated DB/file.

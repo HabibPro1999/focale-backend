@@ -51,7 +51,7 @@ type NotificationRow = Awaited<ReturnType<typeof networkingNotificationsPage>>[n
  * The stream's SSE id is a watermark (ms since epoch): every notification
  * created before `watermark − overlap` has been sent. Only digits are ours.
  */
-export function parseNetworkingStreamCursor(value: string, now: number): number | null {
+function parseNetworkingStreamCursor(value: string, now: number): number | null {
   if (!/^\d{1,16}$/.test(value)) return null;
   const at = Number(value);
   if (at > now + NETWORKING_STREAM.maxResumeSkewMs) return null;

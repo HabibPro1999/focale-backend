@@ -16,7 +16,7 @@ export function jitteredReconnectMs(random: () => number = Math.random): number 
 }
 
 /** Retry-After (seconds) for requests refused while the process drains. */
-export const DRAINING_RETRY_AFTER_SECONDS = 5;
+const DRAINING_RETRY_AFTER_SECONDS = 5;
 
 /** Closes one open stream after telling the client when to reconnect. */
 export type StreamShutdown = (reconnectInMs: number) => void;

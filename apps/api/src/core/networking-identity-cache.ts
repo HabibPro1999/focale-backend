@@ -24,8 +24,8 @@ export function networkingVenueKey(ip: string | undefined, slug: string): string
 
 type VerifiedIdentity = { sessionId: string; profileId: string; expiresAt: number };
 
-export const NETWORKING_IDENTITY_TTL_MS = 5 * 60_000;
-export const NETWORKING_IDENTITY_MAX_ENTRIES = 20_000;
+const NETWORKING_IDENTITY_TTL_MS = 5 * 60_000;
+const NETWORKING_IDENTITY_MAX_ENTRIES = 20_000;
 
 /**
  * Bounded LRU of sha256(bearer token) → verified participant session. Filled

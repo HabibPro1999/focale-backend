@@ -88,6 +88,3 @@ export function networkingSearchScore(
   }
   return tokens.length ? total / tokens.length : 0;
 }
-export function networkingSearchMatches(query: string, text: string) {
-  return networkingSearchScore(query, text) !== null;
-}

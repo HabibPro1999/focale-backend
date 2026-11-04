@@ -17,7 +17,7 @@ import { AppException, notFound } from "../../core/app-exception";
  * as the API's AppExceptions. Messages and codes of the refusals that
  * existed before plan 2.8 are unchanged.
  */
-export function toSponsorshipAppException(err: unknown): unknown {
+function toSponsorshipAppException(err: unknown): unknown {
   if (!(err instanceof SponsorshipSettlementError)) return toAccessAppException(err);
   const { details } = err;
   switch (err.reason) {

@@ -23,7 +23,7 @@
 // Local copies of the form app's `ConditionOperator` / `FieldCondition` types
 // (`form/src/types/form.ts`). Stored schemas may hold other shapes at runtime
 // (uppercase logic, non-string values); callers cast at the boundary.
-export type ConditionOperator =
+type ConditionOperator =
   | 'equals'
   | 'not_equals'
   | 'contains'
@@ -84,7 +84,7 @@ export function evaluateConditions(
  * @param formData - Current form data
  * @returns true if condition is satisfied
  */
-export function evaluateSingleCondition(
+function evaluateSingleCondition(
   condition: FieldCondition,
   formData: Record<string, unknown>
 ): boolean {
@@ -105,7 +105,7 @@ export function evaluateSingleCondition(
  * @param conditionValue - The expected value from the condition
  * @returns true if the operator condition is satisfied
  */
-export function evaluateOperator(
+function evaluateOperator(
   operator: ConditionOperator,
   fieldValue: unknown,
   conditionValue: string
@@ -253,57 +253,4 @@ function isLessThan(fieldValue: unknown, conditionValue: string): boolean {
   }
 
   return numField < numCondition;
-}
-
-// =============================================================================
-// Batch Evaluation
-// =============================================================================
-
-/**
- * Get all visible field IDs based on current form data
- *
- * @param fields - Array of fields with their conditions
- * @param formData - Current form data
- * @returns Set of visible field IDs
- */
-export function getVisibleFieldIds(
-  fields: Array<{
-    id: string;
-    conditions?: FieldCondition[];
-    conditionLogic?: 'and' | 'or';
-  }>,
-  formData: Record<string, unknown>
-): Set<string> {
-  const visible = new Set<string>();
-
-  for (const field of fields) {
-    if (evaluateConditions(field.conditions, field.conditionLogic, formData)) {
-      visible.add(field.id);
-    }
-  }
-
-  return visible;
-}
-
-/**
- * Filter form data to only include visible fields
- * Useful when submitting to remove hidden field values
- *
- * @param formData - Full form data
- * @param visibleFieldIds - Set of visible field IDs
- * @returns Filtered form data with only visible fields
- */
-export function filterVisibleFormData(
-  formData: Record<string, unknown>,
-  visibleFieldIds: Set<string>
-): Record<string, unknown> {
-  const filtered: Record<string, unknown> = {};
-
-  for (const [key, value] of Object.entries(formData)) {
-    if (visibleFieldIds.has(key)) {
-      filtered[key] = value;
-    }
-  }
-
-  return filtered;
 }

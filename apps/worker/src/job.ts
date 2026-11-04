@@ -24,7 +24,10 @@ export interface Job {
   run(ctx: JobContext): Promise<void>;
 }
 
-export { JobTimeoutError, WorkerShutdownError, abortedForShutdown } from "@app/shared";
+export {
+  JobTimeoutError,
+  WorkerShutdownError,
+} from "@app/shared";
 
 /** DI token for the factory-provided ordered job registry. */
 export const JOBS = Symbol("JOBS");

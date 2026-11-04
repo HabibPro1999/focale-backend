@@ -6,7 +6,7 @@ export const networkingNotFound = (message: string) =>
   new NotFoundException({ code: ErrorCodes.NETWORKING_NOT_FOUND, message });
 export const networkingValidation = (message: string, details?: unknown) =>
   new BadRequestException({ code: ErrorCodes.NETWORKING_VALIDATION, message, ...(details ? { details } : {}) });
-export const networkingFeatureDisabled = (message: string) =>
+const networkingFeatureDisabled = (message: string) =>
   new ForbiddenException({ code: ErrorCodes.NETWORKING_FEATURE_DISABLED, message });
 
 export function requireNetworkingDiscovery(config: Pick<NetworkingConfig, "swipeEnabled" | "searchEnabled">, message = "Discovery is disabled") {

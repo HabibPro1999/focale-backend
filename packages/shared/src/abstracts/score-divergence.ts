@@ -17,7 +17,7 @@
 export const SCORE_DIVERGENCE_ALERT_WINDOW_MS = 60 * 60 * 1000;
 
 /** What an alert reports: the email's extra context, and the realtime payload with the abstract id. */
-export type ScoreDivergenceDetails = {
+type ScoreDivergenceDetails = {
   averageScore: number | null;
   reviewCount: number;
   minScore: number;
