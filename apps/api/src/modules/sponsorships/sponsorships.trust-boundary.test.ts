@@ -11,7 +11,10 @@ import {
   SponsorshipsListController,
 } from "./sponsorships.controller";
 import { SponsorshipsAdminService } from "./sponsorships.admin.service";
-import { SponsorshipsPublicController } from "./sponsorships.public.controller";
+import {
+  SponsorshipCodePublicController,
+  SponsorshipsPublicController,
+} from "./sponsorships.public.controller";
 import { SponsorshipsPublicService } from "./sponsorships.public.service";
 
 // Plan 5.7: the anonymous sponsor form cannot reach an admin operation
@@ -55,10 +58,12 @@ function methodNames(cls: { prototype: object }): string[] {
 }
 
 describe("sponsorships trust boundary (plan 5.7)", () => {
-  it("the anonymous controller injects the public service only", () => {
-    expect(Reflect.getMetadata("design:paramtypes", SponsorshipsPublicController)).toEqual([
-      SponsorshipsPublicService,
-    ]);
+  it("the anonymous controllers inject the public service only", () => {
+    for (const controller of [SponsorshipsPublicController, SponsorshipCodePublicController]) {
+      expect(Reflect.getMetadata("design:paramtypes", controller), controller.name).toEqual([
+        SponsorshipsPublicService,
+      ]);
+    }
     expect(Reflect.getMetadata("design:paramtypes", SponsorshipsPublicService)).toEqual([AccessService]);
     const adminMethods = new Set(methodNames(SponsorshipsAdminService));
     expect(methodNames(SponsorshipsPublicService).filter((name) => adminMethods.has(name))).toEqual([]);
@@ -90,6 +95,15 @@ describe("sponsorships trust boundary (plan 5.7)", () => {
     expect(throttle("createBySlug")).toEqual({ limit: 5, ttl: 60_000, guards: undefined });
     expect(throttle("searchRegistrants")).toEqual({ limit: 10, ttl: 60_000, guards: undefined });
     expect(Reflect.getMetadata(GUARDS_METADATA, SponsorshipsPublicController)).toBeUndefined();
+
+    // The registrant's code redemption: edit token checked in the handler, no AuthGuard.
+    const redeem = SponsorshipCodePublicController.prototype.redeem;
+    expect({
+      limit: Reflect.getMetadata("THROTTLER:LIMITdefault", redeem),
+      ttl: Reflect.getMetadata("THROTTLER:TTLdefault", redeem),
+      guards: Reflect.getMetadata(GUARDS_METADATA, redeem),
+    }).toEqual({ limit: 5, ttl: 60_000, guards: undefined });
+    expect(Reflect.getMetadata(GUARDS_METADATA, SponsorshipCodePublicController)).toBeUndefined();
   });
 
   it("every admin controller injects the admin service behind AuthGuard", () => {

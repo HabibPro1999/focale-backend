@@ -9,6 +9,7 @@ import {
 
 vi.mock("@app/db", () => ({
   getEventWithPricingAndClient: vi.fn(),
+  getActiveSponsorForm: vi.fn(),
   // The exception filter calls these on every caught error; the real
   // implementations return null for non-pg errors, which is all these
   // tests throw.
@@ -101,6 +102,63 @@ describe("events public routes", () => {
       client: { id: "client-1", name: "Client", phone: "+216 71 000 000" },
     });
     expect(body.data.pricing.bankDetails).toMatchObject({ bic: "", iban: "TN59" });
+  });
+
+  describe("payment methods", () => {
+    const withModules = (enabledModules: string[], pricing: Record<string, unknown> = {}) =>
+      makeEvent({
+        client: { ...makeEvent().client, enabledModules },
+        pricing: { ...makeEvent().pricing, ...pricing },
+      });
+    const sponsorForm = (sponsorshipMode: string | undefined) => ({
+      id: "form-sponsor",
+      eventId: EVENT_ID,
+      schema: { formType: "SPONSOR", ...(sponsorshipMode ? { sponsorshipSettings: { sponsorshipMode } } : {}) },
+    });
+
+    async function methodsFor(event: unknown, form: unknown = null): Promise<string[]> {
+      vi.mocked(db.getEventWithPricingAndClient).mockResolvedValue(event as never);
+      vi.mocked(db.getActiveSponsorForm).mockResolvedValue(form as never);
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/public/events/${EVENT_ID}/payment-config`,
+      });
+      expect(res.statusCode).toBe(200);
+      return JSON.parse(res.body).data.pricing.paymentMethods;
+    }
+
+    it("is bank transfer only without sponsorships or online payment", async () => {
+      expect(await methodsFor(withModules(["registrations", "pricing"]))).toEqual(["BANK_TRANSFER"]);
+      expect(db.getActiveSponsorForm).not.toHaveBeenCalled();
+    });
+
+    it("adds online payment when enabled with a URL", async () => {
+      expect(
+        await methodsFor(
+          withModules(["registrations", "pricing"], {
+            onlinePaymentEnabled: true,
+            onlinePaymentUrl: "https://pay.example.com",
+          }),
+        ),
+      ).toEqual(["BANK_TRANSFER", "ONLINE"]);
+    });
+
+    it("offers sponsorship-code redemption for an active CODE-mode sponsor form", async () => {
+      const event = withModules(["registrations", "pricing", "sponsorships"]);
+      expect(await methodsFor(event, sponsorForm("CODE"))).toEqual(["BANK_TRANSFER", "SPONSORSHIP_CODE"]);
+      // A sponsor form without settings defaults to CODE
+      expect(await methodsFor(event, sponsorForm(undefined))).toEqual(["BANK_TRANSFER", "SPONSORSHIP_CODE"]);
+    });
+
+    it("offers no sponsorship option in LINKED_ACCOUNT mode or without an active sponsor form", async () => {
+      const event = withModules(["registrations", "pricing", "sponsorships"]);
+      expect(await methodsFor(event, sponsorForm("LINKED_ACCOUNT"))).toEqual(["BANK_TRANSFER"]);
+      expect(await methodsFor(event, null)).toEqual(["BANK_TRANSFER"]);
+    });
+
+    it("never offers the free-text lab sponsorship", async () => {
+      expect(await methodsFor(withModules(["registrations", "pricing"]))).not.toContain("LAB_SPONSORSHIP");
+    });
   });
 
   it("404s closed events instead of exposing metadata", async () => {

@@ -8,9 +8,11 @@ import {
   type AppEvent,
   type CreateBatchResult,
   type CreateSponsorshipBatchInput,
+  type PaymentStatus,
 } from "@app/contracts";
-import { maskEmail } from "@app/shared";
+import { calculateSettlement, maskEmail, normalizeSponsorshipCode } from "@app/shared";
 import {
+  claimSponsorshipCodeTxn,
   emitSettlementEvents,
   enqueueSponsorshipEmailOutbox,
   enqueueTriggeredEmailOutbox,
@@ -22,11 +24,14 @@ import {
   getActiveSponsorForm,
   getDb,
   getEventPricingForBatch,
+  getEventWithPricing,
   getFormSchema,
+  getRegistrationForSponsorship,
   insertAuditLog,
   insertSponsorship,
   insertSponsorshipBatch,
   linkSponsorshipToRegistrationTxn,
+  lockRegistrationForUpdate,
   lockRegistrationsForUpdate,
   readSponsorshipTarget,
   searchRegistrantsForSponsorship,
@@ -44,8 +49,8 @@ import {
   buildBatchEmailContext,
   buildLinkedSponsorshipContext,
 } from "@app/integrations";
-import { assertEventOpen } from "../events";
-import { assertModuleEnabledForClient } from "../clients/module-gates";
+import { assertEventAcceptsPublicActions, assertEventOpen } from "../events";
+import { assertClientModuleEnabled, assertModuleEnabledForClient } from "../clients/module-gates";
 import { AccessService } from "../access/access.service";
 import { AppException, badRequest, notFound } from "../../core/app-exception";
 import {
@@ -70,6 +75,9 @@ const MODULE = "sponsorships";
 
 /** Who a linked-mode batch's automatic links are recorded as. */
 const BATCH_LINK_ACTOR = "SYSTEM";
+
+/** Who a registrant's own code redemption is recorded as. */
+const PUBLIC_ACTOR = "PUBLIC";
 
 function sumAccessPrices(
   coveredAccessIds: string[],
@@ -521,6 +529,134 @@ export class SponsorshipsPublicService {
       });
     }
     return { created, linkedEmailEntries, links };
+  }
+
+  // ==========================================================================
+  // Code redemption by the registrant (payment page, CODE mode)
+  // ==========================================================================
+
+  /**
+   * A registrant applies the code a laboratory gave them to their own
+   * PENDING or PARTIAL registration. The code is consumed as at signup: the
+   * sponsorship is locked first and must be unused, then it is linked and
+   * the registration settled (fully covered → SPONSORED). The edit token is
+   * checked by the controller.
+   */
+  async redeemSponsorshipCode(
+    registrationId: string,
+    rawCode: string,
+  ): Promise<{ paymentStatus: PaymentStatus; totalAmount: number; sponsorshipAmount: number; amountDue: number }> {
+    const route = await getRegistrationForSponsorship(registrationId);
+    if (!route) {
+      throw new AppException(ErrorCodes.REGISTRATION_NOT_FOUND, "Registration not found", 404);
+    }
+    const eventId = route.event.id;
+    const event = await getEventWithPricing(eventId);
+    if (!event) {
+      throw notFound("Event not found");
+    }
+    assertEventAcceptsPublicActions(event);
+    await assertClientModuleEnabled(event.clientId, MODULE);
+    const form = await getActiveSponsorForm(eventId);
+    if (!form || getSponsorshipMode(form.schema) !== "CODE") {
+      throw badRequest("Sponsorship codes cannot be redeemed for this event");
+    }
+
+    const code = normalizeSponsorshipCode(rawCode);
+    if (!code) {
+      throw new AppException(ErrorCodes.INVALID_SPONSORSHIP_CODE, "This sponsorship code is not valid for this event", 400);
+    }
+
+    return withLockingTxn(async (tx) => {
+      // Lock order: the sponsorship (by its code), then the registration.
+      const claim = await claimSponsorshipCodeTxn(tx, eventId, code);
+      if (claim.outcome === "invalid") {
+        throw new AppException(
+          ErrorCodes.INVALID_SPONSORSHIP_CODE,
+          "This sponsorship code is not valid for this event",
+          400,
+          { sponsorshipCode: code },
+        );
+      }
+      if (claim.outcome === "used") {
+        throw new AppException(
+          ErrorCodes.SPONSORSHIP_CODE_ALREADY_USED,
+          "This sponsorship code has already been used",
+          409,
+          { sponsorshipCode: code },
+        );
+      }
+
+      const target = (await lockRegistrationForUpdate(tx, registrationId))
+        ? await readSponsorshipTarget(tx, registrationId)
+        : null;
+      if (!target) {
+        throw new AppException(ErrorCodes.REGISTRATION_NOT_FOUND, "Registration not found", 404);
+      }
+      if (target.paymentStatus !== "PENDING" && target.paymentStatus !== "PARTIAL") {
+        throw new AppException(
+          ErrorCodes.REGISTRATION_INVALID_STATUS,
+          "A sponsorship code can only be applied to a pending or partially paid registration",
+          400,
+        );
+      }
+
+      const { sponsorship, usage, settled } = await linkSponsorshipToRegistrationTxn(tx, {
+        sponsorshipId: claim.sponsorship.id,
+        registrationId,
+        appliedBy: PUBLIC_ACTOR,
+        // Stored as the registration's code when it has none, as a code given
+        // at signup is (one registration per code and event).
+        fields: {
+          paymentMethod: "LAB_SPONSORSHIP",
+          ...(target.sponsorshipCode === null ? { sponsorshipCode: code } : {}),
+        },
+      }).catch(rethrowSponsorshipException);
+      await this.access.handleCapacityReached(eventId, settled.paidAccess.incremented, tx);
+
+      const changes: Record<string, { old: unknown; new: unknown }> = {
+        registrationId: { old: null, new: registrationId },
+        amountApplied: { old: 0, new: usage.amountApplied },
+        sponsorshipAmount: { old: settled.before.sponsorshipAmount, new: settled.after.sponsorshipAmount },
+        status: { old: sponsorship.status, new: "USED" },
+      };
+      if (settled.before.paymentStatus !== settled.after.paymentStatus) {
+        changes.paymentStatus = { old: settled.before.paymentStatus, new: settled.after.paymentStatus };
+      }
+      await insertAuditLog(
+        {
+          entityType: "Sponsorship",
+          entityId: sponsorship.id,
+          action: "LINK_TO_REGISTRATION",
+          changes,
+          performedBy: PUBLIC_ACTOR,
+        },
+        tx,
+      );
+
+      await emitSettlementEvents(tx, [
+        {
+          type: "sponsorship.linked",
+          clientId: event.clientId,
+          eventId,
+          payload: { id: sponsorship.id, registrationId },
+          ts: Date.now(),
+        },
+        ...registrationEvents(event.clientId, registrationId, settled),
+        countsChanged(event.clientId, eventId, [settled]),
+      ]);
+
+      return {
+        paymentStatus: settled.after.paymentStatus,
+        totalAmount: settled.after.totalAmount,
+        sponsorshipAmount: settled.after.sponsorshipAmount,
+        amountDue: calculateSettlement({
+          totalAmount: settled.after.totalAmount,
+          paidAmount: settled.after.paidAmount,
+          sponsorshipAmount: settled.after.sponsorshipAmount,
+        }).amountDue,
+      };
+    });
   }
 
   /**

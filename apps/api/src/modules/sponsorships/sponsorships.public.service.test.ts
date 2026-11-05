@@ -29,6 +29,12 @@ const db = vi.hoisted(() => {
     "readSponsorshipTarget",
     "sponsorshipLinkRefusal",
     "linkSponsorshipToRegistrationTxn",
+    // Code redemption by the registrant
+    "getRegistrationForSponsorship",
+    "getEventWithPricing",
+    "findClientModuleState",
+    "claimSponsorshipCodeTxn",
+    "lockRegistrationForUpdate",
   ];
   const mod: Record<string, ReturnType<typeof vi.fn>> = {};
   for (const f of fns) mod[f] = vi.fn();
@@ -491,5 +497,146 @@ describe("createSponsorshipBatch", () => {
         linkedBeneficiaries: [{ registrationId: "r1", coversBasePrice: true, coveredAccessIds: [] }],
       }),
     ).rejects.toMatchObject({ code: "RES_3001", statusCode: 404 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// redeemSponsorshipCode — a registrant applies a code on the payment page
+// ---------------------------------------------------------------------------
+describe("redeemSponsorshipCode", () => {
+  const FUTURE = new Date(Date.now() + 7 * 86_400_000);
+  const sponsorship = {
+    id: "sp1",
+    eventId: "e1",
+    code: "SP-ABCD",
+    status: "PENDING",
+    targetRegistrationId: null,
+    totalAmount: 500,
+    coversBasePrice: true,
+    coveredAccessIds: [],
+  };
+  const target = (overrides: Record<string, unknown> = {}) => ({
+    id: "r1",
+    eventId: "e1",
+    paymentStatus: "PENDING",
+    paymentMethod: null,
+    paidAmount: 0,
+    totalAmount: 500,
+    baseAmount: 500,
+    sponsorshipAmount: 0,
+    sponsorshipCode: null,
+    priceBreakdown: {},
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    m.getRegistrationForSponsorship.mockResolvedValue({ id: "r1", event: { id: "e1", clientId: "c1" } });
+    m.getEventWithPricing.mockResolvedValue({ id: "e1", clientId: "c1", status: "OPEN", endDate: FUTURE });
+    m.findClientModuleState.mockResolvedValue({ active: true, enabledModules: ["registrations", "pricing", "sponsorships"] });
+    m.getActiveSponsorForm.mockResolvedValue({ id: "f1", eventId: "e1", schema: { sponsorshipSettings: { sponsorshipMode: "CODE" } } });
+    m.claimSponsorshipCodeTxn.mockResolvedValue({ outcome: "available", sponsorship });
+    m.lockRegistrationForUpdate.mockResolvedValue(true);
+    m.readSponsorshipTarget.mockResolvedValue(target());
+    m.linkSponsorshipToRegistrationTxn.mockResolvedValue({
+      sponsorship,
+      usage: { id: "u1", sponsorshipId: "sp1", amountApplied: 500 },
+      settled: settled({ status: "PENDING" }, { status: "SPONSORED", sponsorship: 500 }),
+    });
+  });
+
+  it("links the normalized code, stores it on the registration and returns the settled money", async () => {
+    const result = await service().redeemSponsorshipCode("r1", "  sp-abcd ");
+
+    expect(m.claimSponsorshipCodeTxn).toHaveBeenCalledWith(TX, "e1", "SP-ABCD");
+    expect(m.linkSponsorshipToRegistrationTxn).toHaveBeenCalledWith(TX, {
+      sponsorshipId: "sp1",
+      registrationId: "r1",
+      appliedBy: "PUBLIC",
+      fields: { paymentMethod: "LAB_SPONSORSHIP", sponsorshipCode: "SP-ABCD" },
+    });
+    expect(result).toEqual({ paymentStatus: "SPONSORED", totalAmount: 500, sponsorshipAmount: 500, amountDue: 0 });
+    expect(m.insertAuditLog.mock.calls[0]![0]).toMatchObject({
+      entityType: "Sponsorship",
+      entityId: "sp1",
+      action: "LINK_TO_REGISTRATION",
+      performedBy: "PUBLIC",
+      changes: { status: { old: "PENDING", new: "USED" }, paymentStatus: { old: "PENDING", new: "SPONSORED" } },
+    });
+    const events = m.emitSettlementEvents.mock.calls[0]![1] as Array<{ type: string }>;
+    expect(events.map((e) => e.type)).toContain("sponsorship.linked");
+  });
+
+  it("keeps an existing signup code on the registration", async () => {
+    m.readSponsorshipTarget.mockResolvedValue(target({ sponsorshipCode: "SP-OTHER" }));
+    await service().redeemSponsorshipCode("r1", "SP-ABCD");
+    expect(m.linkSponsorshipToRegistrationTxn.mock.calls[0]![1].fields).toEqual({ paymentMethod: "LAB_SPONSORSHIP" });
+  });
+
+  it("returns a partial coverage with the amount still due", async () => {
+    m.readSponsorshipTarget.mockResolvedValue(target({ paymentStatus: "PARTIAL", paidAmount: 100 }));
+    m.linkSponsorshipToRegistrationTxn.mockResolvedValue({
+      sponsorship,
+      usage: { id: "u1", sponsorshipId: "sp1", amountApplied: 200 },
+      settled: settled({ status: "PARTIAL", paid: 100 }, { sponsorship: 200 }),
+    });
+    expect(await service().redeemSponsorshipCode("r1", "SP-ABCD")).toEqual({
+      paymentStatus: "PARTIAL",
+      totalAmount: 500,
+      sponsorshipAmount: 200,
+      amountDue: 200,
+    });
+  });
+
+  it("400 INVALID_SPONSORSHIP_CODE for an unknown or cancelled code", async () => {
+    m.claimSponsorshipCodeTxn.mockResolvedValue({ outcome: "invalid" });
+    await expect(service().redeemSponsorshipCode("r1", "SP-NOPE")).rejects.toMatchObject({
+      code: "PRC_6004",
+      statusCode: 400,
+    });
+    expect(m.linkSponsorshipToRegistrationTxn).not.toHaveBeenCalled();
+  });
+
+  it("409 SPONSORSHIP_CODE_ALREADY_USED for a consumed code", async () => {
+    m.claimSponsorshipCodeTxn.mockResolvedValue({ outcome: "used", reason: "USED", sponsorshipId: "sp1" });
+    await expect(service().redeemSponsorshipCode("r1", "SP-ABCD")).rejects.toMatchObject({ statusCode: 409 });
+    expect(m.linkSponsorshipToRegistrationTxn).not.toHaveBeenCalled();
+  });
+
+  it("refuses in LINKED_ACCOUNT mode and without an active sponsor form", async () => {
+    m.getActiveSponsorForm.mockResolvedValue({ id: "f1", eventId: "e1", schema: { sponsorshipSettings: { sponsorshipMode: "LINKED_ACCOUNT" } } });
+    await expect(service().redeemSponsorshipCode("r1", "SP-ABCD")).rejects.toMatchObject({ statusCode: 400 });
+    m.getActiveSponsorForm.mockResolvedValue(null);
+    await expect(service().redeemSponsorshipCode("r1", "SP-ABCD")).rejects.toMatchObject({ statusCode: 400 });
+    expect(m.claimSponsorshipCodeTxn).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the sponsorships module is disabled", async () => {
+    m.findClientModuleState.mockResolvedValue({ active: true, enabledModules: ["registrations", "pricing"] });
+    await expect(service().redeemSponsorshipCode("r1", "SP-ABCD")).rejects.toMatchObject({ status: 403 });
+    expect(m.claimSponsorshipCodeTxn).not.toHaveBeenCalled();
+  });
+
+  it.each(["VERIFYING", "PAID", "SPONSORED", "WAIVED", "REFUNDED"])(
+    "refuses a %s registration, read under its lock",
+    async (paymentStatus) => {
+      m.readSponsorshipTarget.mockResolvedValue(target({ paymentStatus }));
+      await expect(service().redeemSponsorshipCode("r1", "SP-ABCD")).rejects.toMatchObject({
+        code: "REG_8004",
+        statusCode: 400,
+      });
+      expect(m.linkSponsorshipToRegistrationTxn).not.toHaveBeenCalled();
+    },
+  );
+
+  it("404 for an unknown registration", async () => {
+    m.getRegistrationForSponsorship.mockResolvedValue(null);
+    await expect(service().redeemSponsorshipCode("r1", "SP-ABCD")).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("maps a refused link (coverage does not apply)", async () => {
+    m.linkSponsorshipToRegistrationTxn.mockRejectedValue(
+      new SponsorshipSettlementError("NOT_APPLICABLE", { registrationId: "r1" }),
+    );
+    await expect(service().redeemSponsorshipCode("r1", "SP-ABCD")).rejects.toMatchObject({ statusCode: 400 });
   });
 });

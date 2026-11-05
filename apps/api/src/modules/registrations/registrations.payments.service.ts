@@ -33,7 +33,6 @@ import { AppException } from "../../core/app-exception";
 import { validatePaymentTransition } from "./payment-transitions";
 import { RegistrationSideEffects } from "./registrations.side-effects";
 import {
-  assertLabSponsorshipAllowed,
   assertPaidAmountWithinNet,
   assertPaidInFull,
 } from "./registrations.guards";
@@ -325,7 +324,7 @@ export class RegistrationPaymentsService {
   }
 
   // ==========================================================================
-  // Select payment method (public) — CASH / LAB_SPONSORSHIP; keeps PENDING/PARTIAL
+  // Select payment method (public) — CASH; keeps PENDING/PARTIAL
   // ==========================================================================
 
   async selectPaymentMethod(
@@ -343,8 +342,6 @@ export class RegistrationPaymentsService {
         "registrations",
       );
 
-      assertLabSponsorshipAllowed(registration.event.client, input.paymentMethod);
-
       if (registration.paymentStatus !== "PENDING" && registration.paymentStatus !== "PARTIAL") {
         throw new AppException(
           ErrorCodes.REGISTRATION_INVALID_STATUS,
@@ -353,8 +350,8 @@ export class RegistrationPaymentsService {
         );
       }
 
-      const nextLabName =
-        input.paymentMethod === "LAB_SPONSORSHIP" ? (input.labName ?? null) : null;
+      // Cash is not a laboratory: a lab name left from an earlier method is cleared.
+      const nextLabName = null;
       const changes: Record<string, { old: unknown; new: unknown }> = {
         paymentMethod: { old: registration.paymentMethod, new: input.paymentMethod },
       };

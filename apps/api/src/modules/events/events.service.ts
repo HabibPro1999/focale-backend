@@ -5,7 +5,7 @@ import {
 } from "./event-status";
 import crypto from "node:crypto";
 import { Injectable } from "@nestjs/common";
-import { ErrorCodes } from "@app/contracts";
+import { ErrorCodes, getSponsorshipMode } from "@app/contracts";
 import type {
   CreateEventInput,
   UpdateEventInput,
@@ -27,6 +27,7 @@ import {
   getAbstractFinalFileKeysTx,
   getCertificateTemplateUrlsTx,
   getBadgeTemplateImagesTx,
+  getActiveSponsorForm,
   getEventIdBySlugTx,
   getEventWithPricing,
   getEventWithPricingAndClient,
@@ -395,8 +396,14 @@ export class EventsService {
       "sponsorships",
     );
 
-    if (exposePaymentConfig && !sponsorshipsAvailableForActiveClient) {
-      paymentMethods.push("LAB_SPONSORSHIP");
+    // A registrant can redeem a sponsorship code only when the event's active
+    // sponsor form hands out codes. In LINKED_ACCOUNT mode the laboratory links
+    // registrants itself, so the payment page offers no sponsorship option.
+    if (exposePaymentConfig && sponsorshipsAvailableForActiveClient) {
+      const sponsorForm = await getActiveSponsorForm(event.id);
+      if (sponsorForm && getSponsorshipMode(sponsorForm.schema) === "CODE") {
+        paymentMethods.push("SPONSORSHIP_CODE");
+      }
     }
 
     return {
