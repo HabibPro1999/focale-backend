@@ -3427,6 +3427,10 @@ export type PublicSponsorFormResponse = {
   accessItems: EventAccessRowResponse[];
 };
 
+export type RedeemSponsorshipCode = {
+  code: string;
+};
+
 export type RegistrantSearchQuery = {
   query: string;
   unpaidOnly?: string;
@@ -3647,8 +3651,7 @@ export type SearchRegistrantsQuery = {
 };
 
 export type SelectPaymentMethod = {
-  paymentMethod: "CASH" | "LAB_SPONSORSHIP";
-  labName?: string;
+  paymentMethod: "CASH";
 };
 
 export type SelectedAccessItem = {
@@ -3720,6 +3723,16 @@ export type SponsorshipBatchCreatedResponse = {
   message: string;
   batchId: string;
   count: number;
+};
+
+export type SponsorshipCodeRedeemedResponse = {
+  success: true;
+  registration: {
+    paymentStatus: PaymentStatus;
+    totalAmount: number;
+    sponsorshipAmount: number;
+    amountDue: number;
+  };
 };
 
 export type SponsorshipDetailResponse = {

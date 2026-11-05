@@ -2,6 +2,7 @@ import { RestoreSponsorshipBodySchema,
   CreateSponsorshipBatchSchema,
   LinkSponsorshipByCodeSchema,
   LinkSponsorshipSchema,
+  RedeemSponsorshipCodeSchema,
   ListSponsorshipsQuerySchema,
   RegistrationIdParamSchema,
   RegistrationSponsorshipParamSchema,
@@ -44,3 +45,4 @@ export class LinkSponsorshipByCodeDto extends createZodDto(
 ) {}
 
 export class RestoreSponsorshipDto extends createZodDto(RestoreSponsorshipBodySchema) {}
+export class RedeemSponsorshipCodeDto extends createZodDto(RedeemSponsorshipCodeSchema) {}

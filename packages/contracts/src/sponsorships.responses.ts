@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { RegistrantSearchResultSchema } from "./registrations";
+import { PaymentStatusSchema } from "./registration-enums";
 import { SponsorshipStatusSchema } from "./sponsorships";
 
 // ============================================================================
@@ -208,4 +209,18 @@ export const SponsorshipLinkedResponseSchema = z.object({
     amountDue: z.number(),
   }),
   warnings: z.array(z.string()),
+});
+
+/**
+ * POST /api/public/registrations/:registrationId/sponsorship-code — the
+ * registration's money state after the code was applied.
+ */
+export const SponsorshipCodeRedeemedResponseSchema = z.object({
+  success: z.literal(true),
+  registration: z.object({
+    paymentStatus: PaymentStatusSchema,
+    totalAmount: z.number(),
+    sponsorshipAmount: z.number(),
+    amountDue: z.number(),
+  }),
 });

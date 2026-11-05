@@ -14876,6 +14876,20 @@
       ],
       "type": "object"
     },
+    "RedeemSponsorshipCodeSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "maxLength": 50,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "code"
+      ],
+      "type": "object"
+    },
     "RegistrantSearchQuerySchema": {
       "additionalProperties": false,
       "properties": {
@@ -15837,13 +15851,8 @@
       "properties": {
         "paymentMethod": {
           "enum": [
-            "CASH",
-            "LAB_SPONSORSHIP"
+            "CASH"
           ],
-          "type": "string"
-        },
-        "labName": {
-          "maxLength": 200,
           "type": "string"
         }
       },
@@ -16087,6 +16096,42 @@
         "message",
         "batchId",
         "count"
+      ],
+      "type": "object"
+    },
+    "SponsorshipCodeRedeemedResponseSchema": {
+      "properties": {
+        "success": {
+          "const": true,
+          "type": "boolean"
+        },
+        "registration": {
+          "properties": {
+            "paymentStatus": {
+              "$ref": "#/$defs/PaymentStatusSchema"
+            },
+            "totalAmount": {
+              "type": "number"
+            },
+            "sponsorshipAmount": {
+              "type": "number"
+            },
+            "amountDue": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "paymentStatus",
+            "totalAmount",
+            "sponsorshipAmount",
+            "amountDue"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "success",
+        "registration"
       ],
       "type": "object"
     },
