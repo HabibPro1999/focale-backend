@@ -183,6 +183,20 @@ export type LinkSponsorshipByCodeInput = z.infer<
 >;
 
 // ============================================================================
+// Redeem a sponsorship code (public, edit token) — a registrant applies the
+// code a laboratory gave them to their own pending registration. Normalized
+// as at signup (trimmed, upper-cased).
+// ============================================================================
+
+export const RedeemSponsorshipCodeSchema = z.strictObject({
+  code: z.string().trim().min(1).max(50),
+});
+
+export type RedeemSponsorshipCodeInput = z.infer<
+  typeof RedeemSponsorshipCodeSchema
+>;
+
+// ============================================================================
 // Registrant search (public, by slug) — locally-defined legacy schemas
 // ============================================================================
 

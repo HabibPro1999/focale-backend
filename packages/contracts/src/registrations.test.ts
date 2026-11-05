@@ -54,21 +54,20 @@ describe("paymentProofUrl acceptance", () => {
   });
 });
 
-describe("lab-name refinement (SelectPaymentMethodSchema)", () => {
-  it("requires labName when paymentMethod is LAB_SPONSORSHIP", () => {
+describe("SelectPaymentMethodSchema (public)", () => {
+  it("accepts CASH only: a laboratory sponsorship arrives through its code", () => {
     expect(
-      SelectPaymentMethodSchema.safeParse({ paymentMethod: "LAB_SPONSORSHIP" })
-        .success,
-    ).toBe(false);
+      SelectPaymentMethodSchema.safeParse({ paymentMethod: "CASH" }).success,
+    ).toBe(true);
     expect(
       SelectPaymentMethodSchema.safeParse({
         paymentMethod: "LAB_SPONSORSHIP",
         labName: "Acme Labs",
       }).success,
-    ).toBe(true);
+    ).toBe(false);
     expect(
-      SelectPaymentMethodSchema.safeParse({ paymentMethod: "CASH" }).success,
-    ).toBe(true);
+      SelectPaymentMethodSchema.safeParse({ paymentMethod: "CASH", labName: "Acme Labs" }).success,
+    ).toBe(false);
   });
 
   it("AdminEditRegistrationSchema does NOT enforce requireLabName", () => {

@@ -1,5 +1,4 @@
 import { lockRegistrationForMutation } from "./registrations.loaders";
-import { timingSafeEqual } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { buildRegistrationSelfLinks } from "@app/integrations";
 import { deleteNetworkingPhoto } from "../networking/networking.uploads.service";
@@ -29,7 +28,6 @@ import {
   findAccessDetailsByIds,
   searchRegistrantsForSponsorship as searchRegistrantsQuery,
   // registrations-owned primitives
-  getRegistrationEditToken,
   getRegistrationEditLinkSource,
   listRegistrationRows,
   listPlatformRegistrationRows,
@@ -52,6 +50,7 @@ import { AppException, notFound } from "../../core/app-exception";
 import { getRegistrationTableColumns } from "./table-columns";
 import { RegistrationSideEffects } from "./registrations.side-effects";
 import { evaluateEditPolicy } from "./edit-policy";
+import { verifyRegistrationEditToken } from "./edit-token";
 import {
   enrichManyWithAccessSelections,
   type RegistrationWithRelations,
@@ -172,17 +171,8 @@ export class RegistrationsService {
   // Edit-token verification (timing-safe, no expiry)
   // ==========================================================================
 
-  async verifyEditToken(registrationId: string, token: string): Promise<boolean> {
-    const row = await getRegistrationEditToken(registrationId);
-    if (!row?.editToken) return false;
-    try {
-      return timingSafeEqual(
-        Buffer.from(row.editToken, "utf8"),
-        Buffer.from(token, "utf8"),
-      );
-    } catch {
-      return false;
-    }
+  verifyEditToken(registrationId: string, token: string): Promise<boolean> {
+    return verifyRegistrationEditToken(registrationId, token);
   }
 
   // ==========================================================================

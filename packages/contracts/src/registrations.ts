@@ -92,12 +92,12 @@ export const CreateRegistrationBodySchema = CreateRegistrationObject.omit({
 // Select Payment Method Schema (Public - from payment page)
 // ============================================================================
 
-export const SelectPaymentMethodSchema = z
-  .strictObject({
-    paymentMethod: z.enum(["CASH", "LAB_SPONSORSHIP"]),
-    labName: z.string().max(200).optional(),
-  })
-  .refine(requireLabName, labNameRefinement);
+// Public: a registrant may only declare paying cash on site. A laboratory's
+// sponsorship reaches a registration through its code (POST
+// /public/registrations/:id/sponsorship-code) or a link the sponsor makes.
+export const SelectPaymentMethodSchema = z.strictObject({
+  paymentMethod: z.enum(["CASH"]),
+});
 
 export type SelectPaymentMethodInput = z.infer<typeof SelectPaymentMethodSchema>;
 

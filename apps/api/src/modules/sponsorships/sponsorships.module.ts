@@ -5,7 +5,10 @@ import {
   SponsorshipDetailController,
   SponsorshipsListController,
 } from "./sponsorships.controller";
-import { SponsorshipsPublicController } from "./sponsorships.public.controller";
+import {
+  SponsorshipCodePublicController,
+  SponsorshipsPublicController,
+} from "./sponsorships.public.controller";
 import { SponsorshipsAdminService } from "./sponsorships.admin.service";
 import { SponsorshipsPublicService } from "./sponsorships.public.service";
 
@@ -19,6 +22,7 @@ import { SponsorshipsPublicService } from "./sponsorships.public.service";
     SponsorshipDetailController,
     RegistrationSponsorshipsController,
     SponsorshipsPublicController,
+    SponsorshipCodePublicController,
   ],
   providers: [SponsorshipsAdminService, SponsorshipsPublicService],
 })

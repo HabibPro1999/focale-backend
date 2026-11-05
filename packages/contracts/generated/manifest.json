@@ -1280,6 +1280,10 @@
       "module": "packages/contracts/src/forms.responses.ts",
       "type": "PublicSponsorFormResponse"
     },
+    "RedeemSponsorshipCodeSchema": {
+      "module": "packages/contracts/src/sponsorships.ts",
+      "type": "RedeemSponsorshipCode"
+    },
     "RegistrantSearchQuerySchema": {
       "module": "packages/contracts/src/sponsorships.ts",
       "type": "RegistrantSearchQuery"
@@ -1428,6 +1432,10 @@
     "SponsorshipBatchCreatedResponseSchema": {
       "module": "packages/contracts/src/sponsorships.responses.ts",
       "type": "SponsorshipBatchCreatedResponse"
+    },
+    "SponsorshipCodeRedeemedResponseSchema": {
+      "module": "packages/contracts/src/sponsorships.responses.ts",
+      "type": "SponsorshipCodeRedeemedResponse"
     },
     "SponsorshipDetailResponseSchema": {
       "module": "packages/contracts/src/sponsorships.responses.ts",

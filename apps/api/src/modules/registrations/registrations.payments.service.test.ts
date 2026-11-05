@@ -342,39 +342,23 @@ describe("RegistrationPaymentsService", () => {
       );
     });
 
-    it.each(["CASH", "LAB_SPONSORSHIP"] as const)("%s preserves PARTIAL and its existing money", async (paymentMethod) => {
+    it("CASH preserves PARTIAL and its existing money", async () => {
       db.findRegistrationWithFormEvent.mockResolvedValue(methodFetch({
         paymentStatus: "PARTIAL", paidAmount: 10, sponsorshipAmount: 60,
       }));
-      await service.selectPaymentMethod("reg1", { paymentMethod, labName: "Lab" });
-      expect(writtenPatch()).toMatchObject({ paymentStatus: "PARTIAL", paymentMethod });
+      await service.selectPaymentMethod("reg1", { paymentMethod: "CASH" });
+      expect(writtenPatch()).toMatchObject({ paymentStatus: "PARTIAL", paymentMethod: "CASH" });
       expect(db.applyRegistrationSettlement.mock.calls[0]![1].settlement).toEqual({ paymentStatus: "PARTIAL" });
       expect(db.insertAuditLog.mock.calls[0]![0].action).toBe("PAYMENT_METHOD_SELECTED");
     });
 
-    it("rejects LAB_SPONSORSHIP when the sponsorships module is enabled", async () => {
+    it("CASH clears a lab name left from an earlier method", async () => {
       db.findRegistrationWithFormEvent.mockResolvedValue(
-        methodFetch({
-          event: {
-            id: "ev1",
-            name: "Ev",
-            slug: "ev",
-            clientId: "c1",
-            status: "OPEN",
-            endDate: FUTURE,
-            client: {
-              active: true,
-              enabledModules: ["registrations", "pricing", "sponsorships"],
-            },
-          },
-        }),
+        methodFetch({ paymentMethod: "LAB_SPONSORSHIP", labName: "Lab" }),
       );
-      await expect(
-        service.selectPaymentMethod("reg1", {
-          paymentMethod: "LAB_SPONSORSHIP",
-          labName: "X",
-        } as never),
-      ).rejects.toMatchObject({ code: "RES_3003", statusCode: 400 });
+      await service.selectPaymentMethod("reg1", { paymentMethod: "CASH" });
+      expect(writtenPatch()).toMatchObject({ paymentMethod: "CASH", labName: null });
+      expect(db.insertAuditLog.mock.calls[0]![0].changes.labName).toEqual({ old: "Lab", new: null });
     });
 
     it("404 REG_8001 when the registration is gone (no row to lock)", async () => {
