@@ -61,6 +61,9 @@ export async function buildApp(
         callback(new Error("Not allowed by CORS"), false);
       }
     },
+    // @fastify/cors 11 narrowed the default to the CORS-safelisted GET,HEAD,POST;
+    // the frontends also send PUT/PATCH/DELETE, so list every verb explicitly.
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     credentials: true,
     exposedHeaders: ["Retry-After"],
   });
