@@ -1,7 +1,7 @@
 import { PDFDocument, type PDFPage } from "pdf-lib";
 import { describe, expect, it } from "vitest";
 import { bidiTextWidth } from "./bidi-text";
-import { drawTextZone, embedZoneFonts, truncateTextToWidth } from "./zone-layout";
+import { drawTextZone, embedZoneFonts, hexToRgb, truncateTextToWidth } from "./zone-layout";
 
 const ZONE = {
   x: 0,
@@ -61,5 +61,16 @@ describe("bidi-aware measuring", () => {
     const truncated = truncateTextToWidth(boldFont, mixed, 20, runsWidth - 1);
     expect(truncated.endsWith("...")).toBe(true);
     expect(bidiTextWidth(boldFont, truncated, 20)).toBeLessThanOrEqual(runsWidth - 1);
+  });
+});
+
+describe("hexToRgb", () => {
+  it("resolves CSS color names", () => {
+    expect(hexToRgb("red")).toEqual({ r: 1, g: 0, b: 0 });
+    expect(hexToRgb("navy")).toEqual({ r: 0, g: 0, b: 128 / 255 });
+  });
+
+  it("falls back to black for an unknown name", () => {
+    expect(hexToRgb("not-a-color")).toEqual({ r: 0, g: 0, b: 0 });
   });
 });
