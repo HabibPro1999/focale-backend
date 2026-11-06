@@ -4,7 +4,7 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "dev": "node --watch --conditions=@app/source -r @swc-node/register src/main.ts",
+    "dev": "node --watch --conditions=@app/source -r ../../scripts/swc-register.cjs src/main.ts",
     "start": "node dist/main.js",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
@@ -35,7 +35,6 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@swc-node/register": "^1.12.1",
     "@swc/core": "^1.16.22",
     "@types/node": "^24.0.0",
     "typescript": "^6.0.3",

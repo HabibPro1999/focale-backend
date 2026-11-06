@@ -8,7 +8,7 @@ import { formatStoredJsonReport, loadStoredJsonReport } from "./stored-json-scan
 // fix (or accept) what it lists before setting JSONB_VALIDATION=enforce.
 //
 // Run from apps/api after a build: `node dist/scripts/stored-json-report.js`
-// (or from source: `node --conditions=@app/source -r @swc-node/register src/scripts/stored-json-report.ts`).
+// (or from source: `node --conditions=@app/source -r ../../scripts/swc-register.cjs src/scripts/stored-json-report.ts`).
 async function main(): Promise<void> {
   const unknownArgs = process.argv.slice(2);
   if (unknownArgs.length > 0) {

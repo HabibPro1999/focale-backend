@@ -11,7 +11,7 @@
     "lint": "eslint apps packages",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r --workspace-concurrency=1 test",
-    "test:runtime": "node --test scripts/start-runtime.test.mjs scripts/healthcheck.test.mjs scripts/eslint-package-boundaries.test.mjs scripts/eslint-write-executor.test.mjs",
+    "test:runtime": "node --test scripts/start-runtime.test.mjs scripts/healthcheck.test.mjs scripts/eslint-package-boundaries.test.mjs scripts/eslint-write-executor.test.mjs scripts/swc-register.test.mjs",
     "env:example": "pnpm --filter @app/contracts build && node packages/contracts/dist/cli/env-example.js",
     "config:check": "node packages/contracts/dist/cli/check-config.js",
     "contracts:generate": "pnpm --filter @app/contracts build && node packages/contracts/dist/cli/contract-artifacts.js",
@@ -23,7 +23,9 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@swc/core": "^1.16.22",
     "eslint": "10.14.0",
+    "pirates": "^4.0.7",
     "typescript-eslint": "8.72.1"
   },
   "pnpm": {
