@@ -1,6 +1,6 @@
 import { NetworkingInventoryService } from "../networking/networking.inventory.service";
 import "reflect-metadata";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { Module, RequestMethod, type Type } from "@nestjs/common";
 import { GUARDS_METADATA, METHOD_METADATA, PATH_METADATA } from "@nestjs/common/constants";
 import { ExecutionContextHost } from "@nestjs/core/helpers/execution-context-host";
@@ -517,7 +517,7 @@ function gatedModules(rule: TenantScopeRule, formType: FormType): ModuleId[] {
   return modules;
 }
 
-const READS: Record<TenantScopeKind, ReturnType<typeof vi.fn>> = {
+const READS: Record<TenantScopeKind, Mock> = {
   event: vi.mocked(db.getEventTenantScope),
   registration: vi.mocked(db.getRegistrationTenantScope),
   sponsorship: vi.mocked(db.getSponsorshipTenantScope),

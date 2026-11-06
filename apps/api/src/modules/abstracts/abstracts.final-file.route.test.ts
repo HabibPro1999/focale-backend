@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
 import { ErrorCodes } from "@app/contracts";
 
 // Route-level proof for 0.3: the anonymous final-file route runs every check
@@ -38,7 +38,7 @@ import {
 } from "./abstracts.final-file.service";
 import type { AbstractsService } from "./abstracts.service";
 
-const mock = <T>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
+const mock = <T>(fn: T) => fn as unknown as Mock;
 
 const abstractId = "abstract-1";
 const eventId = "event-1";

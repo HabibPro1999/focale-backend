@@ -1,5 +1,5 @@
 import "reflect-metadata";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import http from "node:http";
 import type { NestFastifyApplication } from "@nestjs/platform-fastify";
 import { ErrorCodes, UserRole } from "@app/contracts";
@@ -69,7 +69,7 @@ import { clearUserCache } from "../../core/auth/user-cache";
 import { ShutdownCoordinator } from "../../core/shutdown";
 import { ExportDownloads } from "../../core/exports/stream-download";
 
-const m = db as unknown as Record<string, ReturnType<typeof vi.fn>>;
+const m = db as unknown as Record<string, Mock>;
 
 /** Check-in ZIP temp directories on disk (this file's private tmpdir). */
 const exportTempDirs = useIsolatedTmpdir();

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { RegistrationsController } from "./registrations.controller";
 import type { RegistrationsService } from "./registrations.service";
 import type { RegistrationCreateService } from "./registrations.create.service";
@@ -27,10 +27,10 @@ function makeReply() {
   reply.send = vi.fn(() => reply);
   reply.redirect = vi.fn(() => reply);
   return reply as unknown as {
-    header: ReturnType<typeof vi.fn>;
-    type: ReturnType<typeof vi.fn>;
-    send: ReturnType<typeof vi.fn>;
-    redirect: ReturnType<typeof vi.fn>;
+    header: Mock;
+    type: Mock;
+    send: Mock;
+    redirect: Mock;
   };
 }
 

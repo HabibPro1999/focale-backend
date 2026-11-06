@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { ErrorCodes } from "@app/contracts";
 
 // Mock the db query layer (the seam the service talks to). Each write fn owns
@@ -26,7 +26,7 @@ vi.mock("@app/db", () => ({
 import * as db from "@app/db";
 import { CheckinService } from "./checkin.service";
 
-const m = db as unknown as Record<string, ReturnType<typeof vi.fn>>;
+const m = db as unknown as Record<string, Mock>;
 const service = new CheckinService();
 
 const eventId = "event-001";

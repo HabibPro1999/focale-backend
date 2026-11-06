@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 // --- Mock the @app/db fn layer (queries are DB-tier) -------------------------
 vi.mock("@app/db", () => ({
@@ -18,7 +18,7 @@ import {
 } from "@app/db";
 import { buildAbstractBulkEmailContext, queueAbstractEmail } from "./abstract-queue";
 
-const mocked = <T>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
+const mocked = <T>(fn: T) => fn as unknown as Mock;
 
 function abstract(overrides: Record<string, unknown> = {}) {
   return {

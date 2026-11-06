@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { txnPassthrough } from "../../testing/txn";
 
 // Mock the db layer (the batch intake's tests are in
@@ -36,7 +36,7 @@ const db = vi.hoisted(() => {
     "releaseSponsorshipTxn",
     "changeSponsorshipCoverageTxn",
   ];
-  const mod: Record<string, ReturnType<typeof vi.fn>> = {};
+  const mod: Record<string, Mock> = {};
   for (const f of fns) mod[f] = vi.fn();
   mod.withLockingTxn = vi.fn();
   return mod;

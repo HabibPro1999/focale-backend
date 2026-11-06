@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import JSZip from "jszip";
 import type {
   AccessRegistrantReportRow,
@@ -44,7 +44,7 @@ import {
 } from "./__testing__/legacy-excel-generator";
 import type { LegacySponsorshipReportRow } from "./__testing__/legacy-report-data";
 
-const m = db as unknown as Record<string, ReturnType<typeof vi.fn>>;
+const m = db as unknown as Record<string, Mock>;
 
 async function* pagesOf<T>(rows: T[]): AsyncGenerator<T[]> {
   for (let i = 0; i < rows.length; i += PAGE) yield rows.slice(i, i + PAGE);

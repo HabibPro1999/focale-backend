@@ -49,10 +49,21 @@ interface TestFiles {
   setupFiles: string[];
 }
 
-export function unitConfig(files: TestFiles) {
+// Vitest 5 runs test files in Vite's `ssr` environment but loads globalSetup
+// files in its own `__vitest__` environment, which gets Vitest's default
+// resolve options instead of the top-level `resolve`. Set the conditions on
+// all three so @app/* workspace imports resolve to source everywhere.
+function resolution() {
   return {
     resolve: { conditions },
     ssr: { resolve: { conditions } },
+    environments: { __vitest__: { resolve: { conditions } } },
+  };
+}
+
+export function unitConfig(files: TestFiles) {
+  return {
+    ...resolution(),
     test: { environment: "node" as const, ...files },
   };
 }
@@ -68,8 +79,7 @@ interface DbTierOptions extends TestFiles {
 export function dbTierConfig({ maxWorkersDefault, ...test }: DbTierOptions) {
   const maxWorkers = dbTestMaxWorkers(maxWorkersDefault);
   return {
-    resolve: { conditions },
-    ssr: { resolve: { conditions } },
+    ...resolution(),
     test: {
       environment: "node" as const,
       ...test,
@@ -77,7 +87,6 @@ export function dbTierConfig({ maxWorkersDefault, ...test }: DbTierOptions) {
       pool: "forks" as const,
       fileParallelism: maxWorkers > 1,
       maxWorkers,
-      minWorkers: 1,
     },
   };
 }

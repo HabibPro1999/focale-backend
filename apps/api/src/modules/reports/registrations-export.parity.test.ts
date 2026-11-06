@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import ExcelJS from "exceljs";
 import type { ExportRegistrationsBody, ExportLanguage } from "@app/contracts";
 import type {
@@ -35,7 +35,7 @@ import { collect, readBack } from "../../core/exports/__testing__/export-output"
 import { legacyBuildRegistrationsWorkbook } from "./__testing__/legacy-registrations-workbook";
 import { legacyCsv, legacyJson, legacyXlsx } from "./__testing__/legacy-registrations-export";
 
-const m = db as unknown as Record<string, ReturnType<typeof vi.fn>>;
+const m = db as unknown as Record<string, Mock>;
 
 function pagesOf<T>(rows: T[]) {
   return async function* () {

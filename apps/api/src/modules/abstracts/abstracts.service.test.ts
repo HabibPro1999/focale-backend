@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
 import { ErrorCodes, type SubmitAbstractInput } from "@app/contracts";
 import type { AbstractConfigRow } from "@app/db";
 
@@ -50,7 +50,7 @@ import {
   verifyAbstractToken,
 } from "./abstracts.token";
 
-const mock = <T>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
+const mock = <T>(fn: T) => fn as unknown as Mock;
 
 const eventId = "11111111-1111-4111-8111-111111111111";
 const clientId = "22222222-2222-4222-8222-222222222222";

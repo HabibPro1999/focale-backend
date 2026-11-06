@@ -1,7 +1,7 @@
-import { expect, vi } from "vitest";
+import { expect, type Mock } from "vitest";
 import { AppException } from "../../../core/app-exception";
 
-export const mock = <T>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
+export const mock = <T>(fn: T) => fn as unknown as Mock;
 
 export async function expectStatus(p: Promise<unknown>, status: number): Promise<void> {
   const err = await p.then(

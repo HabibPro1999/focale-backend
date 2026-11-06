@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { ErrorCodes, CreateEventAccessSchema } from "@app/contracts";
 
 // Mock the db query layer (the seam the service talks to). withTxn is a
@@ -49,7 +49,7 @@ import { AccessService } from "./access.service";
 import { txnPassthrough } from "../../testing/txn";
 import type { CreateEventAccessInput } from "@app/contracts";
 
-const m = db as unknown as Record<string, ReturnType<typeof vi.fn>>;
+const m = db as unknown as Record<string, Mock>;
 const service = new AccessService();
 
 const eventId = "event-123";
@@ -104,7 +104,7 @@ beforeEach(() => {
 });
 
 /** The executor argument (at `argIndex`) of each call of `fn`, in call order. */
-function executorsOf(fn: ReturnType<typeof vi.fn>, argIndex: number): unknown[] {
+function executorsOf(fn: Mock, argIndex: number): unknown[] {
   return fn.mock.calls.map((call) => call[argIndex]);
 }
 

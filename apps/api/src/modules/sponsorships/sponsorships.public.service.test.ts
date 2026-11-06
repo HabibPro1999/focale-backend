@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { txnPassthrough } from "../../testing/txn";
 
 // Mock the db layer, as in sponsorships.admin.service.test.ts. The list is
@@ -36,7 +36,7 @@ const db = vi.hoisted(() => {
     "claimSponsorshipCodeTxn",
     "lockRegistrationForUpdate",
   ];
-  const mod: Record<string, ReturnType<typeof vi.fn>> = {};
+  const mod: Record<string, Mock> = {};
   for (const f of fns) mod[f] = vi.fn();
   mod.withLockingTxn = vi.fn();
   return mod;

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 vi.mock("@app/db", async () => ({
   ...(await vi.importActual<typeof import("@app/db")>("@app/db")),
@@ -19,7 +19,7 @@ import { acceptedSend, ambiguousSend, rejectedSend } from "./providers/email-pro
 import { setEmailStatusChangeListener } from "./queue";
 import { sendEmailNow, type SendEmailNowInput } from "./send-now";
 
-const mocked = <T>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
+const mocked = <T>(fn: T) => fn as unknown as Mock;
 const WORKER = expect.stringMatching(/^email-now:/);
 
 const input: SendEmailNowInput = {

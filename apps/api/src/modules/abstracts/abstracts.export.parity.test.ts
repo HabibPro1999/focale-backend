@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { AdminAbstractRow } from "@app/db";
 
 // 3.7b output parity: the streamed abstracts export must read back exactly
@@ -21,7 +21,7 @@ import { collect, readBack } from "../../core/exports/__testing__/export-output"
 import { prepareAbstractsExport } from "./abstracts.export.service";
 import { legacyExportAbstractsWorkbook } from "./__testing__/legacy-abstracts-export";
 
-const m = db as unknown as Record<string, ReturnType<typeof vi.fn>>;
+const m = db as unknown as Record<string, Mock>;
 
 const EVENT_ID = "event-1";
 const at = (day: number, hour = 9) => new Date(Date.UTC(2026, 0, day, hour, 30));

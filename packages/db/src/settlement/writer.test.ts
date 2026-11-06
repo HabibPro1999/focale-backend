@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import type { PriceBreakdown } from "@app/contracts";
 import type { DbExecutor } from "../client";
 import {
@@ -101,7 +101,7 @@ describe("applyRegistrationSettlement outside the database", () => {
       "paidAmount -1 is not a non-negative money amount",
       "totalAmount 2.50001 is not a non-negative money amount",
     ]);
-    expect((tx as unknown as { update: ReturnType<typeof vi.fn> }).update).not.toHaveBeenCalled();
+    expect((tx as unknown as { update: Mock }).update).not.toHaveBeenCalled();
   });
 
   it("refuses an empty write, as drizzle's empty SET did before the writer", async () => {

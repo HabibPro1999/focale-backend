@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
 import ExcelJS from "exceljs";
 import { ErrorCodes } from "@app/contracts";
 
@@ -43,7 +43,7 @@ import { PassThrough } from "node:stream";
 import { ReportsService } from "./reports.service";
 import type { ExportDownload } from "../../core/exports/stream-io";
 
-const m = db as unknown as Record<string, ReturnType<typeof vi.fn>>;
+const m = db as unknown as Record<string, Mock>;
 const service = new ReportsService();
 
 const emptyAggregates = {

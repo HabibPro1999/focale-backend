@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { PDFDocument, PDFPage } from "pdf-lib";
 import sharp from "sharp";
 import { seedBadgeZones, type BadgeZone } from "@app/contracts";
@@ -27,10 +27,10 @@ const template = (overrides: Partial<BadgeTemplateData> = {}): BadgeTemplateData
   ...overrides,
 });
 
-let rectangles: ReturnType<typeof vi.spyOn>;
-let texts: ReturnType<typeof vi.spyOn>;
-let images: ReturnType<typeof vi.spyOn>;
-let paths: ReturnType<typeof vi.spyOn>;
+let rectangles: MockInstance<PDFPage["drawRectangle"]>;
+let texts: MockInstance<PDFPage["drawText"]>;
+let images: MockInstance<PDFPage["drawImage"]>;
+let paths: MockInstance<PDFPage["drawSvgPath"]>;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -84,12 +84,12 @@ describe("generateBadgePdf", () => {
     // One path, origin at the first module (inside the quiet zone), scaled
     // to the module size: 29 modules + 1 quiet module per side.
     expect(paths).toHaveBeenCalledTimes(1);
-    const [path, options] = paths.mock.calls[0]! as [string, { x: number; y: number; scale: number; color: { red: number } }];
+    const [path, options] = paths.mock.calls[0]!;
     const unit = side / 31;
-    expect(options.scale).toBeCloseTo(unit, 9);
-    expect(options.x).toBeCloseTo(left + unit, 9);
-    expect(options.y).toBeCloseTo(bottom + side - unit, 9);
-    expect(options.color.red).toBe(0);
+    expect(options?.scale).toBeCloseTo(unit, 9);
+    expect(options?.x).toBeCloseTo(left + unit, 9);
+    expect(options?.y).toBeCloseTo(bottom + side - unit, 9);
+    expect(options?.color).toMatchObject({ red: 0 });
 
     const grid = GOLDEN_MATRIX.map((line) => Array.from(line, () => "0"));
     const runs = [...path.matchAll(/M(\d+) (\d+)h(\d+)v1h-(\d+)z/g)];
