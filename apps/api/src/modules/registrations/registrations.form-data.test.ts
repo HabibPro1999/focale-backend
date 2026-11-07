@@ -1,5 +1,5 @@
 import { ErrorCodes, type EventPricingWithRules } from "@app/contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { ApplyRegistrationSettlementInput, RegistrationPatch } from "@app/db";
 
 // One pricing input (2.11): the public quote, public create/self-edit and
@@ -192,7 +192,7 @@ const openEvent = { clientId: "c1", status: "OPEN", endDate: FUTURE, client };
 let service: RegistrationCreateService;
 let repricer: RegistrationRepricer;
 let quote: PricingPublicController;
-let access: Record<string, ReturnType<typeof vi.fn>>;
+let access: Record<string, Mock>;
 
 beforeEach(() => {
   vi.clearAllMocks();

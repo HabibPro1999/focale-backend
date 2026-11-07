@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 // --- Mock the @app/db fn layer (the raw-SQL/lease primitives are DB-tier) -----
 // The email lease queue is a fake driven by the real runLeased (its SQL is
@@ -95,7 +95,7 @@ import {
 import { renderRegistrationQrPng } from "./attachments/registration-qr";
 import { seedBadgeZones } from "@app/contracts";
 
-const mocked = <T>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
+const mocked = <T>(fn: T) => fn as unknown as Mock;
 
 beforeEach(() => {
   vi.clearAllMocks();

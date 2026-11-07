@@ -10,13 +10,11 @@ import { dejaVuFontPath, embedFontFile } from "../pdf-fonts";
 import { bidiTextWidth, pdfTextRuns } from "./bidi-text";
 import { logger } from "../logger";
 import { integrationsConfig } from "../config";
+// color-name 2 is ESM-only with a default export; Node 24 loads it through
+// require(esm), and the compiled default-import interop reads `.default`.
+import colorNames, { type RGB } from "color-name";
 
-// color-name is a CommonJS package (no type decls). @app/integrations is
-// type:commonjs, so the global require resolves it.
-const cssColorNames = require("color-name") as Record<
-  string,
-  [number, number, number]
->;
+const cssColorNames: Readonly<Record<string, RGB | undefined>> = colorNames;
 
 export interface ZoneFonts {
   regularFont: PDFFont;

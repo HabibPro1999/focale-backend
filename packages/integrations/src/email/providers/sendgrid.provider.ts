@@ -26,6 +26,11 @@ import {
   type WebhookResult,
 } from "./email-provider.types";
 
+// One message as sgMail.send() takes it. @sendgrid/mail declares `export =`
+// plus named type exports under @ts-ignore, which TypeScript 7 no longer
+// exposes, so derive the type from the public send() signature.
+type MailDataRequired = Exclude<Parameters<typeof sgMail.send>[0], readonly unknown[]>;
+
 // Webhook signature freshness window — reject replays / stale deliveries.
 const WEBHOOK_TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000;
 
@@ -177,7 +182,7 @@ export class SendgridProvider implements EmailProvider {
     }
     this.ensureApiKey();
 
-    let msg: sgMail.MailDataRequired;
+    let msg: MailDataRequired;
     try {
       const approvedFrom = await resolveVerifiedNetworkingSender(input, this.name, this.apiKey);
       msg = {

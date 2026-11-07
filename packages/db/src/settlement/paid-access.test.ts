@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 vi.mock("../queries/access", () => ({
   casIncrementAccessPaidCount: vi.fn(),
@@ -18,7 +18,7 @@ import {
   takePaidAccess,
 } from "./paid-access";
 
-const m = access as unknown as Record<string, ReturnType<typeof vi.fn>>;
+const m = access as unknown as Record<string, Mock>;
 const tx = {} as DbExecutor;
 
 beforeEach(() => vi.resetAllMocks());

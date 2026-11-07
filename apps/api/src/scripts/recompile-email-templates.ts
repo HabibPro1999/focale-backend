@@ -15,7 +15,7 @@ import {
 // saved before a renderer change keep the old output until recompiled.
 //
 // Run from apps/api with
-// `node --conditions=@app/source -r @swc-node/register src/scripts/recompile-email-templates.ts --dry-run`,
+// `node --conditions=@app/source -r ../../scripts/swc-register.cjs src/scripts/recompile-email-templates.ts --dry-run`,
 // then again without `--dry-run`. DATABASE_URL comes from the environment.
 // `updatedAt` is kept, so an admin editing a template meanwhile gets no
 // spurious conflict; a template edited during the run is skipped.

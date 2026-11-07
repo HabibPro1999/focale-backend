@@ -6,7 +6,7 @@ import {
 import { runEmailTemplateStylePreflight } from "../modules/email/email-template-style-preflight";
 import { getTemplateLanguage } from "../modules/email/template-content";
 
-// Run from apps/api with `node --conditions=@app/source -r @swc-node/register src/scripts/email-template-style-preflight.ts`.
+// Run from apps/api with `node --conditions=@app/source -r ../../scripts/swc-register.cjs src/scripts/email-template-style-preflight.ts`.
 // Review the default dry-run output before rerunning with `--apply`.
 async function main(): Promise<void> {
   const apply = process.argv.includes("--apply");

@@ -11,7 +11,7 @@
 //   vi.mock("file-type", async () => (await import("./__testing__/service-mocks.js")).ft);
 //
 // and calls `installServiceMocks()` in its beforeEach.
-import { expect, vi } from "vitest";
+import { expect, vi, type Mock } from "vitest";
 import type { ApplyRegistrationSettlementInput, RegistrationPatch } from "@app/db";
 import {
   calculateApplicableAmount,
@@ -381,19 +381,19 @@ export const withoutSentinels = (value: unknown, allow: string[] = []) => {
 
 // --- per-test defaults --------------------------------------------------------
 export type AccessMock = {
-  assertAccessSelectionRequirement: ReturnType<typeof vi.fn>;
-  validateAccessSelections: ReturnType<typeof vi.fn>;
-  incrementAccessRegisteredCountTx: ReturnType<typeof vi.fn>;
-  decrementAccessRegisteredCountTx: ReturnType<typeof vi.fn>;
-  syncPaidCountDelta: ReturnType<typeof vi.fn>;
-  getAlreadyCoveredAccessIds: ReturnType<typeof vi.fn>;
-  handleCapacityReached: ReturnType<typeof vi.fn>;
+  assertAccessSelectionRequirement: Mock;
+  validateAccessSelections: Mock;
+  incrementAccessRegisteredCountTx: Mock;
+  decrementAccessRegisteredCountTx: Mock;
+  syncPaidCountDelta: Mock;
+  getAlreadyCoveredAccessIds: Mock;
+  handleCapacityReached: Mock;
 };
-export type PricingMock = { calculatePrice: ReturnType<typeof vi.fn> };
+export type PricingMock = { calculatePrice: Mock };
 export type StorageMock = {
-  uploadPrivate: ReturnType<typeof vi.fn>;
-  getSignedUrl: ReturnType<typeof vi.fn>;
-  delete: ReturnType<typeof vi.fn>;
+  uploadPrivate: Mock;
+  getSignedUrl: Mock;
+  delete: Mock;
 };
 
 /**

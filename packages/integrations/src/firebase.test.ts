@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const auth = vi.hoisted(() => ({ verifyIdToken: vi.fn() }));
-vi.mock("firebase-admin", () => ({
-  default: {
-    credential: { applicationDefault: vi.fn() },
-    initializeApp: () => ({ auth: () => auth }),
-  },
+vi.mock("firebase-admin/app", () => ({
+  applicationDefault: vi.fn(),
+  cert: vi.fn(),
+  initializeApp: () => ({}),
 }));
+vi.mock("firebase-admin/auth", () => ({ getAuth: () => auth }));
 
 type FirebaseModule = typeof import("./firebase.js");
 let verifyToken: FirebaseModule["verifyToken"];

@@ -10,7 +10,7 @@ import {
 // changes nothing; fixing a form is a per-form decision.
 //
 // Run from apps/api after a build: `node dist/scripts/form-condition-report.js`
-// (or from source: `node --conditions=@app/source -r @swc-node/register src/scripts/form-condition-report.ts`).
+// (or from source: `node --conditions=@app/source -r ../../scripts/swc-register.cjs src/scripts/form-condition-report.ts`).
 async function main(): Promise<void> {
   const unknownArgs = process.argv.slice(2);
   if (unknownArgs.length > 0) {

@@ -11,7 +11,7 @@
     "lint": "eslint apps packages",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r --workspace-concurrency=1 test",
-    "test:runtime": "node --test scripts/start-runtime.test.mjs scripts/healthcheck.test.mjs scripts/eslint-package-boundaries.test.mjs scripts/eslint-write-executor.test.mjs",
+    "test:runtime": "node --test scripts/start-runtime.test.mjs scripts/healthcheck.test.mjs scripts/eslint-package-boundaries.test.mjs scripts/eslint-write-executor.test.mjs scripts/swc-register.test.mjs",
     "env:example": "pnpm --filter @app/contracts build && node packages/contracts/dist/cli/env-example.js",
     "config:check": "node packages/contracts/dist/cli/check-config.js",
     "contracts:generate": "pnpm --filter @app/contracts build && node packages/contracts/dist/cli/contract-artifacts.js",
@@ -23,20 +23,23 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
-    "eslint": "10.11.0",
-    "typescript-eslint": "8.57.2"
+    "@swc/core": "^1.16.22",
+    "eslint": "10.14.0",
+    "pirates": "^4.0.7",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.1"
   },
   "pnpm": {
     "overrides": {
       "@fastify/busboy": "3.2.3",
       "@google-cloud/storage>fast-xml-parser": "5.10.1",
       "@grpc/grpc-js": "1.14.6",
-      "@nestjs/platform-fastify>fastify": "5.12.7",
+      "@nestjs/platform-fastify>fastify": "5.12.8",
       "axios": "1.20.0",
       "brace-expansion@^1": "1.1.21",
       "brace-expansion@^2": "2.1.7",
       "fast-uri": "3.1.9",
-      "find-my-way": "9.9.0",
+      "find-my-way": "9.10.0",
       "follow-redirects": "1.16.2",
       "protobufjs": "7.6.5",
       "source-map-js": "1.2.2",

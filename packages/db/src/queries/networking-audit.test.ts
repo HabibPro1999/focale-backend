@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { NetworkingAdminMeetingUpdateSchema, NetworkingReportActionSchema } from "@app/contracts";
@@ -36,7 +36,7 @@ it("reads one page in SQL, newest first, filtered to the allow-list", async () =
   };
   const result = await listNetworkingAdminAudit("event", { page: 3, limit: 20 }, db as never);
   expect(result).toEqual({ items: [{ id: "a", actorName: null }], total: 42 });
-  const [page] = selects as Array<Record<string, ReturnType<typeof vi.fn>>>;
+  const [page] = selects as Array<Record<string, Mock>>;
   expect(page.limit).toHaveBeenCalledWith(20);
   expect(page.offset).toHaveBeenCalledWith(40);
   const orderBy = (page.orderBy.mock.calls[0] as SQL[]).map((part) => dialect.sqlToQuery(part).sql);

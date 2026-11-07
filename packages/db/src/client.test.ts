@@ -1,17 +1,17 @@
 import { EventEmitter } from "node:events";
 import type { Pool } from "pg";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 // A fake pg Pool: records its config and hands out scripted clients. No socket
 // is ever opened.
 const fake = vi.hoisted(() => ({
   pools: [] as Array<{
     config: Record<string, unknown>;
-    end: ReturnType<typeof vi.fn>;
+    end: Mock;
     listenerCount(event: string): number;
   }>,
   query: undefined as undefined | (() => Promise<unknown>),
-  release: undefined as undefined | ReturnType<typeof vi.fn>,
+  release: undefined as undefined | Mock,
 }));
 
 vi.mock("pg", async () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
 import type { AbstractConfigRow, AbstractThemeRow } from "@app/db";
 
 const { txDb } = vi.hoisted(() => ({ txDb: { executor: "tx" } }));
@@ -32,7 +32,7 @@ import {
 import { AbstractsConfigService } from "./abstracts.config.service";
 import { AppException } from "../../core/app-exception";
 
-const mock = <T>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
+const mock = <T>(fn: T) => fn as unknown as Mock;
 
 const eventId = "11111111-1111-4111-8111-111111111111";
 const configId = "33333333-3333-4333-8333-333333333333";

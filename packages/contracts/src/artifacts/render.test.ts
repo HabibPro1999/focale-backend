@@ -1,7 +1,8 @@
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import ts from "typescript";
+import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import * as barrel from "../index";
@@ -10,6 +11,14 @@ import { collectContractSchemas, renderJsonSchemaDocument, type JsonSchemaDocume
 import { renderContractArtifacts, type GeneratedFile } from "./render";
 
 const contractsDir = resolve(__dirname, "..", "..");
+
+/** Path of the `tsc` entry script of the typescript package this package uses. */
+function tscBin(): string {
+  const requireHere = createRequire(__filename);
+  const manifestPath = requireHere.resolve("typescript/package.json");
+  const manifest = requireHere("typescript/package.json") as { bin: { tsc: string } };
+  return join(dirname(manifestPath), manifest.bin.tsc);
+}
 const sharedSrcDir = resolve(contractsDir, "..", "shared", "src");
 
 let cached: GeneratedFile[] | undefined;
@@ -114,20 +123,26 @@ describe("contract artifacts", () => {
           "export const when: CreateEvent['startDate'] = new Date();",
         ].join("\n"),
       );
-      const program = ts.createProgram([join(dir, "usage.ts")], {
-        strict: true,
-        noEmit: true,
-        skipLibCheck: true,
-        target: ts.ScriptTarget.ES2022,
-        module: ts.ModuleKind.NodeNext,
-        moduleResolution: ts.ModuleResolutionKind.NodeNext,
-        isolatedModules: true,
-        types: [],
-      });
-      const diagnostics = ts
-        .getPreEmitDiagnostics(program)
-        .map((d) => ts.flattenDiagnosticMessageText(d.messageText, "\n"));
-      expect(diagnostics).toEqual([]);
+      // The project's own compiler CLI: TypeScript 7 has no JS compiler API.
+      writeFileSync(
+        join(dir, "tsconfig.json"),
+        JSON.stringify({
+          compilerOptions: {
+            strict: true,
+            noEmit: true,
+            skipLibCheck: true,
+            target: "es2022",
+            module: "nodenext",
+            moduleResolution: "nodenext",
+            isolatedModules: true,
+            types: [],
+          },
+          files: ["usage.ts"],
+        }),
+      );
+      const result = spawnSync(process.execPath, [tscBin(), "-p", dir], { encoding: "utf8" });
+      expect(`${result.stdout}${result.stderr}`).toBe("");
+      expect(result.status).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

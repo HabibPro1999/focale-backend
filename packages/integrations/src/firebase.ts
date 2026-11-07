@@ -1,7 +1,14 @@
 import { lookupFallbackApiKey, verifyTokenViaIdentityToolkit } from "./firebase-lookup-fallback";
-import admin from "firebase-admin";
-import type { Auth } from "firebase-admin/auth";
-import type { Storage } from "firebase-admin/storage";
+import {
+  applicationDefault,
+  cert,
+  initializeApp,
+  type App,
+  type Credential,
+  type ServiceAccount,
+} from "firebase-admin/app";
+import { getAuth, type Auth } from "firebase-admin/auth";
+import { getStorage, type Storage } from "firebase-admin/storage";
 import { decodeFirebaseServiceAccount } from "@app/contracts";
 import { integrationsConfig } from "./config";
 
@@ -14,23 +21,23 @@ import { integrationsConfig } from "./config";
  * Priority: FIREBASE_SERVICE_ACCOUNT (raw or base64-encoded JSON, validated at
  * boot) → application default (GOOGLE_APPLICATION_CREDENTIALS file path).
  */
-function getCredential(): admin.credential.Credential {
+function getCredential(): Credential {
   const serviceAccount = integrationsConfig().firebase.serviceAccount;
   if (serviceAccount) {
     const parsed = decodeFirebaseServiceAccount(serviceAccount);
-    return admin.credential.cert(parsed as admin.ServiceAccount);
+    return cert(parsed as ServiceAccount);
   }
   // Fallback to application default (GOOGLE_APPLICATION_CREDENTIALS file path)
-  return admin.credential.applicationDefault();
+  return applicationDefault();
 }
 
-let app: admin.app.App | null = null;
+let app: App | null = null;
 
 /** Initialize (once) and return the Firebase Admin app. Fail-fast on bad creds. */
-function getApp(): admin.app.App {
+function getApp(): App {
   if (!app) {
     const storageBucket = integrationsConfig().firebase.storageBucket;
-    app = admin.initializeApp({
+    app = initializeApp({
       credential: getCredential(),
       ...(storageBucket && { storageBucket }),
     });
@@ -39,11 +46,11 @@ function getApp(): admin.app.App {
 }
 
 export function getFirebaseAuth(): Auth {
-  return getApp().auth();
+  return getAuth(getApp());
 }
 
 export function getFirebaseStorage(): Storage {
-  return getApp().storage();
+  return getStorage(getApp());
 }
 
 /**

@@ -31,7 +31,8 @@ packages/
 ```
 
 Package resolution uses the `@app/source` export condition in dev/test (TS
-source, run through `@swc-node/register`) and the built `dist/` in production.
+source, run through `scripts/swc-register.cjs`, an SWC require hook) and the
+built `dist/` in production.
 
 ## Commands
 
@@ -258,7 +259,7 @@ certificate contexts, exports, networking) are typed only.
 
 Before deployment, keep `JSONB_VALIDATION=warn` and run the read-only audit
 `node apps/api/dist/scripts/stored-json-report.js` (from source:
-`node --conditions=@app/source -r @swc-node/register src/scripts/stored-json-report.ts`
+`node --conditions=@app/source -r ../../scripts/swc-register.cjs src/scripts/stored-json-report.ts`
 in `apps/api`). It pages through the five columns in READ ONLY transactions,
 lists each invalid document by row id, path and code, counts them per column
 and code, and changes nothing. Review incompatible rows before deployment:
